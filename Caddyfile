@@ -1,0 +1,11 @@
+{
+  auto_https disable_redirects
+  log default {
+    level ERROR
+    exclude http.log.error
+  }
+}
+https://localhost:9443 {
+  tls internal
+  reverse_proxy control:8930
+}

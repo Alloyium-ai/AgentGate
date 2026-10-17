@@ -1,0 +1,1223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agentgate:policy:v2",
+  "title": "AgentGate deny-all policy v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile",
+    "required_capabilities"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agentgate.policy.v2"
+    },
+    "profile": {
+      "enum": [
+        "selected-inspection.v2",
+        "kernel-policy.v2"
+      ]
+    },
+    "required_capabilities": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_.-]+\\.v[1-9][0-9]*$",
+        "maxLength": 100
+      }
+    },
+    "selected": {
+      "$ref": "#/$defs/selected",
+      "x-section": "Current limited profile",
+      "description": "Inspection-only compatibility declarations. This profile cannot issue or activate a workload grant."
+    },
+    "files": {
+      "$ref": "#/$defs/files",
+      "x-section": "Files",
+      "x-capability": "fs.rules.v1"
+    },
+    "programs": {
+      "$ref": "#/$defs/programs",
+      "x-section": "Programs",
+      "x-capability": "exec.rules.v1"
+    },
+    "network": {
+      "$ref": "#/$defs/network",
+      "x-section": "Network",
+      "x-capability": "net.rules.v1",
+      "description": "Remote peer endpoint rules. Send checks destination IP and port. Receive checks source IP and port and also requires an explicit socket receive allowance."
+    },
+    "identity": {
+      "$ref": "#/$defs/identity",
+      "x-section": "Identity",
+      "x-capability": "identity.job.v1"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime",
+      "x-section": "Runtime",
+      "x-capability": "runtime.profile.v1"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle",
+      "x-section": "Lifecycle",
+      "x-capability": "lifecycle.baseline.v1"
+    },
+    "evidence": {
+      "$ref": "#/$defs/evidence",
+      "x-section": "Evidence",
+      "x-capability": "audit.batch.v1"
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "No extension is registered in this schema version."
+    },
+    "runtime_templates": {
+      "type": "array",
+      "maxItems": 0,
+      "description": "No reviewed runtime template is qualified yet. No runtime permissions are inherited."
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registered_operations",
+        "unmatched_resources",
+        "missing_managed_policy"
+      ],
+      "properties": {
+        "registered_operations": {
+          "const": "deny"
+        },
+        "unmatched_resources": {
+          "const": "deny"
+        },
+        "missing_managed_policy": {
+          "const": "deny"
+        }
+      },
+      "x-capability": "policy.default-deny.v2"
+    },
+    "sockets": {
+      "$ref": "#/$defs/sockets",
+      "x-section": "Socket operations",
+      "x-capability": "socket.rules.v1",
+      "description": "Every socket operation denies unless a rule explicitly permits it. Endpoint permission and ownership restrictions remain independent requirements."
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "profile": {
+          "const": "selected-inspection.v2"
+        }
+      },
+      "required": [
+        "selected"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "files"
+            ]
+          },
+          {
+            "required": [
+              "programs"
+            ]
+          },
+          {
+            "required": [
+              "network"
+            ]
+          },
+          {
+            "required": [
+              "identity"
+            ]
+          },
+          {
+            "required": [
+              "runtime"
+            ]
+          },
+          {
+            "required": [
+              "lifecycle"
+            ]
+          },
+          {
+            "required": [
+              "evidence"
+            ]
+          },
+          {
+            "required": [
+              "extensions"
+            ]
+          },
+          {
+            "required": [
+              "runtime_templates"
+            ]
+          },
+          {
+            "required": [
+              "defaults"
+            ]
+          },
+          {
+            "required": [
+              "sockets"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "profile": {
+          "const": "kernel-policy.v2"
+        }
+      },
+      "required": [
+        "files",
+        "programs",
+        "network",
+        "identity",
+        "runtime",
+        "lifecycle",
+        "evidence",
+        "extensions",
+        "runtime_templates",
+        "defaults",
+        "sockets"
+      ],
+      "not": {
+        "required": [
+          "selected"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "selected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_write",
+        "tcp_address",
+        "tcp_port"
+      ],
+      "properties": {
+        "workspace_write": {
+          "type": "boolean",
+          "title": "Allow workspace write opens for existing files",
+          "description": "The run binds the workspace at runtime. File reads and mutations are outside this profile.",
+          "x-capability": "fs.selected-write-open.v1"
+        },
+        "tcp_address": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 15,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "title": "IPv4 TCP address",
+          "description": "One canonical unicast address. Loopback is supported.",
+          "x-capability": "net.selected-connect4.v1"
+        },
+        "tcp_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "title": "IPv4 TCP port",
+          "description": "One exact port for new IPv4 TCP connections.",
+          "x-capability": "net.selected-connect4.v1"
+        }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "exact",
+            "subtree"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4095,
+          "pattern": "^/",
+          "description": "Canonical absolute path. A subtree uses component boundaries."
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defaults",
+        "rules",
+        "resource_use"
+      ],
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read",
+            "write"
+          ],
+          "properties": {
+            "read": {
+              "const": "deny"
+            },
+            "write": {
+              "const": "deny"
+            }
+          }
+        },
+        "resource_use": {
+          "const": "recheck-and-terminate",
+          "description": "Recheck supported operations. Strict revocation also requires confirmed whole-job termination.",
+          "x-capability": "fs.resource-use.v1"
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "selector",
+              "operations",
+              "effect"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/rule_id"
+              },
+              "selector": {
+                "$ref": "#/$defs/selector"
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 13,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/file_operation"
+                }
+              },
+              "effect": {
+                "enum": [
+                  "allow",
+                  "deny"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "description": "Every operation defaults to deny. Evaluate specificity per operation. Deny wins equal specificity. Rename and link check both paths."
+    },
+    "rule_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "programs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default",
+        "rules"
+      ],
+      "properties": {
+        "default": {
+          "const": "deny"
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "selector",
+              "effect"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/rule_id"
+              },
+              "selector": {
+                "$ref": "#/$defs/selector"
+              },
+              "effect": {
+                "enum": [
+                  "allow",
+                  "deny"
+                ]
+              },
+              "approval": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "argv1",
+                  "timeout_seconds",
+                  "scope",
+                  "argument_assurance"
+                ],
+                "x-capability": "exec.approval.v1",
+                "properties": {
+                  "argv1": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "timeout_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120
+                  },
+                  "scope": {
+                    "const": "one-shot-actual-executable"
+                  },
+                  "argument_assurance": {
+                    "const": "observed",
+                    "description": "Observed arguments can change in tracee memory. This mode does not claim race-free argv approval."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default",
+        "rules",
+        "dns"
+      ],
+      "properties": {
+        "default": {
+          "const": "deny"
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "family",
+              "protocol",
+              "destination",
+              "port_from",
+              "port_to",
+              "effect"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/rule_id"
+              },
+              "family": {
+                "enum": [
+                  "ipv4",
+                  "ipv6"
+                ],
+                "x-value-capabilities": {
+                  "ipv4": "net.ipv4.v1",
+                  "ipv6": "net.ipv6.v1"
+                }
+              },
+              "protocol": {
+                "enum": [
+                  "tcp",
+                  "udp"
+                ],
+                "x-value-capabilities": {
+                  "tcp": "net.tcp.v1",
+                  "udp": "net.udp.v1"
+                }
+              },
+              "destination": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "ip",
+                      "prefix",
+                      "hostname"
+                    ],
+                    "x-value-capabilities": {
+                      "ip": "net.ip.v1",
+                      "prefix": "net.prefix.v1",
+                      "hostname": "net.dns-ttl.v1"
+                    }
+                  },
+                  "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 253
+                  }
+                }
+              },
+              "port_from": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "port_to": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "effect": {
+                "enum": [
+                  "allow",
+                  "deny"
+                ]
+              }
+            }
+          }
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resolver_profile",
+            "cname",
+            "expiry"
+          ],
+          "x-capability": "net.dns-ttl.v1",
+          "properties": {
+            "resolver_profile": {
+              "const": "trusted-forwarder.v1"
+            },
+            "cname": {
+              "const": "validate-chain"
+            },
+            "expiry": {
+              "const": "remove-expired-authorization",
+              "description": "IP permission cannot isolate unrelated application-layer names that share an address."
+            }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trust_source",
+        "proof_of_possession",
+        "job_binding",
+        "node_binding",
+        "boot_binding",
+        "process_domain",
+        "descendants"
+      ],
+      "properties": {
+        "trust_source": {
+          "enum": [
+            "local-enrollment",
+            "alloyium-bus"
+          ],
+          "x-value-capabilities": {
+            "local-enrollment": "identity.local-enrollment.v1",
+            "alloyium-bus": "identity.alloyium-bus.v1"
+          }
+        },
+        "proof_of_possession": {
+          "const": true
+        },
+        "job_binding": {
+          "const": true
+        },
+        "node_binding": {
+          "const": true
+        },
+        "boot_binding": {
+          "const": true
+        },
+        "process_domain": {
+          "enum": [
+            "job-cgroup",
+            "agent-cgroup"
+          ],
+          "x-value-capabilities": {
+            "job-cgroup": "process.job-domain.v1",
+            "agent-cgroup": "process.agent-domain.v1"
+          }
+        },
+        "descendants": {
+          "const": "inherit"
+        }
+      },
+      "description": "The signed grant supplies the actual agent, requester, job, node, boot, and domain identities."
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "uid",
+        "gid",
+        "supplementary_groups",
+        "capabilities",
+        "no_new_privileges",
+        "seccomp"
+      ],
+      "properties": {
+        "profile": {
+          "const": "managed-unprivileged.v1",
+          "x-capability": "runtime.managed-unprivileged.v1"
+        },
+        "uid": {
+          "const": 65534
+        },
+        "gid": {
+          "const": 65534
+        },
+        "supplementary_groups": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "no_new_privileges": {
+          "const": true
+        },
+        "seccomp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "profile",
+            "architecture",
+            "default",
+            "allow_syscalls"
+          ],
+          "properties": {
+            "profile": {
+              "const": "explicit-allowlist-notify.v2"
+            },
+            "architecture": {
+              "const": "x86_64"
+            },
+            "default": {
+              "const": "deny"
+            },
+            "allow_syscalls": {
+              "type": "array",
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "read",
+                  "write",
+                  "close",
+                  "openat",
+                  "newfstatat",
+                  "fstat",
+                  "lseek",
+                  "mmap",
+                  "mprotect",
+                  "munmap",
+                  "brk",
+                  "rt_sigaction",
+                  "rt_sigprocmask",
+                  "rt_sigreturn",
+                  "arch_prctl",
+                  "set_tid_address",
+                  "set_robust_list",
+                  "rseq",
+                  "futex",
+                  "getrandom",
+                  "getpid",
+                  "getuid",
+                  "geteuid",
+                  "getgid",
+                  "getegid",
+                  "clock_gettime",
+                  "exit",
+                  "exit_group",
+                  "execve",
+                  "execveat",
+                  "clone",
+                  "clone3",
+                  "wait4",
+                  "socket",
+                  "connect",
+                  "bind",
+                  "listen",
+                  "accept",
+                  "accept4",
+                  "sendto",
+                  "recvfrom",
+                  "sendmsg",
+                  "recvmsg",
+                  "sendmmsg",
+                  "recvmmsg",
+                  "getsockopt",
+                  "setsockopt",
+                  "shutdown",
+                  "pipe2",
+                  "dup",
+                  "dup2",
+                  "dup3",
+                  "fcntl",
+                  "readlinkat",
+                  "getcwd",
+                  "chdir",
+                  "prlimit64",
+                  "kill",
+                  "tkill",
+                  "tgkill",
+                  "readv",
+                  "writev",
+                  "pread64",
+                  "pwrite64",
+                  "epoll_create1",
+                  "epoll_ctl",
+                  "epoll_wait",
+                  "epoll_pwait",
+                  "epoll_pwait2",
+                  "eventfd2",
+                  "poll",
+                  "ppoll",
+                  "madvise",
+                  "mremap",
+                  "uname",
+                  "sched_yield",
+                  "sched_getaffinity",
+                  "gettid",
+                  "getppid",
+                  "getrlimit",
+                  "getrusage",
+                  "getdents64",
+                  "statx",
+                  "getsockname",
+                  "getpeername",
+                  "readlink"
+                ],
+                "x-value-capabilities": {
+                  "read": "runtime.explicit-syscalls.v2",
+                  "write": "runtime.explicit-syscalls.v2",
+                  "close": "runtime.explicit-syscalls.v2",
+                  "openat": "runtime.explicit-syscalls.v2",
+                  "newfstatat": "runtime.explicit-syscalls.v2",
+                  "fstat": "runtime.explicit-syscalls.v2",
+                  "lseek": "runtime.explicit-syscalls.v2",
+                  "mmap": "runtime.explicit-syscalls.v2",
+                  "mprotect": "runtime.explicit-syscalls.v2",
+                  "munmap": "runtime.explicit-syscalls.v2",
+                  "brk": "runtime.explicit-syscalls.v2",
+                  "rt_sigaction": "runtime.explicit-syscalls.v2",
+                  "rt_sigprocmask": "runtime.explicit-syscalls.v2",
+                  "rt_sigreturn": "runtime.explicit-syscalls.v2",
+                  "arch_prctl": "runtime.explicit-syscalls.v2",
+                  "set_tid_address": "runtime.explicit-syscalls.v2",
+                  "set_robust_list": "runtime.explicit-syscalls.v2",
+                  "rseq": "runtime.explicit-syscalls.v2",
+                  "futex": "runtime.explicit-syscalls.v2",
+                  "getrandom": "runtime.explicit-syscalls.v2",
+                  "getpid": "runtime.explicit-syscalls.v2",
+                  "getuid": "runtime.explicit-syscalls.v2",
+                  "geteuid": "runtime.explicit-syscalls.v2",
+                  "getgid": "runtime.explicit-syscalls.v2",
+                  "getegid": "runtime.explicit-syscalls.v2",
+                  "clock_gettime": "runtime.explicit-syscalls.v2",
+                  "exit": "runtime.explicit-syscalls.v2",
+                  "exit_group": "runtime.explicit-syscalls.v2",
+                  "execve": "runtime.explicit-syscalls.v2",
+                  "execveat": "runtime.explicit-syscalls.v2",
+                  "clone": "runtime.explicit-syscalls.v2",
+                  "clone3": "runtime.explicit-syscalls.v2",
+                  "wait4": "runtime.explicit-syscalls.v2",
+                  "socket": "runtime.explicit-syscalls.v2",
+                  "connect": "runtime.explicit-syscalls.v2",
+                  "bind": "runtime.explicit-syscalls.v2",
+                  "listen": "runtime.explicit-syscalls.v2",
+                  "accept": "runtime.explicit-syscalls.v2",
+                  "accept4": "runtime.explicit-syscalls.v2",
+                  "sendto": "runtime.explicit-syscalls.v2",
+                  "recvfrom": "runtime.explicit-syscalls.v2",
+                  "sendmsg": "runtime.explicit-syscalls.v2",
+                  "recvmsg": "runtime.explicit-syscalls.v2",
+                  "sendmmsg": "runtime.explicit-syscalls.v2",
+                  "recvmmsg": "runtime.explicit-syscalls.v2",
+                  "getsockopt": "runtime.explicit-syscalls.v2",
+                  "setsockopt": "runtime.explicit-syscalls.v2",
+                  "shutdown": "runtime.explicit-syscalls.v2",
+                  "pipe2": "runtime.explicit-syscalls.v2",
+                  "dup": "runtime.explicit-syscalls.v2",
+                  "dup2": "runtime.explicit-syscalls.v2",
+                  "dup3": "runtime.explicit-syscalls.v2",
+                  "fcntl": "runtime.explicit-syscalls.v2",
+                  "readlinkat": "fs.readlink.v1",
+                  "getcwd": "runtime.explicit-syscalls.v2",
+                  "chdir": "runtime.explicit-syscalls.v2",
+                  "prlimit64": "runtime.explicit-syscalls.v2",
+                  "kill": "runtime.explicit-syscalls.v2",
+                  "tkill": "runtime.explicit-syscalls.v2",
+                  "tgkill": "runtime.explicit-syscalls.v2",
+                  "readv": "runtime.explicit-syscalls.v2",
+                  "writev": "runtime.explicit-syscalls.v2",
+                  "pread64": "runtime.explicit-syscalls.v2",
+                  "pwrite64": "runtime.explicit-syscalls.v2",
+                  "epoll_create1": "runtime.explicit-syscalls.v2",
+                  "epoll_ctl": "runtime.explicit-syscalls.v2",
+                  "epoll_wait": "runtime.explicit-syscalls.v2",
+                  "epoll_pwait": "runtime.explicit-syscalls.v2",
+                  "epoll_pwait2": "runtime.explicit-syscalls.v2",
+                  "eventfd2": "runtime.explicit-syscalls.v2",
+                  "poll": "runtime.explicit-syscalls.v2",
+                  "ppoll": "runtime.explicit-syscalls.v2",
+                  "madvise": "runtime.explicit-syscalls.v2",
+                  "mremap": "runtime.explicit-syscalls.v2",
+                  "uname": "runtime.explicit-syscalls.v2",
+                  "sched_yield": "runtime.explicit-syscalls.v2",
+                  "sched_getaffinity": "runtime.explicit-syscalls.v2",
+                  "gettid": "runtime.explicit-syscalls.v2",
+                  "getppid": "runtime.explicit-syscalls.v2",
+                  "getrlimit": "runtime.explicit-syscalls.v2",
+                  "getrusage": "runtime.explicit-syscalls.v2",
+                  "getdents64": "runtime.explicit-syscalls.v2",
+                  "statx": "runtime.explicit-syscalls.v2",
+                  "getsockname": "runtime.explicit-syscalls.v2",
+                  "getpeername": "runtime.explicit-syscalls.v2",
+                  "readlink": "fs.readlink.v1"
+                }
+              }
+            }
+          },
+          "x-capability": "runtime.explicit-syscalls.v2"
+        },
+        "memory": {
+          "$ref": "#/$defs/memory"
+        },
+        "ipc": {
+          "$ref": "#/$defs/ipc"
+        },
+        "signals": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 64,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "x-capability": "runtime.explicit-signals.v1",
+          "description": "Only listed user signals can target the same managed job. Cross-domain signals remain denied."
+        },
+        "bootstrap": {
+          "$ref": "#/$defs/bootstrap"
+        }
+      },
+      "description": "No runtime operation is allowed implicitly. Seccomp controls named system calls and scalar arguments separately from eBPF resource authorization."
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_version",
+        "duration_seconds",
+        "release",
+        "revoke",
+        "recovery"
+      ],
+      "properties": {
+        "baseline_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "release": {
+          "const": "restore-baseline"
+        },
+        "revoke": {
+          "const": "terminate-job",
+          "description": "Confirm whole-domain termination. Prior effects cannot be undone.",
+          "x-capability": "lifecycle.terminate.v1"
+        },
+        "recovery": {
+          "const": "pinned-generation-reconcile"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "max_reported_loss",
+        "batch_events",
+        "batch_seconds"
+      ],
+      "properties": {
+        "profile": {
+          "const": "node-chain-authority-batch.v1"
+        },
+        "max_reported_loss": {
+          "const": 0
+        },
+        "batch_events": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "batch_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        }
+      }
+    },
+    "file_operation": {
+      "enum": [
+        "read",
+        "write",
+        "create",
+        "mkdir",
+        "delete",
+        "rename",
+        "hardlink",
+        "symlink",
+        "metadata",
+        "mmap",
+        "descriptor_receive",
+        "map_execute",
+        "mprotect"
+      ],
+      "x-value-capabilities": {
+        "read": "fs.read.v1",
+        "write": "fs.write.v1",
+        "create": "fs.create.v1",
+        "mkdir": "fs.mkdir.v1",
+        "delete": "fs.delete.v1",
+        "rename": "fs.rename.v1",
+        "hardlink": "fs.hardlink.v1",
+        "symlink": "fs.symlink.v1",
+        "metadata": "fs.metadata.v1",
+        "mmap": "fs.mmap.v1",
+        "descriptor_receive": "fs.descriptor_receive.v1",
+        "map_execute": "fs.map-execute.v1",
+        "mprotect": "fs.mprotect.v1"
+      },
+      "description": "Each file operation needs its own permission. mmap permits a file mapping; map_execute separately permits executable mappings. mprotect permits a protection change. Program execution uses the programs section."
+    },
+    "sockets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default",
+        "rules"
+      ],
+      "properties": {
+        "default": {
+          "const": "deny"
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "family",
+              "protocol",
+              "operations",
+              "effect"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/rule_id"
+              },
+              "family": {
+                "enum": [
+                  "ipv4",
+                  "ipv6",
+                  "unix",
+                  "netlink",
+                  "packet"
+                ],
+                "x-value-capabilities": {
+                  "ipv4": "socket.ipv4.v1",
+                  "ipv6": "socket.ipv6.v1",
+                  "unix": "socket.unix.v1",
+                  "netlink": "socket.netlink.v1",
+                  "packet": "socket.packet.v1"
+                }
+              },
+              "protocol": {
+                "enum": [
+                  "tcp",
+                  "udp",
+                  "stream",
+                  "dgram",
+                  "raw"
+                ]
+              },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 11,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "create",
+                    "bind",
+                    "listen",
+                    "accept",
+                    "send",
+                    "receive",
+                    "get_local_name",
+                    "get_peer_name",
+                    "shutdown",
+                    "set_option",
+                    "get_option"
+                  ],
+                  "x-value-capabilities": {
+                    "create": "socket.create.v1",
+                    "bind": "socket.bind.v1",
+                    "listen": "socket.listen.v1",
+                    "accept": "socket.accept.v1",
+                    "send": "socket.send.v1",
+                    "receive": "socket.receive.v1",
+                    "get_local_name": "socket.get_local_name.v1",
+                    "get_peer_name": "socket.get_peer_name.v1",
+                    "shutdown": "socket.shutdown.v1",
+                    "set_option": "socket.set_option.v1",
+                    "get_option": "socket.get_option.v1"
+                  }
+                }
+              },
+              "effect": {
+                "enum": [
+                  "allow",
+                  "deny"
+                ]
+              },
+              "local": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "address",
+                  "port_from",
+                  "port_to"
+                ],
+                "properties": {
+                  "address": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 45
+                  },
+                  "port_from": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "port_to": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                }
+              },
+              "options": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "level",
+                    "name"
+                  ],
+                  "properties": {
+                    "level": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 255
+                    },
+                    "name": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default",
+        "anonymous",
+        "heap"
+      ],
+      "properties": {
+        "default": {
+          "const": "deny"
+        },
+        "anonymous": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 5,
+          "items": {
+            "enum": [
+              "map",
+              "read",
+              "write",
+              "execute",
+              "protect"
+            ]
+          }
+        },
+        "heap": {
+          "enum": [
+            "deny",
+            "allow"
+          ]
+        }
+      },
+      "x-capability": "runtime.explicit-memory.v1",
+      "description": "Anonymous mappings and protection changes require explicit operations. Heap growth also requires an explicit brk syscall allowance."
+    },
+    "ipc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default",
+        "pipes"
+      ],
+      "properties": {
+        "default": {
+          "const": "deny"
+        },
+        "pipes": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 3,
+          "items": {
+            "enum": [
+              "create",
+              "read",
+              "write"
+            ]
+          }
+        },
+        "eventfds": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 3,
+          "items": {
+            "enum": [
+              "create",
+              "read",
+              "write"
+            ]
+          },
+          "x-capability": "runtime.explicit-eventfds.v1",
+          "description": "Only eventfds created in the same managed job can use these explicit operations. Missing or empty permissions deny."
+        }
+      },
+      "x-capability": "runtime.explicit-pipes.v1",
+      "description": "Anonymous pipe and eventfd operations require explicit same-job permissions. Foreign descriptors remain denied."
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "helper_digest",
+        "operations",
+        "max_hold_seconds"
+      ],
+      "properties": {
+        "profile": {
+          "const": "measured-held-exec.v1"
+        },
+        "helper_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "operations": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 5,
+          "items": {
+            "enum": [
+              "barrier_read",
+              "listener_send",
+              "filter_finalize",
+              "working_directory",
+              "credential_namespace"
+            ],
+            "x-value-capabilities": {
+              "barrier_read": "runtime.measured-bootstrap.v1",
+              "listener_send": "runtime.measured-bootstrap.v1",
+              "filter_finalize": "runtime.measured-bootstrap.v1",
+              "working_directory": "runtime.measured-bootstrap.v1",
+              "credential_namespace": "runtime.credential-namespace.v1"
+            }
+          }
+        },
+        "max_hold_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
+      },
+      "x-capability": "runtime.measured-bootstrap.v1",
+      "description": "A measured trusted helper can read its one bound admission pipe before agent exec. No agent runtime right follows from this permission."
+    }
+  },
+  "$comment": "SPDX-License-Identifier: AGPL-3.0-only"
+}

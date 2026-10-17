@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) 2026 Dan Metcalf */
+
+:root {
+  --font:
+    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --canvas: #f6f8f2;
+  --text: #213c30;
+  --muted: #566d5d;
+  --green: #245f46;
+  --line: #dfe7da;
+  --red: #9b4d3c;
+  --shadow: 0 3px 10px #223b271f;
+}

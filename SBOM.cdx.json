@@ -1,0 +1,2766 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "AgentGate experimental source preview",
+      "bom-ref": "agentgate-community-sha256:09cc90e3cfd9817708338321e5559b0fe025d480bda30aaca7bc2654a6ec2d43",
+      "version": "09cc90e3cfd9817708338321e5559b0fe025d480bda30aaca7bc2654a6ec2d43",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 AND GPL-2.0-only AND CC-BY-4.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:inventory-scope",
+          "value": "Go default build/test dependency set and npm lock; not a linked-binary or runtime-image inventory"
+        },
+        {
+          "name": "agentgate:supplier-notice-files",
+          "value": "66"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "github.com/cilium/ebpf",
+      "version": "v0.22.0",
+      "bom-ref": "go:2541d82ddb2b8ba3d27a97c402bcea4adf292fb7400a4d232e88124a36614f8d",
+      "purl": "pkg:golang/github.com/cilium/ebpf@v0.22.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:v2ktp0roffpMOj2MMf3idtCQZOsAoC4BJbAJN+ke2bY="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate,agentgate-node"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Separate BSD-2-Clause example header and MIT Windows test notice are retained; module root is MIT."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "github.com/coreos/go-oidc/v3",
+      "version": "v3.21.0",
+      "bom-ref": "go:7cd0fd73658571a4ab2334be1ac87f9ed461507df19e51be2096b612ae6f1b0d",
+      "purl": "pkg:golang/github.com/coreos/go-oidc/v3@v3.21.0",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:wZo4Q9Pum8dYEj0eMUPrqR+kvuGkeUplbLpNCkBqoWM="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "CoreOS copyright NOTICE retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "github.com/dustin/go-humanize",
+      "version": "v1.0.1",
+      "bom-ref": "go:10387c8852023b6378e2d89740d9500fd989a65102e1957f64e7f862f2fe98a1",
+      "purl": "pkg:golang/github.com/dustin/go-humanize@v1.0.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Dustin Sallings notice retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "github.com/go-jose/go-jose/v4",
+      "version": "v4.1.4",
+      "bom-ref": "go:7b1947d2a79df84f28dbb2cd88ffcad7d8a5e0f45f0abb6aca8c1d1882849905",
+      "purl": "pkg:golang/github.com/go-jose/go-jose/v4@v4.1.4",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 AND BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Root Apache terms; json subtree retains Go Authors BSD-3-Clause."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "bom-ref": "go:d0d666767bf9063c153c1db881965da6f7d0e0520c57a34c15ba38f51547e2fa",
+      "purl": "pkg:golang/github.com/google/uuid@v1.6.0",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Google notice retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "github.com/remyoudompheng/bigfft",
+      "version": "v0.0.0-20230129092748-24d4a6f8daec",
+      "bom-ref": "go:ccde9cb2b3b92254b0912c47ab0d09214e0534e2c800e0b7d7e4aae2c1002127",
+      "purl": "pkg:golang/github.com/remyoudompheng/bigfft@v0.0.0-20230129092748-24d4a6f8daec",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Go Authors notice retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "github.com/santhosh-tekuri/jsonschema/v6",
+      "version": "v6.0.2",
+      "bom-ref": "go:999c5a90de66379b3d2bead9fa704829d942d417eb96de867b80a35c13665f1c",
+      "purl": "pkg:golang/github.com/santhosh-tekuri/jsonschema/v6@v6.0.2",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:KRzFb2m7YtdldCEkzs6KqmJw4nqEVZGK7IN2kJkjTuQ="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Root license text retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "go.yaml.in/yaml/v3",
+      "version": "v3.0.5",
+      "bom-ref": "go:6e4ce618136452ca540324961e0ae9d873f54f44a79ff4593a31bb0620c02b67",
+      "purl": "pkg:golang/go.yaml.in/yaml/v3@v3.0.5",
+      "licenses": [
+        {
+          "expression": "MIT AND Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "LICENSE assigns eight named libyaml ports MIT; remaining files Apache-2.0. NOTICE retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "golang.org/x/net",
+      "version": "v0.61.0",
+      "bom-ref": "go:0c902f72afbf52366fcc062b4583603d932bda29d0796273af7ba325785636aa",
+      "purl": "pkg:golang/golang.org/x/net@v0.61.0",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:RR+6j/BTBCrggOLugxa+66R8FvoN6MHlzDlZIbN9YFw="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "default source checks only"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Compiles in default exported-package checks; absent from both packaged binary build metadata records."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "golang.org/x/oauth2",
+      "version": "v0.37.0",
+      "bom-ref": "go:636809519be14c752379dbb08b90ef2e287d79503dc18797f8fdb93d6136fd40",
+      "purl": "pkg:golang/golang.org/x/oauth2@v0.37.0",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:JUlcxA8oAtauLfiH8FX2/FkAWHAdi0QtGCGc+hofE98="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Go Authors notice retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "golang.org/x/sys",
+      "version": "v0.49.0",
+      "bom-ref": "go:1e7b1aaf85f9116b3cf987163aeaa64c0c26a202b5997b73d2fa26ed679465c6",
+      "purl": "pkg:golang/golang.org/x/sys@v0.49.0",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate,agentgate-node"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Go Authors notice retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "golang.org/x/text",
+      "version": "v0.43.0",
+      "bom-ref": "go:0d1e2d67ae64f2b5ca5c51179009ca4d8a0075dc0175cbeb7cc510e1d8b02067",
+      "purl": "pkg:golang/golang.org/x/text@v0.43.0",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:1QivrlhwAsnMOcqgOdl9my7s9OyZl8O5/UGUTJVXoWc="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Go Authors notice retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "modernc.org/libc",
+      "version": "v1.77.1",
+      "bom-ref": "go:bc0bdb12f6776011b5de941a1bc3b036a9d6d98f5c06250b5c06abef218aeb1f",
+      "purl": "pkg:golang/modernc.org/libc@v1.77.1",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:Ct8j47QtiZ1Enj2DtFXQtUqrPCAjdCmPjtCuvrYQ0Hs="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Root BSD-3-Clause; included Go BSD, musl MIT/permissive subparts, go-netdb MIT and nixpkgs MIT notices. GPL COPYING belongs to upstream testdata crlibm."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "modernc.org/mathutil",
+      "version": "v1.7.1",
+      "bom-ref": "go:bc866d47782e62afbbbc5108eb0594f0407714a7c68487847627af4302ef5c8c",
+      "purl": "pkg:golang/modernc.org/mathutil@v1.7.1",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Root and mersenne notices retained."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "modernc.org/memory",
+      "version": "v1.12.1",
+      "bom-ref": "go:baa659b49de75956f0c99f795f811c924eb30969f06f03969f798d9506b00d0a",
+      "purl": "pkg:golang/modernc.org/memory@v1.12.1",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:nFMiWrpStgZczNl6XI9GnIk/rWhYIyHGUaR04pGbp9g="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Memory Authors, Go Authors and mmap-go BSD notices retained. LICENSE-LOGO is a reference for a logo, not linked code."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "modernc.org/sqlite",
+      "version": "v1.60.1",
+      "bom-ref": "go:16cce25c10ff410384aed3463b6bcfb8d51d87cf06aef0c7264bfa35530205f5",
+      "purl": "pkg:golang/modernc.org/sqlite@v1.60.1",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:go-module-directory-checksum",
+          "value": "h1:/blz53O951KWFOso4QQvEs/Fq6cDBKLtMVrYNSeJVKw="
+        },
+        {
+          "name": "agentgate:supplier-license-scope",
+          "value": "Module root/file-specific supplier declaration; embedded and transitive terms remain separate in the preserved notices."
+        },
+        {
+          "name": "agentgate:binary-module-records",
+          "value": "agentgate"
+        },
+        {
+          "name": "agentgate:additional-supplier-terms",
+          "value": "Root BSD-3-Clause. Supplier separates linked permissive/public-domain code from own tests, graph-only MPL/tooling and non-build assets. Optional vec/vfs apply only when imported."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/aix-ppc64",
+      "version": "0.25.12",
+      "bom-ref": "npm:c68b74b63fc0bfa973f903af57f0c4734d92bcebf017a14850047dbbed992aba",
+      "purl": "pkg:npm/%40esbuild/aix-ppc64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/aix-ppc64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/android-arm",
+      "version": "0.25.12",
+      "bom-ref": "npm:88d7979f76e69a9f69fa752b34fec0fab5502488cdd60bdf6be60faf0547f861",
+      "purl": "pkg:npm/%40esbuild/android-arm@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/android-arm"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-VJ+sKvNA/GE7Ccacc9Cha7bpS8nyzVv0jdVgwNDaR4gDMC/2TTRc33Ip8qrNYUcpkOHUT5OZ0bUcNNVZQ9RLlg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/android-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:c1fb0737fd58ebff35cc0ea3db743d010e06efd7220c34c310b115675d1339cb",
+      "purl": "pkg:npm/%40esbuild/android-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/android-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-6AAmLG7zwD1Z159jCKPvAxZd4y/VTO0VkprYy+3N2FtJ8+BQWFXU+OxARIwA46c5tdD9SsKGZ/1ocqBS/gAKHg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/android-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:fd95c05e26a30b136c82a026d63ed27320412e0ba68b6f21dfddeddc0afad1b4",
+      "purl": "pkg:npm/%40esbuild/android-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/android-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-5jbb+2hhDHx5phYR2By8GTWEzn6I9UqR11Kwf22iKbNpYrsmRB18aX/9ivc5cabcUiAT/wM+YIZ6SG9QO6a8kg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/darwin-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:8909b9cf3f26f609070a942112c37becade027d0ffc7d7a0ed51c2a5ad5478fa",
+      "purl": "pkg:npm/%40esbuild/darwin-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/darwin-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-N3zl+lxHCifgIlcMUP5016ESkeQjLj/959RxxNYIthIg+CQHInujFuXeWbWMgnTo4cp5XVHqFPmpyu9J65C1Yg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/darwin-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:a5b9e9f540290d1c4731276da5af47389a23d358768d54688cf233106c6ebfdc",
+      "purl": "pkg:npm/%40esbuild/darwin-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/darwin-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-HQ9ka4Kx21qHXwtlTUVbKJOAnmG1ipXhdWTmNXiPzPfWKpXqASVcWdnf2bnL73wgjNrFXAa3yYvBSd9pzfEIpA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/freebsd-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:43dccfbca38c3b4dfc4b1553ec780fcd4ccef045bb6ee1fbbf2dda6079b2e676",
+      "purl": "pkg:npm/%40esbuild/freebsd-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/freebsd-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-gA0Bx759+7Jve03K1S0vkOu5Lg/85dou3EseOGUes8flVOGxbhDDh/iZaoek11Y8mtyKPGF3vP8XhnkDEAmzeg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/freebsd-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:0e07e13b6a34381d8c04e20133ecaf9459a948874c1f97038dfd71561e51af6e",
+      "purl": "pkg:npm/%40esbuild/freebsd-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/freebsd-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-TGbO26Yw2xsHzxtbVFGEXBFH0FRAP7gtcPE7P5yP7wGy7cXK2oO7RyOhL5NLiqTlBh47XhmIUXuGciXEqYFfBQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-arm",
+      "version": "0.25.12",
+      "bom-ref": "npm:78304df29a573d59242738ba94e92918682b2c7d7195f4a3d42e53124969cdd5",
+      "purl": "pkg:npm/%40esbuild/linux-arm@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-arm"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-lPDGyC1JPDou8kGcywY0YILzWlhhnRjdof3UlcoqYmS9El818LLfJJc3PXXgZHrHCAKs/Z2SeZtDJr5MrkxtOw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:e1c552ebc82511cb65d6cb90bec36a141c1f296461ed771f6bfbd751e01fa9db",
+      "purl": "pkg:npm/%40esbuild/linux-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-8bwX7a8FghIgrupcxb4aUmYDLp8pX06rGh5HqDT7bB+8Rdells6mHvrFHHW2JAOPZUbnjUpKTLg6ECyzvas2AQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-ia32",
+      "version": "0.25.12",
+      "bom-ref": "npm:9208894083d108de0beaf54e7dc6f7e4347c3650d35f6b206e0687fede2bb505",
+      "purl": "pkg:npm/%40esbuild/linux-ia32@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-ia32"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-0y9KrdVnbMM2/vG8KfU0byhUN+EFCny9+8g202gYqSSVMonbsCfLjUO+rCci7pM0WBEtz+oK/PIwHkzxkyharA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-loong64",
+      "version": "0.25.12",
+      "bom-ref": "npm:0b144d1c97c89a746089ad0fe2a2e7171d26c2a1c798a0b92fa5a24650e4770b",
+      "purl": "pkg:npm/%40esbuild/linux-loong64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-loong64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-h///Lr5a9rib/v1GGqXVGzjL4TMvVTv+s1DPoxQdz7l/AYv6LDSxdIwzxkrPW438oUXiDtwM10o9PmwS/6Z0Ng=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-mips64el",
+      "version": "0.25.12",
+      "bom-ref": "npm:0be9955dc5bfce43d8aec65828acbeaecfd3d680afec48e20b4c901ea58761c3",
+      "purl": "pkg:npm/%40esbuild/linux-mips64el@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-mips64el"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-iyRrM1Pzy9GFMDLsXn1iHUm18nhKnNMWscjmp4+hpafcZjrr2WbT//d20xaGljXDBYHqRcl8HnxbX6uaA/eGVw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-ppc64",
+      "version": "0.25.12",
+      "bom-ref": "npm:ca177787c92227df6f3fe252bea57efcf3be9c38486865d9dd3fffbc47240c2a",
+      "purl": "pkg:npm/%40esbuild/linux-ppc64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-ppc64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-9meM/lRXxMi5PSUqEXRCtVjEZBGwB7P/D4yT8UG/mwIdze2aV4Vo6U5gD3+RsoHXKkHCfSxZKzmDssVlRj1QQA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-riscv64",
+      "version": "0.25.12",
+      "bom-ref": "npm:be6577d6192bf6488b3ec2205201d36d825eab46c206b6f0a508ce22d96d37fe",
+      "purl": "pkg:npm/%40esbuild/linux-riscv64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-riscv64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-Zr7KR4hgKUpWAwb1f3o5ygT04MzqVrGEGXGLnj15YQDJErYu/BGg+wmFlIDOdJp0PmB0lLvxFIOXZgFRrdjR0w=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-s390x",
+      "version": "0.25.12",
+      "bom-ref": "npm:07dfe9f94403f3312bba2f3f9c906ba1e620eda6977648fc797c7e584edb1095",
+      "purl": "pkg:npm/%40esbuild/linux-s390x@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-s390x"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-MsKncOcgTNvdtiISc/jZs/Zf8d0cl/t3gYWX8J9ubBnVOwlk65UIEEvgBORTiljloIWnBzLs4qhzPkJcitIzIg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:dbf1062817d595639399e3a227e930c2ffca5bb6b8018b1a0c09138a72e8cff7",
+      "purl": "pkg:npm/%40esbuild/linux-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/linux-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-uqZMTLr/zR/ed4jIGnwSLkaHmPjOjJvnm6TVVitAa08SLS9Z0VM8wIRx7gWbJB5/J54YuIMInDquWyYvQLZkgw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/netbsd-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:f4f56c2c8f019b1cee30d412c4418287622906a7734987680573c2e5e9591c31",
+      "purl": "pkg:npm/%40esbuild/netbsd-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/netbsd-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-xXwcTq4GhRM7J9A8Gv5boanHhRa/Q9KLVmcyXHCTaM4wKfIpWkdXiMog/KsnxzJ0A1+nD+zoecuzqPmCRyBGjg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/netbsd-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:886b810147d1d65888d4deda4a64f1899994afe3cbf729f8196bfcce42eee6fe",
+      "purl": "pkg:npm/%40esbuild/netbsd-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/netbsd-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-Ld5pTlzPy3YwGec4OuHh1aCVCRvOXdH8DgRjfDy/oumVovmuSzWfnSJg+VtakB9Cm0gxNO9BzWkj6mtO1FMXkQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/openbsd-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:86e42a8845a8cbaef41524bbe105b177cff0349834fdb2fd9270efe13a94fae5",
+      "purl": "pkg:npm/%40esbuild/openbsd-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/openbsd-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-fF96T6KsBo/pkQI950FARU9apGNTSlZGsv1jZBAlcLL1MLjLNIWPBkj5NlSz8aAzYKg+eNqknrUJ24QBybeR5A=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/openbsd-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:e3026388e36434647a19e856c531792860dec565a9c71573ebdf9f3539944fc7",
+      "purl": "pkg:npm/%40esbuild/openbsd-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/openbsd-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-MZyXUkZHjQxUvzK7rN8DJ3SRmrVrke8ZyRusHlP+kuwqTcfWLyqMOE3sScPPyeIXN/mDJIfGXvcMqCgYKekoQw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/openharmony-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:77c45b800ca012c2ddd04b88728d5f3e12aaa0d663edd4bd1e8b3cc0bc315a77",
+      "purl": "pkg:npm/%40esbuild/openharmony-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/openharmony-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-rm0YWsqUSRrjncSXGA7Zv78Nbnw4XL6/dzr20cyrQf7ZmRcsovpcRBdhD43Nuk3y7XIoW2OxMVvwuRvk9XdASg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/sunos-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:17657328a151e763173701ca37c738a0daf1b2e64c1a7ca1f2bebdd0fd812b45",
+      "purl": "pkg:npm/%40esbuild/sunos-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/sunos-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-3wGSCDyuTHQUzt0nV7bocDy72r2lI33QL3gkDNGkod22EsYl04sMf0qLb8luNKTOmgF/eDEDP5BFNwoBKH441w=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/win32-arm64",
+      "version": "0.25.12",
+      "bom-ref": "npm:8d20aed46672430c06c1d7c5c74c3d694e815e6ec84339a3d6c9cea70b378f46",
+      "purl": "pkg:npm/%40esbuild/win32-arm64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/win32-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-rMmLrur64A7+DKlnSuwqUdRKyd3UE7oPJZmnljqEptesKM8wx9J8gx5u0+9Pq0fQQW8vqeKebwNXdfOyP+8Bsg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/win32-ia32",
+      "version": "0.25.12",
+      "bom-ref": "npm:bffe0445febe96fd0b565c317a6ac67a8ca4c927c963e113eba30071329eec97",
+      "purl": "pkg:npm/%40esbuild/win32-ia32@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/win32-ia32"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-HkqnmmBoCbCwxUKKNPBixiWDGCpQGVsrQfJoVGYLPT41XWF8lHuE5N6WhVia2n4o5QK5M4tYr21827fNhi4byQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/win32-x64",
+      "version": "0.25.12",
+      "bom-ref": "npm:48df3e3e117d479f74505c0f4e85163b9b4b62b8b66dff89f85135a71f0a747c",
+      "purl": "pkg:npm/%40esbuild/win32-x64@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@esbuild/win32-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@napi-rs/lzma-linux-x64-gnu",
+      "version": "1.5.1",
+      "bom-ref": "npm:4555f4bc06bcd5786cacb4a578e592c1a96c81f12ac098e68d2c6fe0036aaa09",
+      "purl": "pkg:npm/%40napi-rs/lzma-linux-x64-gnu@1.5.1",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@napi-rs/lzma-linux-x64-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-android-arm-eabi",
+      "version": "4.64.5",
+      "bom-ref": "npm:e6ebf96a3e0d2cf2204fd1fb3312031aaa55a19a8d0b9ecc41af3dadd3e423a7",
+      "purl": "pkg:npm/%40rollup/rollup-android-arm-eabi@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-android-arm-eabi"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-MrfgRQSpD5hkkRg6XI16B6EDLb+6+xp8xje6bpdSwkYw+qxrBKbUVrRAQu9h82UT+QumSIVQ8HXsXjPd2dlhqw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-android-arm64",
+      "version": "4.64.5",
+      "bom-ref": "npm:0630d79a2aee261efeb573a7fc9d82b3a210067bae06e993f7eb89d99ba34861",
+      "purl": "pkg:npm/%40rollup/rollup-android-arm64@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-android-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-+uu2p/R9Tzn8GpoQyX1pAo5dmKT1DhXevfaCzqzmPFhnLjHLWw7uWkaVGlxmhwYoRiYYhsGfRcD5cTBpL7rgSw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-darwin-arm64",
+      "version": "4.64.5",
+      "bom-ref": "npm:0ae508b0023cce8a2fc97f454d28e145c07dff94316625e790f5c53cbdb24858",
+      "purl": "pkg:npm/%40rollup/rollup-darwin-arm64@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-darwin-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-17dys+YEmzwzzFVHQAVDONg5FALXY9kd99HFEpfk4gJVHYxoh5bGea3D4t1fXXnwkTcOe25wPyd6nWS0I8IdLQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-darwin-x64",
+      "version": "4.64.5",
+      "bom-ref": "npm:c99d35bcc9b6bcb4a8e284c8cf2ac022b340ecc15a0a610bfc6bbb3f17bf50d3",
+      "purl": "pkg:npm/%40rollup/rollup-darwin-x64@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-darwin-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-wg0zQEKkEvFZf1UaaX1UELOoPs//OSKUG7D+yITuqOsAvza7LvHTv5Wu4nmMfzNG7EYI2jp2PJC7Id6OETmsYQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-freebsd-arm64",
+      "version": "4.64.5",
+      "bom-ref": "npm:86508372fa86b01f4e48c6f519bae146299f823ea30e61cd2346f51bf840254f",
+      "purl": "pkg:npm/%40rollup/rollup-freebsd-arm64@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-freebsd-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-CoJmWcpEMuwin+TZ/ev/H9uDyF/uxUKQSWXdmIPn/UBx/uGV9+4ebMp0FwnlhWR9PE1AdzYsKf3bZevhif38+A=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-freebsd-x64",
+      "version": "4.64.5",
+      "bom-ref": "npm:92a078b1bb3783fb159b6b528ad8e913d9410674ec31063eca3b47bdfe14734b",
+      "purl": "pkg:npm/%40rollup/rollup-freebsd-x64@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-freebsd-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-PxZnLAaTUAL5xG0W2BXLeYPKrK2b3LIASV2/e/Kf7PZvSLI1iAQIm9B9aJD+YyFIT7hc6qaMV3+OOO35R28LfA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-arm-gnueabihf",
+      "version": "4.64.5",
+      "bom-ref": "npm:bb702a8592b13508951fe32a58e3ce3b797a72a021ac6e3cc07739d8b73fb9b0",
+      "purl": "pkg:npm/%40rollup/rollup-linux-arm-gnueabihf@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-arm-gnueabihf"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-uPo3IvnONjhbFXwWgroBeFwOicuhT7ZwQrnzkzmOtBJzeQbkUJUE1SJDfDI31ijQ5+ZUIA6sPrdUMxTSnxUWAg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-arm-musleabihf",
+      "version": "4.64.5",
+      "bom-ref": "npm:2502f71a6349f38b69842e14ca11ce1343119f3ed24ee128af505b84a79dc8fe",
+      "purl": "pkg:npm/%40rollup/rollup-linux-arm-musleabihf@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-arm-musleabihf"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-ywI8Jyuc4LyHYTjC0mw4yA1ulvZBkHusdpWnoiEBsmBuHvSnt90btTBGCZ+s/2y+YNNfVAEKy33nPo5UI9zTmg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-arm64-gnu",
+      "version": "4.64.5",
+      "bom-ref": "npm:9d276d2153e5f7163ed82149f7ee5025c8c559b481f9d70c4e7decf555c390c1",
+      "purl": "pkg:npm/%40rollup/rollup-linux-arm64-gnu@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-arm64-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-tmuXJoQ/3ovSr637aykZMdQteU/CB2APAz2CrvsbibuoHZi1BS1Db13cVViBdEARGwXCLn1DSJ8wsjoThLJPGA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-arm64-musl",
+      "version": "4.64.5",
+      "bom-ref": "npm:e4b75e05cd32685cc6e1784185eb396726c0d29587cc00399fe960ba71a98778",
+      "purl": "pkg:npm/%40rollup/rollup-linux-arm64-musl@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-arm64-musl"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-5FMjSYNcUOHx7oW8Qu9KB6jGPpvF/8sG7+BDHwU/Ihh1/6FMJ9ySmsFG4tJ1qbNRuP8OLzCBDso4sF0mQaLuFQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-loong64-gnu",
+      "version": "4.64.5",
+      "bom-ref": "npm:9bf46b7f3601736211cdf692a86b6bc439b4e2669d9a66258c3bb151a39f2a52",
+      "purl": "pkg:npm/%40rollup/rollup-linux-loong64-gnu@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-loong64-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-K8ZJ+neLDbUkIrL8dqF/5LtuVCrKwo27kREgOlxjBEjlOXwHvDnHLU8Z/UKv/B49qi7e8hsSDOyoJwhwqhvX4w=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-loong64-musl",
+      "version": "4.64.5",
+      "bom-ref": "npm:78a08e78d3e274cb27b528086d6ddadc01fe21a93690f85a010f012cd1a79326",
+      "purl": "pkg:npm/%40rollup/rollup-linux-loong64-musl@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-loong64-musl"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-NlVxsq7PFPv0DBKGuNWRDKixQYQCjM53zl04mxEcKMBmJbCBIUm1JdPfIWDRHyOOFzzYPmLQzfeEwh4716ayQg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-ppc64-gnu",
+      "version": "4.64.5",
+      "bom-ref": "npm:e5d33cbd27177d16189cc8d6b51fe343502c9240370b74cb8f455b62ffedc60a",
+      "purl": "pkg:npm/%40rollup/rollup-linux-ppc64-gnu@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-ppc64-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-ARhRHJYs5eCFet5azfrHD97vOkD8OzNW2RSMlvo5CcBqXaTOLfp0OHDtUQh7/K5AL5fUYoFp2fgC9KDg4vVYMQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-ppc64-musl",
+      "version": "4.64.5",
+      "bom-ref": "npm:ce82fee9555fdc838f1b55c2435dd6836f68010dda2d93d0225032ab503362b2",
+      "purl": "pkg:npm/%40rollup/rollup-linux-ppc64-musl@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-ppc64-musl"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-atSgreM5C7jpxd9aEXN+6vJ5wTd05iYw+S3FiQpw7VsoEl8B90llbq35ARON+GOHj5QlVQEq2vOKWCHTob/BSQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-riscv64-gnu",
+      "version": "4.64.5",
+      "bom-ref": "npm:55c0689759cfc77862907a44ca2486c3e0648c31d85d665bf8c96379349d2c1e",
+      "purl": "pkg:npm/%40rollup/rollup-linux-riscv64-gnu@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-riscv64-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-vmlmwBFGnjVWxSRoVabNkyYuscSmg52Pd0fM8jEbNT3Jmka4A6HcB84x4uAmuumznWfBVaxKOqU6jbEgomWKCA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-riscv64-musl",
+      "version": "4.64.5",
+      "bom-ref": "npm:e64d39a94511b97b32934e75e4742375648e626ee06dde38376bededf2138638",
+      "purl": "pkg:npm/%40rollup/rollup-linux-riscv64-musl@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-riscv64-musl"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-hhJrP6S9WkbsbcHgUkvCBS5Cn8IdsG8XjlLZyxjnv9+NdoYfbbZE4TWJYr8apdaj1M5t5Y1id2StnEslxpNFyA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-s390x-gnu",
+      "version": "4.64.5",
+      "bom-ref": "npm:f25d16a989f0f764fed2586e09f2c8929ce610aad9bdb015ad9dfb98e77f29f9",
+      "purl": "pkg:npm/%40rollup/rollup-linux-s390x-gnu@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-s390x-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-NNVCyN9pGrwFmQa4bf+Cnf5aVH3g6ZpnlOg1Cs/H9swIHT9bRixijfzUqyEIWm1WtiAuR1LJ+rJH6zpBm8kgQA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-x64-gnu",
+      "version": "4.64.5",
+      "bom-ref": "npm:b46a0dfaa5963cbd6b86308df903c21ffa1e422990bd2db8ddf4a788d3426310",
+      "purl": "pkg:npm/%40rollup/rollup-linux-x64-gnu@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-x64-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-dR9nd6OKnvSS60Ifz/L7Mj5zzYyoqyRn2NwTuaOONKaa3xsVGXyp8YusMbvFyEOR94DxnwgcbgsFqkHd29ZSzQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-linux-x64-musl",
+      "version": "4.64.5",
+      "bom-ref": "npm:8b2e78893b0b8a63646baf07cc67051b98747f15c8ea2c5895fc0e8cd22f5079",
+      "purl": "pkg:npm/%40rollup/rollup-linux-x64-musl@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-linux-x64-musl"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-1tzsMjaqhsh3bAO6SJiJqh8hIr9sSPRd+i2vPPxJHod8/XYnf9TEnK0z/u3r1z1AkI347X0KbRSg9dWcxeGahw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-openbsd-x64",
+      "version": "4.64.5",
+      "bom-ref": "npm:9bbe803ed3b2f24df15b42899ee801b29bed0e8672b73123d3d6c7b026a2ea49",
+      "purl": "pkg:npm/%40rollup/rollup-openbsd-x64@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-openbsd-x64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-01mWMQblKoXXsmk28KXtpbA96w7g/aOWUoV3AC16fdHdqkykGalqyyM+5u8M7uP5/MEMiiPv69Hv7iv/hEH/dA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-openharmony-arm64",
+      "version": "4.64.5",
+      "bom-ref": "npm:94bbca3c0b6c2a740567524eb31932dd6d459911f38558f3b92d1247f1f2ffe8",
+      "purl": "pkg:npm/%40rollup/rollup-openharmony-arm64@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-openharmony-arm64"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-trdnMPb/DNm4V/CgsaoGgr90HfQQ071wfK0KoIs4YpLvjBgVQGXhGabg2Z6nK4EcYNilrb9ZZPcsP6+zpJIdxQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-win32-arm64-msvc",
+      "version": "4.64.5",
+      "bom-ref": "npm:9a927dd08e0dde656122b80965a44e536244049bcd367ff0b7d658bc4b3de8e9",
+      "purl": "pkg:npm/%40rollup/rollup-win32-arm64-msvc@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-win32-arm64-msvc"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-x2LxZlfdfsw99T6/qb9EqE/Qi84JWzibjyOJyhJsgFJy6CafaTiqIXCCnslCGrV5XWNh7fwrS3FbRENcuKnooA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-win32-ia32-msvc",
+      "version": "4.64.5",
+      "bom-ref": "npm:2a412dc6fd2b9cdc1c0d9a01a584eee95505c92df86e158635755aad66045d85",
+      "purl": "pkg:npm/%40rollup/rollup-win32-ia32-msvc@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-win32-ia32-msvc"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-/Qd/9aDQIo0+jmItgBmPIs8195YVbDxRRApn47GyufgbutCDOh7eP5vSKKlI4QNFeaI+wKQAkSMsPnF3EuMpaA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-win32-x64-gnu",
+      "version": "4.64.5",
+      "bom-ref": "npm:e3ca51452916528675d2b294543262d7410c56a122aa6d700e859c10262d4f76",
+      "purl": "pkg:npm/%40rollup/rollup-win32-x64-gnu@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-win32-x64-gnu"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-ngUJ/XvOWrqbd2IMsfXfh2xXFLTP3sY7sCKvxbGvYdBZ1KmXFd3ewDZ9n3/GNzAUgzRuhLT/UvJRivbNoAQRBw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@rollup/rollup-win32-x64-msvc",
+      "version": "4.64.5",
+      "bom-ref": "npm:4219edfd234598ceb978b52f8af881528fd72df13d2e6455c0b74b131bc230af",
+      "purl": "pkg:npm/%40rollup/rollup-win32-x64-msvc@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@rollup/rollup-win32-x64-msvc"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-IhV6ew/DuzUWwHaYmlh7MrPCV3lKFUq/amTEwysi4r/mwNPAEfAMh5dYWeTSPTeMy2pFHGMEWYtPkHzfX3tG5A=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@types/estree",
+      "version": "1.0.9",
+      "bom-ref": "npm:59c27e4e6a59cc5f073bd05c32644b0f23c6f5e3b0acc39463a816b756f8ea05",
+      "purl": "pkg:npm/%40types/estree@1.0.9",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@types/estree"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@types/prop-types",
+      "version": "15.7.15",
+      "bom-ref": "npm:a0e8bf2316b6d83e2613a08575fee2ef17564b4bd8f2762311212d34db0aa843",
+      "purl": "pkg:npm/%40types/prop-types@15.7.15",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@types/prop-types"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@types/react",
+      "version": "18.3.18",
+      "bom-ref": "npm:5631e90e65731611b4fa81bcb5e08eed61779d4d97bb94e6e82e84bb9e7dcfc1",
+      "purl": "pkg:npm/%40types/react@18.3.18",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@types/react"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-t4yC+vtgnkYjNSKlFx1jkAhH8LgTo2N/7Qvi83kdEaUtMDiwpbLAktKDaAMlRcJ5eSxZkH74eEGt1ky31d7kfQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@types/react-dom",
+      "version": "18.3.5",
+      "bom-ref": "npm:0dcf1233bfe351c838c5630e1d0de6382cdc4a5bbda7b9233dd46410e9e913e7",
+      "purl": "pkg:npm/%40types/react-dom@18.3.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/@types/react-dom"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-P4t6saawp+b/dFrUr2cvkVsfvPguwsxtH6dNIYRllMsefqFzkZk5UIjzyDOv5g1dXIPdG4Sp1yCR4Z6RCUsG/Q=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "csstype",
+      "version": "3.2.3",
+      "bom-ref": "npm:dad6b577fff676dead025b66462951bef4ff6c17cd1a1370c727f44237f9e9bf",
+      "purl": "pkg:npm/csstype@3.2.3",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/csstype"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "esbuild",
+      "version": "0.25.12",
+      "bom-ref": "npm:172af309e6092beaf1ea67d2d7549334cdeac07ef74bcb2be4770944b96fe07a",
+      "purl": "pkg:npm/esbuild@0.25.12",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/esbuild"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-bbPBYYrtZbkt6Os6FiTLCTFxvq4tt3JKall1vRwshA3fdVztsLAatFaZobhkBC8/BrPetoa0oksYoKXoG4ryJg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "fdir",
+      "version": "6.5.0",
+      "bom-ref": "npm:5b9cd143eb58813d41afc4cafb418ae74922124d64e69586656d43e4859c8d74",
+      "purl": "pkg:npm/fdir@6.5.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/fdir"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "fsevents",
+      "version": "2.3.3",
+      "bom-ref": "npm:66a283ae4cf77bafa6748ce2f8b58143ed4f5242158a1c9d3a410f9191828246",
+      "purl": "pkg:npm/fsevents@2.3.3",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/fsevents"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "js-tokens",
+      "version": "4.0.0",
+      "bom-ref": "npm:c1a05e2120168931468cf87a17d266ce467ca1277cc9e0ffce7e01c301680600",
+      "purl": "pkg:npm/js-tokens@4.0.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/js-tokens"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "loose-envify",
+      "version": "1.4.0",
+      "bom-ref": "npm:fb34501d68323479dd816a4435243a74e9e2dbdeaa5c48dca2beb607067384f4",
+      "purl": "pkg:npm/loose-envify@1.4.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/loose-envify"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lucide-react",
+      "version": "0.468.0",
+      "bom-ref": "npm:9bbdf9be216433fc993e8de957c3142de13d1cc7e17b58b53d5d2cdfd5f95c4e",
+      "purl": "pkg:npm/lucide-react@0.468.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "ISC"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/lucide-react"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-6koYRhnM2N0GGZIdXzSeiNwguv1gt/FAjZOiPl76roBi3xKEXa4WmfpxgQwTTL4KipXjefrnf3oV4IsYhi4JFA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "nanoid",
+      "version": "3.3.20",
+      "bom-ref": "npm:b48d6502923d4952210f327e8109ba9ee4ab1c4411a70932f1bbfa7905c9950c",
+      "purl": "pkg:npm/nanoid@3.3.20",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/nanoid"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-uKdg2G3GNCKQn9byYOpxbGqrT2fGO5KRt5J/8b3pok8rT6qxGWF6hxMyJiEYtAf+FVyYuD9hRaDqX5uPFYJ4ZQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "picocolors",
+      "version": "1.1.1",
+      "bom-ref": "npm:56230ef8e7376dac888392780bfc3b5a6785c67d9a98bfcf04d7b71cc0b90b71",
+      "purl": "pkg:npm/picocolors@1.1.1",
+      "licenses": [
+        {
+          "license": {
+            "name": "ISC"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/picocolors"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "picomatch",
+      "version": "4.0.7",
+      "bom-ref": "npm:ae0ffaa4d438e58ea23d0cf1ec667fcf29ffb145a7c0336516ceeeb8ab272427",
+      "purl": "pkg:npm/picomatch@4.0.7",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/picomatch"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "playwright",
+      "version": "1.64.0",
+      "bom-ref": "npm:b929c5cf9bada8e1a30ac5b7ec55dce6d3cc7af0746f8a3dc649ed745e11b3ea",
+      "purl": "pkg:npm/playwright@1.64.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/playwright"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-kVzTnYFYEyQ9RGzBjNCd2+yEqWmVbxl3AHPynv3qQ6JTjv4a+kwRcnqQwIpuP3NnrnIrE/Q6wWAIAvMfIE2/Yg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "playwright-core",
+      "version": "1.64.0",
+      "bom-ref": "npm:483cf2c6336afe0a3cbab564dd9c4a3aa37380889a302a7655577d9b7588a7f5",
+      "purl": "pkg:npm/playwright-core@1.64.0",
+      "licenses": [
+        {
+          "license": {
+            "name": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/playwright-core"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "postcss",
+      "version": "8.5.29",
+      "bom-ref": "npm:7f93238b3024d20075cadcd4e018ab0207347c1c31fb9be884421d4d944baef7",
+      "purl": "pkg:npm/postcss@8.5.29",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/postcss"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "react",
+      "version": "18.3.1",
+      "bom-ref": "npm:b0ef1cd977469484e79bcf73772e77eeffbdf0ce0694a3a1781b6e6fa486387a",
+      "purl": "pkg:npm/react@18.3.1",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/react"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "react-dom",
+      "version": "18.3.1",
+      "bom-ref": "npm:09f04909bac301068c8f043d07f87afc52851f22d615428ed16f313be7aa4f83",
+      "purl": "pkg:npm/react-dom@18.3.1",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/react-dom"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "rollup",
+      "version": "4.64.5",
+      "bom-ref": "npm:c6f28f0131bc4ee7783a8438dabea60dc37852ed9694a5874181cd85bfd8d97a",
+      "purl": "pkg:npm/rollup@4.64.5",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/rollup"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-EAP5ZHcz2ijbgCWwPkpI7zh6bfsri2Ez5FtCy2dCp1k62duXzfG7DLGGh7RU2QQXWwavT+u4qpvDF/TWOiiGTw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "scheduler",
+      "version": "0.23.2",
+      "bom-ref": "npm:53a94963a02cf5bb94cb89dc45c24311c30ee25da7f73f350f4f5dd7dc953448",
+      "purl": "pkg:npm/scheduler@0.23.2",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/scheduler"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "source-map-js",
+      "version": "1.2.2",
+      "bom-ref": "npm:fb44bb1759049d47dc323e85d5dfd27da2098c3890e5202f3a94b34da177ebcf",
+      "purl": "pkg:npm/source-map-js@1.2.2",
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-3-Clause"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/source-map-js"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tinyglobby",
+      "version": "0.2.17",
+      "bom-ref": "npm:8cc5728c7cdcc7abf0e50d1faeded5a88f80da1e1720754c176cd1539b931d77",
+      "purl": "pkg:npm/tinyglobby@0.2.17",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/tinyglobby"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "typescript",
+      "version": "5.7.3",
+      "bom-ref": "npm:0208c1aaef0ccd7a0fc0409cab96bdaef5ac0661f23d7cb852ba8907d71a4ea7",
+      "purl": "pkg:npm/typescript@5.7.3",
+      "licenses": [
+        {
+          "license": {
+            "name": "Apache-2.0"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/typescript"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-84MVSjMEHP+FQRPy3pX9sTVV/INIex71s9TL2Gm5FG/WG1SqXeKyZ0k7/blY/4FdOzI12CBy1vGc4og/eus0fw=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "vite",
+      "version": "6.4.4",
+      "bom-ref": "npm:80e1cf3d091316b80a3f60125a504ab005622e2dae47919d56178010434de3cd",
+      "purl": "pkg:npm/vite@6.4.4",
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "properties": [
+        {
+          "name": "agentgate:npm-lock-path",
+          "value": "node_modules/vite"
+        },
+        {
+          "name": "agentgate:download-integrity",
+          "value": "sha512-xGjU/SyjeNyb0E4KxXBvYz/1C+3JXuujvf2hXNOtnlcE+58o5ajd9N2/n2VhkiJvpCP2qQasnUpx5PXNeI+p1Q=="
+        },
+        {
+          "name": "agentgate:source-inventory-scope",
+          "value": "locked package; optional platforms may not install"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "agentgate-community-sha256:09cc90e3cfd9817708338321e5559b0fe025d480bda30aaca7bc2654a6ec2d43",
+      "dependsOn": [
+        "go:2541d82ddb2b8ba3d27a97c402bcea4adf292fb7400a4d232e88124a36614f8d",
+        "go:7cd0fd73658571a4ab2334be1ac87f9ed461507df19e51be2096b612ae6f1b0d",
+        "go:10387c8852023b6378e2d89740d9500fd989a65102e1957f64e7f862f2fe98a1",
+        "go:7b1947d2a79df84f28dbb2cd88ffcad7d8a5e0f45f0abb6aca8c1d1882849905",
+        "go:d0d666767bf9063c153c1db881965da6f7d0e0520c57a34c15ba38f51547e2fa",
+        "go:ccde9cb2b3b92254b0912c47ab0d09214e0534e2c800e0b7d7e4aae2c1002127",
+        "go:999c5a90de66379b3d2bead9fa704829d942d417eb96de867b80a35c13665f1c",
+        "go:6e4ce618136452ca540324961e0ae9d873f54f44a79ff4593a31bb0620c02b67",
+        "go:0c902f72afbf52366fcc062b4583603d932bda29d0796273af7ba325785636aa",
+        "go:636809519be14c752379dbb08b90ef2e287d79503dc18797f8fdb93d6136fd40",
+        "go:1e7b1aaf85f9116b3cf987163aeaa64c0c26a202b5997b73d2fa26ed679465c6",
+        "go:0d1e2d67ae64f2b5ca5c51179009ca4d8a0075dc0175cbeb7cc510e1d8b02067",
+        "go:bc0bdb12f6776011b5de941a1bc3b036a9d6d98f5c06250b5c06abef218aeb1f",
+        "go:bc866d47782e62afbbbc5108eb0594f0407714a7c68487847627af4302ef5c8c",
+        "go:baa659b49de75956f0c99f795f811c924eb30969f06f03969f798d9506b00d0a",
+        "go:16cce25c10ff410384aed3463b6bcfb8d51d87cf06aef0c7264bfa35530205f5",
+        "npm:c68b74b63fc0bfa973f903af57f0c4734d92bcebf017a14850047dbbed992aba",
+        "npm:88d7979f76e69a9f69fa752b34fec0fab5502488cdd60bdf6be60faf0547f861",
+        "npm:c1fb0737fd58ebff35cc0ea3db743d010e06efd7220c34c310b115675d1339cb",
+        "npm:fd95c05e26a30b136c82a026d63ed27320412e0ba68b6f21dfddeddc0afad1b4",
+        "npm:8909b9cf3f26f609070a942112c37becade027d0ffc7d7a0ed51c2a5ad5478fa",
+        "npm:a5b9e9f540290d1c4731276da5af47389a23d358768d54688cf233106c6ebfdc",
+        "npm:43dccfbca38c3b4dfc4b1553ec780fcd4ccef045bb6ee1fbbf2dda6079b2e676",
+        "npm:0e07e13b6a34381d8c04e20133ecaf9459a948874c1f97038dfd71561e51af6e",
+        "npm:78304df29a573d59242738ba94e92918682b2c7d7195f4a3d42e53124969cdd5",
+        "npm:e1c552ebc82511cb65d6cb90bec36a141c1f296461ed771f6bfbd751e01fa9db",
+        "npm:9208894083d108de0beaf54e7dc6f7e4347c3650d35f6b206e0687fede2bb505",
+        "npm:0b144d1c97c89a746089ad0fe2a2e7171d26c2a1c798a0b92fa5a24650e4770b",
+        "npm:0be9955dc5bfce43d8aec65828acbeaecfd3d680afec48e20b4c901ea58761c3",
+        "npm:ca177787c92227df6f3fe252bea57efcf3be9c38486865d9dd3fffbc47240c2a",
+        "npm:be6577d6192bf6488b3ec2205201d36d825eab46c206b6f0a508ce22d96d37fe",
+        "npm:07dfe9f94403f3312bba2f3f9c906ba1e620eda6977648fc797c7e584edb1095",
+        "npm:dbf1062817d595639399e3a227e930c2ffca5bb6b8018b1a0c09138a72e8cff7",
+        "npm:f4f56c2c8f019b1cee30d412c4418287622906a7734987680573c2e5e9591c31",
+        "npm:886b810147d1d65888d4deda4a64f1899994afe3cbf729f8196bfcce42eee6fe",
+        "npm:86e42a8845a8cbaef41524bbe105b177cff0349834fdb2fd9270efe13a94fae5",
+        "npm:e3026388e36434647a19e856c531792860dec565a9c71573ebdf9f3539944fc7",
+        "npm:77c45b800ca012c2ddd04b88728d5f3e12aaa0d663edd4bd1e8b3cc0bc315a77",
+        "npm:17657328a151e763173701ca37c738a0daf1b2e64c1a7ca1f2bebdd0fd812b45",
+        "npm:8d20aed46672430c06c1d7c5c74c3d694e815e6ec84339a3d6c9cea70b378f46",
+        "npm:bffe0445febe96fd0b565c317a6ac67a8ca4c927c963e113eba30071329eec97",
+        "npm:48df3e3e117d479f74505c0f4e85163b9b4b62b8b66dff89f85135a71f0a747c",
+        "npm:4555f4bc06bcd5786cacb4a578e592c1a96c81f12ac098e68d2c6fe0036aaa09",
+        "npm:e6ebf96a3e0d2cf2204fd1fb3312031aaa55a19a8d0b9ecc41af3dadd3e423a7",
+        "npm:0630d79a2aee261efeb573a7fc9d82b3a210067bae06e993f7eb89d99ba34861",
+        "npm:0ae508b0023cce8a2fc97f454d28e145c07dff94316625e790f5c53cbdb24858",
+        "npm:c99d35bcc9b6bcb4a8e284c8cf2ac022b340ecc15a0a610bfc6bbb3f17bf50d3",
+        "npm:86508372fa86b01f4e48c6f519bae146299f823ea30e61cd2346f51bf840254f",
+        "npm:92a078b1bb3783fb159b6b528ad8e913d9410674ec31063eca3b47bdfe14734b",
+        "npm:bb702a8592b13508951fe32a58e3ce3b797a72a021ac6e3cc07739d8b73fb9b0",
+        "npm:2502f71a6349f38b69842e14ca11ce1343119f3ed24ee128af505b84a79dc8fe",
+        "npm:9d276d2153e5f7163ed82149f7ee5025c8c559b481f9d70c4e7decf555c390c1",
+        "npm:e4b75e05cd32685cc6e1784185eb396726c0d29587cc00399fe960ba71a98778",
+        "npm:9bf46b7f3601736211cdf692a86b6bc439b4e2669d9a66258c3bb151a39f2a52",
+        "npm:78a08e78d3e274cb27b528086d6ddadc01fe21a93690f85a010f012cd1a79326",
+        "npm:e5d33cbd27177d16189cc8d6b51fe343502c9240370b74cb8f455b62ffedc60a",
+        "npm:ce82fee9555fdc838f1b55c2435dd6836f68010dda2d93d0225032ab503362b2",
+        "npm:55c0689759cfc77862907a44ca2486c3e0648c31d85d665bf8c96379349d2c1e",
+        "npm:e64d39a94511b97b32934e75e4742375648e626ee06dde38376bededf2138638",
+        "npm:f25d16a989f0f764fed2586e09f2c8929ce610aad9bdb015ad9dfb98e77f29f9",
+        "npm:b46a0dfaa5963cbd6b86308df903c21ffa1e422990bd2db8ddf4a788d3426310",
+        "npm:8b2e78893b0b8a63646baf07cc67051b98747f15c8ea2c5895fc0e8cd22f5079",
+        "npm:9bbe803ed3b2f24df15b42899ee801b29bed0e8672b73123d3d6c7b026a2ea49",
+        "npm:94bbca3c0b6c2a740567524eb31932dd6d459911f38558f3b92d1247f1f2ffe8",
+        "npm:9a927dd08e0dde656122b80965a44e536244049bcd367ff0b7d658bc4b3de8e9",
+        "npm:2a412dc6fd2b9cdc1c0d9a01a584eee95505c92df86e158635755aad66045d85",
+        "npm:e3ca51452916528675d2b294543262d7410c56a122aa6d700e859c10262d4f76",
+        "npm:4219edfd234598ceb978b52f8af881528fd72df13d2e6455c0b74b131bc230af",
+        "npm:59c27e4e6a59cc5f073bd05c32644b0f23c6f5e3b0acc39463a816b756f8ea05",
+        "npm:a0e8bf2316b6d83e2613a08575fee2ef17564b4bd8f2762311212d34db0aa843",
+        "npm:5631e90e65731611b4fa81bcb5e08eed61779d4d97bb94e6e82e84bb9e7dcfc1",
+        "npm:0dcf1233bfe351c838c5630e1d0de6382cdc4a5bbda7b9233dd46410e9e913e7",
+        "npm:dad6b577fff676dead025b66462951bef4ff6c17cd1a1370c727f44237f9e9bf",
+        "npm:172af309e6092beaf1ea67d2d7549334cdeac07ef74bcb2be4770944b96fe07a",
+        "npm:5b9cd143eb58813d41afc4cafb418ae74922124d64e69586656d43e4859c8d74",
+        "npm:66a283ae4cf77bafa6748ce2f8b58143ed4f5242158a1c9d3a410f9191828246",
+        "npm:c1a05e2120168931468cf87a17d266ce467ca1277cc9e0ffce7e01c301680600",
+        "npm:fb34501d68323479dd816a4435243a74e9e2dbdeaa5c48dca2beb607067384f4",
+        "npm:9bbdf9be216433fc993e8de957c3142de13d1cc7e17b58b53d5d2cdfd5f95c4e",
+        "npm:b48d6502923d4952210f327e8109ba9ee4ab1c4411a70932f1bbfa7905c9950c",
+        "npm:56230ef8e7376dac888392780bfc3b5a6785c67d9a98bfcf04d7b71cc0b90b71",
+        "npm:ae0ffaa4d438e58ea23d0cf1ec667fcf29ffb145a7c0336516ceeeb8ab272427",
+        "npm:b929c5cf9bada8e1a30ac5b7ec55dce6d3cc7af0746f8a3dc649ed745e11b3ea",
+        "npm:483cf2c6336afe0a3cbab564dd9c4a3aa37380889a302a7655577d9b7588a7f5",
+        "npm:7f93238b3024d20075cadcd4e018ab0207347c1c31fb9be884421d4d944baef7",
+        "npm:b0ef1cd977469484e79bcf73772e77eeffbdf0ce0694a3a1781b6e6fa486387a",
+        "npm:09f04909bac301068c8f043d07f87afc52851f22d615428ed16f313be7aa4f83",
+        "npm:c6f28f0131bc4ee7783a8438dabea60dc37852ed9694a5874181cd85bfd8d97a",
+        "npm:53a94963a02cf5bb94cb89dc45c24311c30ee25da7f73f350f4f5dd7dc953448",
+        "npm:fb44bb1759049d47dc323e85d5dfd27da2098c3890e5202f3a94b34da177ebcf",
+        "npm:8cc5728c7cdcc7abf0e50d1faeded5a88f80da1e1720754c176cd1539b931d77",
+        "npm:0208c1aaef0ccd7a0fc0409cab96bdaef5ac0661f23d7cb852ba8907d71a4ea7",
+        "npm:80e1cf3d091316b80a3f60125a504ab005622e2dae47919d56178010434de3cd"
+      ]
+    }
+  ]
+}
