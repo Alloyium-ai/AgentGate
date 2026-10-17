@@ -1,0 +1,8 @@
+{
+  "schema": "agentgate.community.settings.v1",
+  "public_url": "https://localhost:9443",
+  "listen": "0.0.0.0:8930",
+  "session_seconds": 1800,
+  "auth_mode": "local",
+  "group_roles": {}
+}

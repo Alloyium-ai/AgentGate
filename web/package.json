@@ -1,0 +1,24 @@
+{
+  "name": "alloyium-enforcer-control",
+  "private": true,
+  "version": "0.2.6",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test:policy": "node --test qa/policy-schema.node.mjs",
+    "test:policy-browser": "node qa/policy-workspace.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "0.468.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "playwright": "1.64.0",
+    "typescript": "5.7.3",
+    "vite": "6.4.4"
+  },
+  "license": "Apache-2.0"
+}

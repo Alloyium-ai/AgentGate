@@ -1,0 +1,139 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright (c) 2026 Dan Metcalf */
+.policy-workspace {
+  min-width: 0;
+}
+.policy-workspace > .panel,
+.policy-workspace form > fieldset > .panel {
+  margin-bottom: 20px;
+}
+.policy-form-shell {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.policy-workspace textarea {
+  width: 100%;
+  resize: vertical;
+}
+.policy-workspace textarea[spellcheck="false"] {
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.policy-section {
+  border-top: 1px solid var(--border, #dfe5ec);
+  padding: 16px 0;
+}
+.policy-section > summary {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.policy-section > summary > span {
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+}
+.policy-section > fieldset {
+  margin-top: 16px;
+}
+.policy-field {
+  min-width: 0;
+}
+.policy-constant {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #dfe5ec);
+  font-size: 12px;
+}
+.policy-constant small {
+  display: block;
+  flex-basis: 100%;
+}
+.policy-constant strong {
+  overflow-wrap: anywhere;
+}
+.policy-rule {
+  border: 1px solid var(--border, #dfe5ec);
+  border-radius: 10px;
+  margin: 12px 0;
+  padding: 16px;
+}
+.policy-rule fieldset {
+  min-width: 0;
+}
+.policy-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 4px 14px;
+}
+.policy-choices .check-row {
+  margin: 0;
+  padding: 6px;
+}
+.field-error {
+  color: #b6293b;
+}
+.policy-workspace [aria-invalid="true"] {
+  border-color: #b6293b;
+}
+.policy-digest,
+.requested-policy code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.requested-policy p,
+.target-preview p {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.requested-policy th,
+.requested-policy td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.target-preview {
+  margin-top: 20px;
+}
+.target-preview summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.policy-workspace pre,
+.target-preview pre,
+.requested-policy + details pre {
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .policy-rule {
+    padding: 10px;
+  }
+  .policy-workspace fieldset {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .policy-workspace .policy-form-shell {
+    padding: 0;
+  }
+  .policy-constant {
+    display: block;
+  }
+  .policy-constant strong {
+    display: block;
+    margin-top: 5px;
+  }
+}

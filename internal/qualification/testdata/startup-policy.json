@@ -1,0 +1,218 @@
+{
+  "defaults": {
+    "registered_operations": "deny",
+    "unmatched_resources": "deny",
+    "missing_managed_policy": "deny"
+  },
+  "schema_version": "agentgate.policy.v2",
+  "profile": "kernel-policy.v2",
+  "required_capabilities": [
+    "audit.batch.v1",
+    "exec.rules.v1",
+    "fs.map-execute.v1",
+    "fs.mmap.v1",
+    "fs.mprotect.v1",
+    "fs.read.v1",
+    "fs.resource-use.v1",
+    "fs.rules.v1",
+    "fs.write.v1",
+    "identity.job.v1",
+    "identity.local-enrollment.v1",
+    "lifecycle.baseline.v1",
+    "lifecycle.terminate.v1",
+    "net.dns-ttl.v1",
+    "net.rules.v1",
+    "policy.default-deny.v2",
+    "process.job-domain.v1",
+    "runtime.explicit-eventfds.v1",
+    "runtime.explicit-memory.v1",
+    "runtime.explicit-pipes.v1",
+    "runtime.explicit-signals.v1",
+    "runtime.explicit-syscalls.v2",
+    "runtime.managed-unprivileged.v1",
+    "runtime.measured-bootstrap.v1",
+    "runtime.profile.v1",
+    "socket.rules.v1"
+  ],
+  "files": {
+    "defaults": {
+      "read": "deny",
+      "write": "deny"
+    },
+    "rules": [
+      {
+        "id": "initial-executable-data",
+        "selector": {
+          "kind": "exact",
+          "path": "/opt/agent/codex/bin/codex"
+        },
+        "operations": [
+          "read",
+          "mmap",
+          "map_execute",
+          "mprotect"
+        ],
+        "effect": "allow"
+      },
+      {
+        "id": "job-input",
+        "selector": {
+          "kind": "exact",
+          "path": "/var/lib/agentgate-startup-20261015/streams/job-feba1f31697b1d6a731026e4eb4aa2908e311c73e0c9bbb9e97a07695a4fdb2c/input"
+        },
+        "operations": [
+          "read"
+        ],
+        "effect": "allow"
+      },
+      {
+        "id": "job-output",
+        "selector": {
+          "kind": "exact",
+          "path": "/var/lib/agentgate-startup-20261015/streams/job-feba1f31697b1d6a731026e4eb4aa2908e311c73e0c9bbb9e97a07695a4fdb2c/output"
+        },
+        "operations": [
+          "read",
+          "write"
+        ],
+        "effect": "allow"
+      },
+      {
+        "id": "job-error",
+        "selector": {
+          "kind": "exact",
+          "path": "/var/lib/agentgate-startup-20261015/streams/job-feba1f31697b1d6a731026e4eb4aa2908e311c73e0c9bbb9e97a07695a4fdb2c/error"
+        },
+        "operations": [
+          "read",
+          "write"
+        ],
+        "effect": "allow"
+      }
+    ],
+    "resource_use": "recheck-and-terminate"
+  },
+  "programs": {
+    "default": "deny",
+    "rules": [
+      {
+        "id": "initial-executable",
+        "selector": {
+          "kind": "exact",
+          "path": "/opt/agent/codex/bin/codex"
+        },
+        "effect": "allow"
+      }
+    ]
+  },
+  "network": {
+    "default": "deny",
+    "rules": [],
+    "dns": {
+      "resolver_profile": "trusted-forwarder.v1",
+      "cname": "validate-chain",
+      "expiry": "remove-expired-authorization"
+    }
+  },
+  "sockets": {
+    "default": "deny",
+    "rules": []
+  },
+  "identity": {
+    "trust_source": "local-enrollment",
+    "proof_of_possession": true,
+    "job_binding": true,
+    "node_binding": true,
+    "boot_binding": true,
+    "process_domain": "job-cgroup",
+    "descendants": "inherit"
+  },
+  "runtime": {
+    "profile": "managed-unprivileged.v1",
+    "uid": 65534,
+    "gid": 65534,
+    "supplementary_groups": [],
+    "capabilities": [],
+    "no_new_privileges": true,
+    "seccomp": {
+      "profile": "explicit-allowlist-notify.v2",
+      "architecture": "x86_64",
+      "default": "deny",
+      "allow_syscalls": [
+        "arch_prctl",
+        "brk",
+        "clock_gettime",
+        "close",
+        "dup2",
+        "execve",
+        "exit",
+        "exit_group",
+        "fstat",
+        "futex",
+        "getegid",
+        "geteuid",
+        "getgid",
+        "getpid",
+        "getrandom",
+        "gettid",
+        "getuid",
+        "lseek",
+        "mmap",
+        "mprotect",
+        "munmap",
+        "newfstatat",
+        "openat",
+        "read",
+        "rseq",
+        "rt_sigaction",
+        "rt_sigprocmask",
+        "rt_sigreturn",
+        "set_robust_list",
+        "set_tid_address",
+        "write"
+      ]
+    },
+    "memory": {
+      "default": "deny",
+      "anonymous": [
+        "map",
+        "read",
+        "write",
+        "protect"
+      ],
+      "heap": "allow"
+    },
+    "ipc": {
+      "default": "deny",
+      "pipes": [],
+      "eventfds": []
+    },
+    "signals": [],
+    "bootstrap": {
+      "profile": "measured-held-exec.v1",
+      "helper_digest": "2cec8461dafe2ff80afb64fdc71a7d5c876b31dc7e66224f404b88ed62409986",
+      "operations": [
+        "barrier_read",
+        "listener_send",
+        "filter_finalize",
+        "working_directory"
+      ],
+      "max_hold_seconds": 30
+    }
+  },
+  "lifecycle": {
+    "baseline_version": "deny-empty.v1",
+    "duration_seconds": 30,
+    "release": "restore-baseline",
+    "revoke": "terminate-job",
+    "recovery": "pinned-generation-reconcile"
+  },
+  "evidence": {
+    "profile": "node-chain-authority-batch.v1",
+    "max_reported_loss": 0,
+    "batch_events": 500,
+    "batch_seconds": 1
+  },
+  "runtime_templates": [],
+  "extensions": {}
+}
