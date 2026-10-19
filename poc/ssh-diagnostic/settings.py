@@ -1,0 +1,69 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Dan Metcalf
+"""Validate protected inputs for the isolated diagnostic scripts."""
+import ipaddress
+import json
+from pathlib import Path
+import re
+import shlex
+import sys
+from urllib.parse import urlsplit
+
+from gateway import read_root_file
+
+
+def validate_settings(data, root):
+    """Return shell variables from exact, validated diagnostic settings."""
+    required = {'instance', 'source', 'policy', 'hostname', 'public_address',
+                'target_image', 'bridge_image', 'taskboard_url', 'task_id', 'ipv6_subnet'}
+    if set(data) != required or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,31}', data['instance']):
+        raise ValueError('invalid diagnostic settings')
+    if str(root) != '/var/lib/agentgate-poc-' + data['instance']:
+        raise ValueError('install below /var/lib/agentgate-poc-INSTANCE')
+    for key, pattern in [('source', r'[a-f0-9]{40}'), ('policy', r'[a-f0-9]{64}'),
+                         ('target_image', r'sha256:[a-f0-9]{64}'),
+                         ('bridge_image', r'sha256:[a-f0-9]{64}')]:
+        if not isinstance(data[key], str) or not re.fullmatch(pattern, data[key]):
+            raise ValueError('invalid diagnostic digest: ' + key)
+    hostname = data['hostname']
+    if not isinstance(hostname, str) or len(hostname) > 253 or '.' not in hostname or any(
+            not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', part)
+            for part in hostname.split('.')):
+        raise ValueError('invalid public hostname')
+    address = ipaddress.ip_address(data['public_address'])
+    if address.version != 4 or not address.is_global or str(address) != data['public_address']:
+        raise ValueError('a canonical public IPv4 address is required')
+    url = urlsplit(data['taskboard_url'])
+    host = ipaddress.ip_address(url.hostname or '')
+    if (url.scheme != 'http' or url.username or url.password or url.path != '/' or
+            url.query or url.fragment or not url.port or not host.is_private or
+            host.is_loopback or host.is_link_local or host.is_multicast or
+            url.geturl() != data['taskboard_url']):
+        raise ValueError('a private literal HTTP taskboard endpoint is required')
+    if type(data['task_id']) is not int or data['task_id'] < 1:
+        raise ValueError('invalid task id')
+    subnet = ipaddress.ip_network(data['ipv6_subnet'], strict=True)
+    if subnet.version != 6 or subnet.prefixlen != 64 or not subnet.is_private:
+        raise ValueError('an owned private IPv6 /64 is required')
+    prefix = 'ag-mvp-' + data['instance']
+    result = dict(data)
+    result.update(root=str(root), poc=str(root), diag=str(root), component=str(root),
+                  domain='/sys/fs/cgroup/' + prefix + '-domain',
+                  cgroup='/sys/fs/cgroup/' + prefix + '-domain',
+                  pins='/sys/fs/bpf/ag-mvp-net-' + prefix + '-domain',
+                  name=prefix + '-target', target=prefix + '-target', network=prefix + '-net',
+                  workspace=prefix + '-work', bridge=prefix + '-bridge-volume',
+                  bridge_container=prefix + '-bridge', bridge_network=prefix + '-bridge-net',
+                  artifact='/run/agentgate/poc-' + data['instance'] + '/streams')
+    return result
+
+
+def load_settings(path):
+    path = Path(path)
+    return validate_settings(json.loads(read_root_file(path)), path.parent)
+
+
+if __name__ == '__main__':
+    for key, value in load_settings(sys.argv[1]).items():
+        print(f'{key}={shlex.quote(str(value))}')

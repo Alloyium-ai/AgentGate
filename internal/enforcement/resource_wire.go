@@ -58,7 +58,7 @@ func (w ResourceReadbackWire) Tables() (QuarantineReadback, error) {
 		raw         []byte
 		destination any
 		size        int
-	}{{w.Files, &q.Files, 544}, {w.Peers, &q.Peers, 5144}, {w.Sockets, &q.Sockets, 12824}, {w.Custody, &q.Custody, 16}, {w.Process, &q.Process, 24}} {
+	}{{w.Files, &q.Files, 544}, {w.Peers, &q.Peers, 5168}, {w.Sockets, &q.Sockets, 12824}, {w.Custody, &q.Custody, 16}, {w.Process, &q.Process, 24}} {
 		if len(entry.raw) != entry.size || binary.Size(entry.destination) != entry.size {
 			return q, errors.New("the resource readback ABI differs")
 		}

@@ -49,6 +49,9 @@ type serviceLifecycleScene struct {
 	NodeKeys         map[string]ed25519.PublicKey      `json:"node_keys"`
 	WatchdogPublic   []byte                            `json:"watchdog_public"`
 	WatchdogState    *serviceLifecycleWatchdogReadback `json:"watchdog_state,omitempty"`
+	Loss             *serviceLifecycleLoss             `json:"loss,omitempty"`
+	NodeLoss         *serviceLifecycleNodeLoss         `json:"node_loss,omitempty"`
+	PrepareReplyLoss *serviceLifecyclePrepareReplyLoss `json:"prepare_reply_loss,omitempty"`
 	AuthorityCalls   []serviceLifecycleAuthorityCall   `json:"authority_calls"`
 	Calls            []serviceLifecycleHTTPCall        `json:"calls"`
 	Wire             []byte                            `json:"wire"`
@@ -86,6 +89,12 @@ func (a *serviceLifecycleAdapter) ID() string {
 		return "agentgate.fixed-lifecycle-expiry-adapter.v1"
 	case "revoke":
 		return "agentgate.fixed-lifecycle-revoke-adapter.v1"
+	case "watchdog-loss":
+		return "agentgate.fixed-lifecycle-watchdog-loss-adapter.v1"
+	case "node-loss":
+		return "agentgate.fixed-lifecycle-node-loss-adapter.v1"
+	case "prepare-reply-loss":
+		return "agentgate.fixed-lifecycle-prepare-reply-loss-adapter.v1"
 	default:
 		return ""
 	}
@@ -201,7 +210,7 @@ func (a *serviceLifecycleAdapter) runScene(ctx context.Context, request qualific
 				scene.CleanupErrors = append(scene.CleanupErrors, e.Error())
 			}
 		}
-		if scene.AuditFile == nil && scene.Prepared.Record.Binding.RunID != "" {
+		if mode != "node-loss" && scene.AuditFile == nil && scene.Prepared.Record.Binding.RunID != "" {
 			captureErr := captureServiceLifecycleAudit(&scene)
 			err = errors.Join(err, captureErr)
 			if captureErr != nil && len(scene.AuditFile.Raw) == 0 {
@@ -287,6 +296,10 @@ func (a *serviceLifecycleAdapter) runScene(ctx context.Context, request qualific
 	if err != nil {
 		return scene, err
 	}
+	if mode == "prepare-reply-loss" {
+		err = runServiceLifecyclePrepareReplyLoss(ctx, &scene, client)
+		return scene, err
+	}
 	if err = client.request(ctx, "POST", "/fixture/prepare", struct{}{}, &scene.Prepared); err != nil {
 		return scene, err
 	}
@@ -313,6 +326,15 @@ func (a *serviceLifecycleAdapter) runScene(ctx context.Context, request qualific
 	scene.WatchdogState = &watchdogReadback
 	if readErr != nil {
 		return scene, readErr
+	}
+	if mode == "watchdog-loss" {
+		err = runServiceLifecycleWatchdogLoss(ctx, &scene, node, watchdog, a.config.Artifacts["watchdog"], request.Binding.ArtifactDigests["watchdog"])
+		return scene, err
+	}
+	if mode == "node-loss" {
+		scene.Domain, _, _ = serviceLifecycleFinalState(recipe)
+		err = runServiceLifecycleNodeLoss(ctx, &scene, node, watchdog, a.config.Artifacts["watchdog"], request.Binding.ArtifactDigests["watchdog"], a.config.Artifacts["node"], request.Binding.ArtifactDigests["node"], authority)
+		return scene, err
 	}
 	if mode == "revoke" {
 		if err = authority.revoke(ctx, authorization.Binding.GrantID); err != nil {

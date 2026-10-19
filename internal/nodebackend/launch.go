@@ -30,6 +30,9 @@ func needsDNS(r *run) bool {
 	return false
 }
 func (b *Backend) compile(ctx context.Context, r *run) (enforcement.Plan, error) {
+	if r.document.Network == nil || (r.manifest.AgentKind == "ssh") != (r.document.Network.Pilot != nil) {
+		return enforcement.Plan{}, errors.New("the SSH pilot requires its signed network boundary")
+	}
 	now, err := b.config.Clock.NowNS()
 	if err != nil {
 		return enforcement.Plan{}, err
@@ -50,6 +53,9 @@ func (b *Backend) compile(ctx context.Context, r *run) (enforcement.Plan, error)
 	}
 	r.dnsInitial, err = r.dns.ResolveAll(ctx)
 	if err != nil {
+		return enforcement.Plan{}, err
+	}
+	if err = b.verifyPilotHosts(ctx, r); err != nil {
 		return enforcement.Plan{}, err
 	}
 	if needsCredentials(r.document) {
@@ -103,8 +109,10 @@ func (b *Backend) Stage(ctx context.Context, a lifecycle.Authorization, m lifecy
 	if err = b.bindGrantExpiry(ctx, r, grant.Claims); err != nil {
 		return p, err
 	}
-	if err = jobartifacts.VerifyExecutable(m.Executable, m.ExecutableDigest); err != nil {
-		return p, err
+	if m.AgentKind != "ssh" {
+		if err = jobartifacts.VerifyExecutable(m.Executable, m.ExecutableDigest); err != nil {
+			return p, err
+		}
 	}
 	measurement, measureErr := b.measureRuntime(ctx, a.Binding, m)
 	if measureErr != nil {
@@ -164,6 +172,9 @@ func (b *Backend) Place(ctx context.Context, binding lifecycle.Binding, p lifecy
 	if r.phase != "held" || !reflect.DeepEqual(r.binding, binding) {
 		return lifecycle.Evidence{}, errors.New("the held run phase differs")
 	}
+	if err := b.verifyPilotTarget(ctx, r); err != nil {
+		return lifecycle.Evidence{}, err
+	}
 	placement, err := b.domains.PlaceHeld(ctx, binding, p)
 	if err != nil {
 		return lifecycle.Evidence{}, err
@@ -186,6 +197,9 @@ func (b *Backend) Install(ctx context.Context, a lifecycle.Authorization) (lifec
 	defer r.mu.Unlock()
 	if r.phase != "placed" || !reflect.DeepEqual(a.Binding, r.binding) || !reflect.DeepEqual(r.authorization, &a) {
 		return lifecycle.Evidence{}, errors.New("the placed authorization differs")
+	}
+	if err := b.verifyPilotTarget(ctx, r); err != nil {
+		return lifecycle.Evidence{}, err
 	}
 	p := r.child.Held.Process()
 	verify := func() error { return b.VerifyHeld(ctx, r.binding, p) }
@@ -244,6 +258,9 @@ func (b *Backend) Release(ctx context.Context, binding lifecycle.Binding) (lifec
 	if r.phase != "installed" || !reflect.DeepEqual(r.binding, binding) || r.authorization == nil || r.broker == nil {
 		return lifecycle.Evidence{}, errors.New("the installed release custody differs")
 	}
+	if err := b.verifyPilotTarget(ctx, r); err != nil {
+		return lifecycle.Evidence{}, err
+	}
 	if err = b.config.Verifier.Verify(ctx, *r.authorization); err != nil {
 		return lifecycle.Evidence{}, err
 	}
@@ -252,6 +269,11 @@ func (b *Backend) Release(ctx context.Context, binding lifecycle.Binding) (lifec
 	}
 	if err = r.collectors.healthy(); err != nil {
 		return lifecycle.Evidence{}, err
+	}
+	if r.dns != nil {
+		if err = b.verifyPilotHosts(ctx, r); err != nil {
+			return lifecycle.Evidence{}, err
+		}
 	}
 	if _, err = r.group.VerifyInstalled(r.plan); err != nil {
 		return lifecycle.Evidence{}, err
@@ -276,7 +298,13 @@ func (b *Backend) Release(ctx context.Context, binding lifecycle.Binding) (lifec
 		dnsCtx, cancel := context.WithCancel(context.Background())
 		r.dnsCancel = cancel
 		r.dnsDone = make(chan error, 1)
-		go func() { r.dnsDone <- r.dns.Run(dnsCtx, publisher, r.dnsInitial) }()
+		var active nodedns.Publisher = publisher
+		if r.document.Network.Pilot != nil {
+			active = pilotHostPublisher{inner: publisher, verify: func(c context.Context, snapshot dnslease.Snapshot) error {
+				return b.verifyPilotHostsSnapshot(c, r, snapshot)
+			}}
+		}
+		go func() { r.dnsDone <- r.dns.Run(dnsCtx, active, r.dnsInitial) }()
 	}
 	if err = r.child.Held.Release(ctx); err != nil {
 		return lifecycle.Evidence{}, err

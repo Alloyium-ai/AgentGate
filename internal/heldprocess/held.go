@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -33,6 +34,10 @@ type Spec struct {
 	RequireSeccomp                  bool
 	RequireFilterAcknowledgement    bool
 	NamespaceDevice, NamespaceInode uint64
+	Docker                          bool
+	NetworkDevice, NetworkInode     uint64
+	PIDDevice, PIDInode             uint64
+	RootDevice, RootInode           uint64
 }
 type Held struct {
 	process                      lifecycle.HeldProcess
@@ -40,6 +45,8 @@ type Held struct {
 	gate                         *os.File
 	pipe                         string
 	pidfd                        int
+	launcherPidfd                int
+	launcherPID                  int
 	done                         chan struct{}
 	waitErr                      error
 	mu                           sync.Mutex
@@ -98,6 +105,10 @@ func Start(ctx context.Context, spec Spec) (out *Held, err error) {
 	if (spec.NamespaceDevice == 0) != (spec.NamespaceInode == 0) {
 		return nil, errors.New("the held mount namespace identity is incomplete")
 	}
+	if spec.Docker && (spec.NamespaceDevice == 0 || spec.NetworkDevice == 0 || spec.NetworkInode == 0 ||
+		spec.PIDDevice == 0 || spec.PIDInode == 0 || spec.RootDevice == 0 || spec.RootInode == 0) {
+		return nil, errors.New("the held Docker target identity is incomplete")
+	}
 	if err = kernel.Preflight(); err != nil {
 		return nil, err
 	}
@@ -116,7 +127,7 @@ func Start(ctx context.Context, spec Spec) (out *Held, err error) {
 	}
 	defer ready.Close()
 	defer readyWriter.Close()
-	h := &Held{spec: spec, gate: write, pidfd: -1, done: make(chan struct{})}
+	h := &Held{spec: spec, gate: write, pidfd: -1, launcherPidfd: -1, done: make(chan struct{})}
 	cmd := exec.Command(spec.Executable, spec.Arguments...)
 	cmd.Env = append([]string{}, spec.Environment...)
 	cmd.ExtraFiles = append([]*os.File{read, readyWriter}, spec.ExtraFiles...)
@@ -147,6 +158,22 @@ func Start(ctx context.Context, spec Spec) (out *Held, err error) {
 		}
 	}()
 	h.process.PID = cmd.Process.Pid
+	if spec.Docker {
+		h.launcherPID, h.launcherPidfd = h.process.PID, h.pidfd
+		h.pidfd = -1
+		_ = ready.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var report [12]byte
+		if _, err = io.ReadFull(ready, report[:]); err != nil || string(report[:8]) != "AGPID001" {
+			return nil, errors.New("the Docker held child PID report is unavailable")
+		}
+		h.process.PID = int(binary.LittleEndian.Uint32(report[8:]))
+		if h.process.PID <= 1 || h.process.PID == h.launcherPID {
+			return nil, errors.New("the Docker held child PID is unsafe")
+		}
+		if h.pidfd, err = unix.PidfdOpen(h.process.PID, 0); err != nil {
+			return nil, err
+		}
+	}
 	identity, err := readIdentity(h.process.PID)
 	if err != nil {
 		return nil, err
@@ -264,6 +291,10 @@ func (h *Held) Close() error {
 			_ = unix.Close(h.pidfd)
 			h.pidfd = -1
 		}
+		if h.launcherPidfd >= 0 {
+			_ = unix.Close(h.launcherPidfd)
+			h.launcherPidfd = -1
+		}
 		h.terminated = true
 	}
 	select {
@@ -272,10 +303,14 @@ func (h *Held) Close() error {
 		return nil
 	default:
 	}
-	if h.pidfd < 0 {
+	target := h.pidfd
+	if target < 0 {
+		target = h.launcherPidfd
+	}
+	if target < 0 {
 		return errors.New("trusted helper pidfd custody is unavailable")
 	}
-	if err := unix.PidfdSendSignal(h.pidfd, unix.SIGKILL, nil, 0); err != nil && err != unix.ESRCH {
+	if err := unix.PidfdSendSignal(target, unix.SIGKILL, nil, 0); err != nil && err != unix.ESRCH {
 		return err
 	}
 	select {

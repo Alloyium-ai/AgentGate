@@ -93,11 +93,13 @@ type Terminal struct {
 	EvidenceDigest  string  `json:"evidence_digest"`
 	Output          []byte  `json:"output,omitempty"`
 	OutputDigest    string  `json:"output_digest,omitempty"`
+	Stderr          []byte  `json:"stderr,omitempty"`
+	StderrDigest    string  `json:"stderr_digest,omitempty"`
 	EvidenceVerdict string  `json:"evidence_verdict"`
 }
 
 func (m Manifest) Validate() error {
-	if m.Protocol != "agentgate.job.manifest.v1" || (m.AgentKind != "codex" && m.AgentKind != "claude" && m.AgentKind != "pi") {
+	if m.Protocol != "agentgate.job.manifest.v1" || (m.AgentKind != "codex" && m.AgentKind != "claude" && m.AgentKind != "pi" && m.AgentKind != "ssh") {
 		return errors.New("an isolated supported agent manifest is required")
 	}
 	if !utf8.ValidString(m.RuntimeVersion) || len(m.RuntimeVersion) == 0 || len(m.RuntimeVersion) > 128 || strings.ContainsAny(m.RuntimeVersion, "\x00\n\r") {
@@ -132,6 +134,9 @@ func (m Manifest) Validate() error {
 	}
 	if size > 65536 {
 		return errors.New("the agent manifest exceeds its byte bound")
+	}
+	if m.AgentKind == "ssh" {
+		return m.ValidateSSHCommand()
 	}
 	return nil
 }

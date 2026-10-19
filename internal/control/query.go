@@ -137,6 +137,13 @@ func (s *Store) Requests(f Filter, a Actor) (Page[PolicyRequest], error) {
 	if err != nil {
 		return Page[PolicyRequest]{}, err
 	}
+	if version := f.Values.Get("version"); version != "" {
+		if len(version) > 200 {
+			return Page[PolicyRequest]{}, fail(422, "invalid_filter", "A filter exceeds its limit.")
+		}
+		where += " AND (requested_version=? OR approved_version=?)"
+		args = append(args, version, version)
+	}
 	if a.Kind == "agent" {
 		where += " AND agent_id=?"
 		args = append(args, a.Subject)

@@ -24,8 +24,13 @@ struct net_policy {
     __u64 expires_ns;
     __u32 count;
     __u32 reserved; // Kernel DNS lease revision; literal plans use zero.
+    __u8 pilot_address[16];
+    __u16 pilot_port;
+    __u8 pilot_family;
+    __u8 pilot_mode;
+    __u32 pilot_padding;
     struct net_rule rules[MAX_RULES];
 };
 _Static_assert(sizeof(struct net_rule) == 40, "network rule ABI");
-_Static_assert(sizeof(struct net_policy) == 5144, "network policy ABI");
+_Static_assert(sizeof(struct net_policy) == 5168, "network policy ABI");
 #endif

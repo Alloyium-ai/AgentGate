@@ -28,7 +28,9 @@ func TestDurableTerminalSurvivesCompletedBufferEviction(t *testing.T) {
 	evidence := stopped.Digest
 	output := []byte("owned result")
 	sum := sha256.Sum256(output)
-	terminal := lifecycle.Terminal{Protocol: lifecycle.TerminalProtocol, Binding: binding, State: "aborted", ExitCode: 1, DomainEmpty: true, RightsRemoved: true, EvidenceDigest: evidence, Output: output, OutputDigest: hex.EncodeToString(sum[:]), EvidenceVerdict: "INCOMPLETE"}
+	stderr := []byte("owned diagnostic")
+	stderrSum := sha256.Sum256(stderr)
+	terminal := lifecycle.Terminal{Protocol: lifecycle.TerminalProtocol, Binding: binding, State: "aborted", ExitCode: 1, DomainEmpty: true, RightsRemoved: true, EvidenceDigest: evidence, Output: output, OutputDigest: hex.EncodeToString(sum[:]), Stderr: stderr, StderrDigest: hex.EncodeToString(stderrSum[:]), EvidenceVerdict: "INCOMPLETE"}
 	r := &run{binding: binding, reservation: domainstore.Reservation{Name: name}, stopped: &stopped}
 	b := &Backend{config: Config{AuditRoot: t.TempDir(), Domain: domainstore.Config{Proof: proof}}, runs: map[string]*run{binding.RunID: r}}
 	if err = b.persistTerminal(r, terminal); err != nil {
@@ -39,8 +41,13 @@ func TestDurableTerminalSurvivesCompletedBufferEviction(t *testing.T) {
 		t.Fatal("the completed kernel buffers remained cached")
 	}
 	got, err := b.Terminal(context.Background(), binding, evidence)
-	if err != nil || string(got.Output) != string(output) || got.EvidenceVerdict != "INCOMPLETE" {
+	if err != nil || string(got.Output) != string(output) || string(got.Stderr) != string(stderr) || got.EvidenceVerdict != "INCOMPLETE" {
 		t.Fatal(got, err)
+	}
+	changed := terminal
+	changed.Stderr = []byte("changed diagnostic")
+	if err = terminalIdentity(binding, changed, evidence); err == nil {
+		t.Fatal("changed stderr bytes became a valid terminal")
 	}
 	terminal.Output = []byte("changed")
 	raw, _ := json.Marshal(terminal)

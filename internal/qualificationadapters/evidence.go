@@ -102,6 +102,7 @@ type candidateReceipt struct {
 	DeadlineNS           uint64                     `json:"deadline_ns,string"`
 	PlanSHA256           string                     `json:"plan_sha256"`
 	FilterSHA256         string                     `json:"filter_sha256"`
+	Network              candidateNetworkReceipt    `json:"network"`
 	SetupFilterSHA256    string                     `json:"setup_filter_sha256,omitempty"`
 	FinalFilterSHA256    string                     `json:"final_filter_sha256,omitempty"`
 	Listener             listenerReceipt            `json:"listener"`

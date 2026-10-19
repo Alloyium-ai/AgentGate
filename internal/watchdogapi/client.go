@@ -36,6 +36,7 @@ type Client struct {
 	http      *http.Client
 	transport *http.Transport
 	leases    sync.Map
+	deadlines sync.Map // run ID -> confirmed preparation or effective grant cutoff
 	failed    atomic.Bool
 	running   atomic.Bool
 }
@@ -119,6 +120,7 @@ func (c *Client) Reserve(ctx context.Context, b lifecycle.Binding, deadline uint
 		return errors.New("watchdog preparation custody is unconfirmed")
 	}
 	c.leases.Store(b.RunID, *response.Ack)
+	c.deadlines.Store(b.RunID, deadline)
 	return nil
 }
 func (c *Client) Arm(ctx context.Context, b lifecycle.Binding) (lifecycle.WatchdogAck, error) {
@@ -139,16 +141,42 @@ func (c *Client) Check(ctx context.Context, ack lifecycle.WatchdogAck) error {
 
 // Forget ends local heartbeats when the node starts termination. The watchdog
 // retains custody and retries whole-domain termination until it confirms Empty.
-func (c *Client) Forget(binding lifecycle.Binding) { c.leases.Delete(binding.RunID) }
+func (c *Client) Forget(binding lifecycle.Binding) {
+	c.leases.Delete(binding.RunID)
+	c.deadlines.Delete(binding.RunID)
+}
 func (c *Client) heartbeat(ctx context.Context) error {
 	failures := []error{}
 	c.leases.Range(func(run, value any) bool {
 		ack := value.(lifecycle.WatchdogAck)
+		deadline, bounded := c.deadlines.Load(run)
+		if bounded {
+			now, err := c.config.Clock.NowNS()
+			if err != nil {
+				failures = append(failures, err)
+				return true
+			}
+			if now >= deadline.(uint64) {
+				// The independent watchdog owns expiry. The node's lifecycle
+				// monitor must retain time to persist its stopped record.
+				return true
+			}
+		}
 		_, err := c.call(ctx, "heartbeat", Request{Ack: &ack})
 		if err != nil {
 			current, exists := c.leases.Load(run)
 			// Arm can replace a preparation acknowledgement during an in-flight heartbeat.
 			if exists && reflect.DeepEqual(current, ack) {
+				if bounded {
+					now, clockErr := c.config.Clock.NowNS()
+					if clockErr != nil {
+						failures = append(failures, clockErr)
+						return true
+					}
+					if now >= deadline.(uint64) {
+						return true
+					}
+				}
 				failures = append(failures, err)
 			}
 		}
@@ -196,5 +224,6 @@ func (c *Client) Activate(ctx context.Context, ack lifecycle.WatchdogAck, effect
 	if err != nil || response.State != "active" || response.EffectiveDeadlineNS != effectiveDeadline {
 		return errors.New("watchdog activation is unconfirmed")
 	}
+	c.deadlines.Store(ack.Binding.RunID, effectiveDeadline)
 	return nil
 }

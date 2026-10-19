@@ -26,7 +26,9 @@ func (n *Node) qualificationPermit(ctx context.Context, spec lifecycle.Qualifica
 
 func (n *Node) validateQualificationBinding(ctx context.Context, spec lifecycle.QualificationFixtureSpec) error {
 	c := n.config
-	if c.Credentials != nil || c.Resolver != nil || len(c.Enrollments) != 1 || len(c.Enrollments[0].Runtimes) != 1 || len(c.Documents) != 1 || c.Documents[spec.Binding.PolicyDigest] == "" || c.Enrollments[0].AgentID != spec.Binding.AgentID || c.Enrollments[0].AgentKey != spec.Binding.AgentKey || spec.Binding.NodeID != c.NodeID || spec.Binding.BootID != n.sources.Proof.BootID || spec.Binding.CompilerDigest != n.sources.Compiler || !reflect.DeepEqual(spec.Binding.ArtifactDigests, n.sources.Config.ArtifactDigests) || spec.SourceRevision != c.Qualification.SourceRevision {
+	// The trusted node may retain a measured resolver from the candidate. The
+	// fixed worker's document still has zero network rules and no credentials.
+	if c.Credentials != nil || (c.Resolver != nil && c.ArtifactDigests["resolver"] == "") || len(c.Enrollments) != 1 || len(c.Enrollments[0].Runtimes) != 1 || len(c.Documents) != 1 || c.Documents[spec.Binding.PolicyDigest] == "" || c.Enrollments[0].AgentID != spec.Binding.AgentID || c.Enrollments[0].AgentKey != spec.Binding.AgentKey || spec.Binding.NodeID != c.NodeID || spec.Binding.BootID != n.sources.Proof.BootID || spec.Binding.CompilerDigest != n.sources.Compiler || !reflect.DeepEqual(spec.Binding.ArtifactDigests, n.sources.Config.ArtifactDigests) || spec.SourceRevision != c.Qualification.SourceRevision {
 		return errors.New("the node fixture configuration differs from the fixed binding")
 	}
 	snapshot, err := n.sources.Snapshot(ctx)

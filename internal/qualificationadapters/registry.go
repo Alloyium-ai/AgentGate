@@ -12,7 +12,10 @@ import (
 	"reflect"
 	"strings"
 
+	"alloyium.local/kernel-poc/internal/dnslease"
+	"alloyium.local/kernel-poc/internal/dockerplacement"
 	"alloyium.local/kernel-poc/internal/jobartifacts"
+	"alloyium.local/kernel-poc/internal/noderuntime"
 	"alloyium.local/kernel-poc/internal/policy"
 	"alloyium.local/kernel-poc/internal/qualification"
 	"golang.org/x/sys/unix"
@@ -23,6 +26,7 @@ type Config struct {
 	ServiceImage   string
 	Artifacts      map[string]string
 	ScratchRoot    string
+	PilotTarget    *dockerplacement.Target
 }
 
 func protectedDirectory(path string) error {
@@ -45,14 +49,32 @@ func New(config Config) ([]qualification.Adapter, error) {
 	if err := protectedDirectory(config.ScratchRoot); err != nil {
 		return nil, err
 	}
-	owned := Config{ScratchRoot: config.ScratchRoot, NodeConfigFile: config.NodeConfigFile, ServiceImage: config.ServiceImage, Artifacts: map[string]string{}}
+	owned := Config{ScratchRoot: config.ScratchRoot, NodeConfigFile: config.NodeConfigFile, ServiceImage: config.ServiceImage, PilotTarget: config.PilotTarget, Artifacts: map[string]string{}}
+	if config.PilotTarget != nil {
+		target := *config.PilotTarget
+		owned.PilotTarget = &target
+	}
 	for name, path := range config.Artifacts {
 		owned.Artifacts[name] = path
 	}
-	return []qualification.Adapter{&candidateDenial{config: owned}}, nil
+	var resolver dnslease.Resolver
+	if config.NodeConfigFile != "" {
+		node, err := noderuntime.ReadConfig(config.NodeConfigFile)
+		if err != nil {
+			return nil, err
+		}
+		resolver, err = noderuntime.ConfiguredResolver(node)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return []qualification.Adapter{&candidateDenial{config: owned, resolver: resolver}}, nil
 }
 
-type candidateDenial struct{ config Config }
+type candidateDenial struct {
+	config   Config
+	resolver dnslease.Resolver
+}
 
 func (*candidateDenial) ID() string { return "agentgate.candidate-denial-adapter.v1" }
 

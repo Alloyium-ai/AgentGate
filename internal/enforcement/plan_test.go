@@ -28,6 +28,16 @@ func TestCredentialBootstrapRequiresCurrentSignedTargetSupport(t *testing.T) {
 	for _, id := range d.RequiredCapabilities {
 		report.Capabilities[id] = policy.Capability{State: "enforced", Mechanisms: []string{"explicit-test-fixture"}, ReceiptSHA256: strings.Repeat("6", 64)}
 	}
+	policyDigest, err := d.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Qualification = &policy.QualificationScope{
+		Protocol: policy.QualificationScopeVersion, ProducerSHA256: strings.Repeat("7", 64),
+		CompilerSHA256: strings.Repeat("8", 64), ArtifactsSHA256: strings.Repeat("9", 64),
+		PolicyDigests: []string{policyDigest}, RequiredCapabilities: d.RequiredCapabilities,
+		ContractsSHA256: strings.Repeat("a", 64), EvidenceSHA256: strings.Repeat("b", 64),
+	}
 	verified := func() policy.VerifiedTarget {
 		t.Helper()
 		raw, err := policy.SignReport(report, key)

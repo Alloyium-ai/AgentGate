@@ -49,6 +49,12 @@ func terminalIdentity(b lifecycle.Binding, t lifecycle.Terminal, evidence string
 	if t.Protocol != lifecycle.TerminalProtocol || !sameQuery(b, t.Binding) || b.CgroupID != t.Binding.CgroupID || !t.DomainEmpty || !t.RightsRemoved || t.EvidenceDigest != evidence || !validDigest(evidence) || t.OutputDigest != hex.EncodeToString(sum[:]) || len(t.Output) > lifecycle.MaxInputBytes {
 		return errors.New("the durable terminal binding or output differs")
 	}
+	if t.StderrDigest != "" || len(t.Stderr) != 0 {
+		stderrSum := sha256.Sum256(t.Stderr)
+		if t.StderrDigest != hex.EncodeToString(stderrSum[:]) || len(t.Stderr) > lifecycle.MaxInputBytes {
+			return errors.New("the durable terminal stderr differs")
+		}
+	}
 	switch t.State {
 	case "completed":
 		if t.ExitCode != 0 || t.EvidenceVerdict != "VALID_COMPLETE" {
@@ -203,7 +209,7 @@ func (b *Backend) Terminal(ctx context.Context, binding lifecycle.Binding, evide
 	return terminalAuditReadback(t, bundle, v)
 }
 func terminalAuditReadback(t lifecycle.Terminal, bundle jobaudit.Bundle, v jobaudit.Verdict) (lifecycle.Terminal, error) {
-	if bundle.Seal == nil || !bytes.Equal(mustJSON(bundle.Header.Binding), mustJSON(t.Binding)) || bundle.Seal.Terminal.OutputDigest != t.OutputDigest || bundle.Seal.Terminal.State != t.State || bundle.Seal.Terminal.ExitCode != t.ExitCode {
+	if bundle.Seal == nil || !bytes.Equal(mustJSON(bundle.Header.Binding), mustJSON(t.Binding)) || bundle.Seal.Terminal.OutputDigest != t.OutputDigest || bundle.Seal.Terminal.StderrDigest != t.StderrDigest || bundle.Seal.Terminal.State != t.State || bundle.Seal.Terminal.ExitCode != t.ExitCode {
 		return t, errors.New("the durable terminal lacks complete signed audit evidence")
 	}
 	if v.State == "VALID_COMPLETE" {

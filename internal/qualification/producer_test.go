@@ -46,12 +46,13 @@ func (i *unitInspector) Snapshot(context.Context) (Binding, error) {
 }
 
 type unitAdapter struct {
-	clock       *unitClock
-	change      func(*Result)
-	cover       func([]Coverage) []Coverage
-	verifyError bool
-	runError    bool
-	panicRun    bool
+	clock           *unitClock
+	change          func(*Result)
+	cover           func([]Coverage) []Coverage
+	verifyError     bool
+	runError        bool
+	runErrorWithRaw bool
+	panicRun        bool
 }
 
 func (a *unitAdapter) ID() string { return "explicit-unit-only" }
@@ -63,10 +64,52 @@ func (a *unitAdapter) Run(_ context.Context, r Request) (Result, error) {
 		return Result{}, errors.New("unit run failed")
 	}
 	v := Result{owned(r.Binding), a.clock.mono, a.clock.mono, []byte("{\n  \"unit_fixture_only\": true\n}")}
+	if a.runErrorWithRaw {
+		return v, errors.New("unit run failed after raw evidence")
+	}
 	if a.change != nil {
 		a.change(&v)
 	}
 	return v, nil
+}
+
+func TestProducerRetainsBoundFailedRawWithoutCaseCredit(t *testing.T) {
+	for _, mode := range []string{"run", "verify"} {
+		t.Run(mode, func(t *testing.T) {
+			config, adapter, _, key := producerFixture(t)
+			adapter.runErrorWithRaw = mode == "run"
+			adapter.verifyError = mode == "verify"
+			producer, err := New(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := producer.Produce(context.Background(), key)
+			if err == nil || len(out.Envelope) != 0 || len(out.UnavailableEnvelope) == 0 ||
+				len(out.Evidence.Records) != 1 || len(out.AdapterErrors) != 1 {
+				t.Fatal("a failed actor result changed admission or lost its error")
+			}
+			record := out.Evidence.Records[0]
+			if record.Failure == "" || len(record.Coverage) != 0 ||
+				string(record.Raw) != "{\n  \"unit_fixture_only\": true\n}" {
+				t.Fatal("the bounded failure receipt lost its exact raw bytes")
+			}
+			for _, capability := range out.CaseMatrix {
+				for _, item := range capability.Cases {
+					if item.Status != "unqualified" || len(item.Evidence) != 0 {
+						t.Fatal("failed raw evidence supplied case credit")
+					}
+				}
+			}
+			public := key.Public().(ed25519.PublicKey)
+			if err = producer.VerifyOutput(out, public, 100); err != nil {
+				t.Fatal(err)
+			}
+			out.Evidence.Records[0].Failure = "substituted error"
+			if producer.VerifyOutput(out, public, 100) == nil {
+				t.Fatal("a changed failed-result error passed publication verification")
+			}
+		})
+	}
 }
 func (a *unitAdapter) Verify(r Request, v Result) ([]Coverage, error) {
 	if a.verifyError {
@@ -131,6 +174,31 @@ func TestProducerSignsOnlyCompleteExactPolicySet(t *testing.T) {
 	if e = p.VerifyOutput(out, key.Public().(ed25519.PublicKey), 100); e != nil {
 		t.Fatal(e)
 	}
+	for _, capability := range out.CaseMatrix {
+		if capability.CapabilityState != "enforced" {
+			t.Fatal("complete report exported an unavailable case family")
+		}
+		for _, item := range capability.Cases {
+			if item.Status != "verified_observation" || len(item.Evidence) != 1 || item.Evidence[0].RecordIndex != 0 || item.Evidence[0].RawSHA256 != digestBytes(out.Evidence.Records[0].Raw) {
+				t.Fatal("complete case lacks its exact verified raw record")
+			}
+		}
+	}
+	original := out.CaseMatrix[0].Cases[0].Evidence[0].RawSHA256
+	out.CaseMatrix[0].Cases[0].Evidence[0].RawSHA256 = strings.Repeat("8", 64)
+	if p.VerifyOutput(out, key.Public().(ed25519.PublicKey), 100) == nil {
+		t.Fatal("a changed case evidence pointer passed publication verification")
+	}
+	out.CaseMatrix[0].Cases[0].Evidence[0].RawSHA256 = original
+	foreign := owned(out.Evidence.Records[0])
+	foreign.Binding.BootID = "foreign-boot"
+	for _, capability := range buildCaseMatrix(p.requests, []EvidenceRecord{foreign}, out.Report) {
+		for _, item := range capability.Cases {
+			if item.Status != "unqualified" || len(item.Evidence) != 0 {
+				t.Fatal("a foreign boot supplied case evidence")
+			}
+		}
+	}
 	out.Evidence.Records[0].Raw = []byte(`{"substituted":true}`)
 	if p.VerifyOutput(out, key.Public().(ed25519.PublicKey), 100) == nil {
 		t.Fatal("substituted publication evidence accepted")
@@ -167,6 +235,31 @@ func TestProducerIncompleteCoverageNeverPromotesAnyCapability(t *testing.T) {
 			}
 			if len(out.UnavailableEnvelope) == 0 {
 				t.Fatal("truthful unavailable report is missing")
+			}
+			observed, unqualified := 0, 0
+			for _, capability := range out.CaseMatrix {
+				if capability.CapabilityState != "unavailable" {
+					t.Fatal("an incomplete case family exported enforced state")
+				}
+				for _, item := range capability.Cases {
+					switch item.Status {
+					case "verified_observation":
+						if len(item.Evidence) == 0 {
+							t.Fatal("observed case has no raw reference")
+						}
+						observed++
+					case "unqualified":
+						if len(item.Evidence) != 0 {
+							t.Fatal("unqualified case carried evidence")
+						}
+						unqualified++
+					default:
+						t.Fatal("unknown case status")
+					}
+				}
+			}
+			if mode == "absent-adapter" && (observed != 0 || unqualified == 0) || mode == "one-missing-case" && (observed == 0 || unqualified == 0) {
+				t.Fatal("incomplete coverage was not reported at case granularity")
 			}
 			target, verifyErr := policy.VerifyTarget(out.UnavailableEnvelope, key.Public().(ed25519.PublicKey), policy.TargetBinding{Node: c.Expected.NodeID, Boot: c.Expected.BootID, Challenge: c.Expected.Challenge}, 100)
 			if verifyErr != nil {

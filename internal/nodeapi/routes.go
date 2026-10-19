@@ -115,6 +115,15 @@ func validTerminal(request lifecycle.RunRequest, terminal lifecycle.Terminal) bo
 			return false
 		}
 	}
+	if len(terminal.Stderr) > 0 || terminal.StderrDigest != "" {
+		if len(terminal.Stderr) > lifecycle.MaxInputBytes {
+			return false
+		}
+		digest := sha256.Sum256(terminal.Stderr)
+		if hex.EncodeToString(digest[:]) != terminal.StderrDigest {
+			return false
+		}
+	}
 	return true
 }
 func (s *Server) cleanup(ctx context.Context, binding lifecycle.Binding) {

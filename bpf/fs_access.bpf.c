@@ -19,9 +19,11 @@
 #define DENY 2
 #define ANONYMOUS_DELEGATION (1ULL<<63)
 #define ANONYMOUS_FS_MAGIC 0x09041934UL
-struct dentry;struct vfsmount;
+#define PIPEFS_MAGIC 0x50495045UL
+struct vfsmount;
 struct super_block {unsigned long s_magic;} __attribute__((preserve_access_index));
 struct inode {__u64 i_ino;unsigned short i_mode;struct super_block *i_sb;} __attribute__((preserve_access_index));
+struct dentry {struct inode *d_inode;} __attribute__((preserve_access_index));
 struct path {struct vfsmount *mnt;struct dentry *dentry;} __attribute__((preserve_access_index));
 struct file {struct inode *f_inode;struct path f_path;unsigned int f_mode,f_flags;} __attribute__((preserve_access_index));
 struct linux_binprm {struct file *file;} __attribute__((preserve_access_index));
@@ -187,7 +189,21 @@ SEC("lsm/file_receive") int BPF_PROG(fs_receive,struct file *file,int ret)
 SEC("lsm/bprm_check_security") int BPF_PROG(fs_exec,struct linux_binprm *bprm,int ret)
 {if(ret)return ret;struct bootstrap_key key={bpf_get_current_ancestor_cgroup_id(1),bpf_get_current_pid_tgid()>>32,0};bpf_map_delete_elem(&bootstrap,&key);struct file *file=bprm->file;return file?check_path(&file->f_path,EXECUTE):-1;}
 SEC("lsm/inode_getattr") int BPF_PROG(fs_getattr,struct path *path,int ret)
-{return ret?ret:check_path(path,READ);}
+{
+    if(ret)return ret;
+    __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
+    if(bpf_map_lookup_elem(&owned,&domain) &&
+       BPF_CORE_READ(path,dentry,d_inode,i_sb,s_magic)==PIPEFS_MAGIC &&
+       (BPF_CORE_READ(path,dentry,d_inode,i_mode)&0170000)==0010000){
+        struct state *p=bpf_map_lookup_elem(&policies,&domain);
+        int live=p && p->generation && bpf_ktime_get_ns()<p->expires_ns;
+        int allow=live && (p->pipes&1);
+        // Pipe metadata follows the explicit pipe creation grant. It does
+        // not authorize content I/O; file_permission still checks custody.
+        return emit(domain,p?p->generation:0,READ,allow,0,allow?0:13,0);
+    }
+    return check_path(path,READ);
+}
 static __always_inline int anonymous_memory(unsigned long prot,int protect)
 {
     __u64 domain=bpf_get_current_ancestor_cgroup_id(1);if(!bpf_map_lookup_elem(&owned,&domain))return 0;

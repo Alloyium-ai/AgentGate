@@ -73,6 +73,11 @@ func TestActualStreamsRequireOriginalIDsContiguousRecordsAndZeroLoss(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	receipt.Streams["syscalls"][0], receipt.Streams["syscalls"][1] = receipt.Streams["syscalls"][1], receipt.Streams["syscalls"][0]
+	reordered, _, err := verifyCandidateStreams(receipt)
+	if err != nil || len(reordered) != len(calls) || reordered[0].Sequence != 1 || reordered[1].Sequence != 2 {
+		t.Fatal("a complete cross-CPU delivery reorder was rejected or lost its kernel sequence", err)
+	}
 	if !observedCall(calls, receipt, unix.SYS_GETPPID, -int64(unix.EPERM)) || !observedMemory(files, receipt, 2) {
 		t.Fatal("the actual outcome and memory decisions are absent")
 	}
@@ -163,7 +168,7 @@ func TestActualHeapExpiryAndNoCreateFactsKeepEarlyClosureRejected(t *testing.T) 
 	for name, check := range map[string]func() error{
 		"actor":          func() error { return verifyActorBinding(request, result, receipt) },
 		"maps":           func() error { return verifyMaps(request, receipt) },
-		"no creation":    func() error { return verifyNoCreateProjection(request, receipt, calls) },
+		"no creation":    func() error { return verifyProcessProjection(request, receipt, calls, records) },
 		"heap decisions": func() error { return verifyLiveHeapDecisions(request, receipt, calls, records) },
 		"expiry phase":   func() error { return verifyExpiryBinding(request, result, receipt, calls) },
 	} {
@@ -183,27 +188,14 @@ func verifyListenerFixture(request qualification.Request, result qualification.R
 	return adapter.Verify(request, result)
 }
 
-func TestActualCompleteHeapReceiptPassesAndRejectsChangedFacts(t *testing.T) {
+func TestHistoricalCompleteHeapReceiptCannotQualifyCurrentSchema(t *testing.T) {
 	request, result, receipt := listenerTargetFixture(t, "h")
 	if digestBytes(result.Raw) != "4fe8915822ed83a58865c5e90b18cb7862ad966a559985c8f438bd5a98cdaf67" {
 		t.Fatal("the exact target-h fixture changed")
 	}
 	coverage, err := verifyListenerFixture(request, result, receipt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	count := 0
-	expiry := false
-	for _, item := range coverage {
-		count += len(item.Cases)
-		for _, name := range item.Cases {
-			if item.CapabilityID == "runtime.explicit-memory.v1" && name == "expired-allocation-denied" {
-				expiry = true
-			}
-		}
-	}
-	if count != 23 || len(coverage) != 8 || !expiry {
-		t.Fatal("the actual partial coverage differs", coverage)
+	if err == nil || !strings.Contains(err.Error(), "qualification candidate binding differs") || len(coverage) != 0 {
+		t.Fatal("a historical candidate supplied current-schema coverage", coverage, err)
 	}
 	for name, change := range map[string]func(*candidateReceipt){
 		"expired allocation succeeds": func(r *candidateReceipt) {

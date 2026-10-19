@@ -19,23 +19,38 @@ import (
 const MaxFrame = 131072
 const ControlFD = 7
 const NamespaceFD = 8
+const DockerMountFD = 8
+const DockerNetworkFD = 9
+const DockerPIDFD = 10
+const DockerRootFD = 11
 
 type IOPaths struct{ Input, Output, Error string }
 type NamespaceIdentity struct{ Device, Inode uint64 }
+type DockerIdentity struct {
+	Mount, Network, PID, Root NamespaceIdentity
+}
 
 func canonical(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && path != "/" && path != "/tmp" && !strings.HasPrefix(path, "/tmp/") && !strings.ContainsRune(path, 0)
 }
 func Encode(manifest lifecycle.Manifest, paths IOPaths) ([]byte, error) {
-	return encode(manifest, paths, nil)
+	return encode(manifest, paths, nil, nil)
 }
 func EncodeNamespace(manifest lifecycle.Manifest, paths IOPaths, namespace NamespaceIdentity) ([]byte, error) {
 	if namespace.Device == 0 || namespace.Inode == 0 {
 		return nil, errors.New("the mount namespace identity is absent")
 	}
-	return encode(manifest, paths, &namespace)
+	return encode(manifest, paths, &namespace, nil)
 }
-func encode(manifest lifecycle.Manifest, paths IOPaths, namespace *NamespaceIdentity) ([]byte, error) {
+func EncodeDocker(manifest lifecycle.Manifest, paths IOPaths, docker DockerIdentity) ([]byte, error) {
+	for _, id := range []NamespaceIdentity{docker.Mount, docker.Network, docker.PID, docker.Root} {
+		if id.Device == 0 || id.Inode == 0 {
+			return nil, errors.New("the Docker descriptor identity is incomplete")
+		}
+	}
+	return encode(manifest, paths, nil, &docker)
+}
+func encode(manifest lifecycle.Manifest, paths IOPaths, namespace *NamespaceIdentity, docker *DockerIdentity) ([]byte, error) {
 	if err := manifest.Validate(); err != nil {
 		return nil, err
 	}
@@ -53,7 +68,10 @@ func encode(manifest lifecycle.Manifest, paths IOPaths, namespace *NamespaceIden
 	}
 	var b bytes.Buffer
 	version := uint32(1)
-	if namespace != nil {
+	if docker != nil {
+		b.WriteString("AGJOB003")
+		version = 3
+	} else if namespace != nil {
 		b.WriteString("AGJOB002")
 		version = 2
 	} else {
@@ -66,6 +84,16 @@ func encode(manifest lifecycle.Manifest, paths IOPaths, namespace *NamespaceIden
 		_ = binary.Write(&b, binary.LittleEndian, uint32(NamespaceFD))
 		_ = binary.Write(&b, binary.LittleEndian, namespace.Device)
 		_ = binary.Write(&b, binary.LittleEndian, namespace.Inode)
+	}
+	if docker != nil {
+		for _, item := range []struct {
+			fd uint32
+			id NamespaceIdentity
+		}{{DockerMountFD, docker.Mount}, {DockerNetworkFD, docker.Network}, {DockerPIDFD, docker.PID}, {DockerRootFD, docker.Root}} {
+			_ = binary.Write(&b, binary.LittleEndian, item.fd)
+			_ = binary.Write(&b, binary.LittleEndian, item.id.Device)
+			_ = binary.Write(&b, binary.LittleEndian, item.id.Inode)
+		}
 	}
 	write := func(s string) { _ = binary.Write(&b, binary.LittleEndian, uint32(len(s))); b.WriteString(s) }
 	for _, s := range []string{digest, manifest.Executable, manifest.Workspace, paths.Input, paths.Output, paths.Error} {

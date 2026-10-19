@@ -127,6 +127,9 @@ func LoadTrust(path string) (TrustFile, *FileTrust, error) {
 			if runtime.Kind == "pi" && !validPiPins(runtime) {
 				return c, nil, errors.New("authority_pi_runtime_pins_required")
 			}
+			if runtime.Kind == "ssh" && !reflect.DeepEqual(runtime.ArgumentsPrefix, []string{"-c"}) {
+				return c, nil, errors.New("authority_ssh_runtime_pins_required")
+			}
 		}
 		for _, d := range pin.PolicyDigests {
 			if !digestPattern.MatchString(d) || c.Documents[d] == "" {
@@ -205,7 +208,7 @@ func (f *FileTrust) VerifyManifest(ctx context.Context, b lifecycle.Binding, m l
 			continue
 		}
 		for _, r := range p.Runtimes {
-			if r.Kind == m.AgentKind && r.Version == m.RuntimeVersion && r.Executable == m.Executable && r.ExecutableDigest == m.ExecutableDigest && r.ImageDigest == m.ImageDigest && runtimeFilesMatch(r, b, m) && (m.AgentKind != "pi" || piRuntimeMatches(r, m, b)) {
+			if r.Kind == m.AgentKind && r.Version == m.RuntimeVersion && r.Executable == m.Executable && r.ExecutableDigest == m.ExecutableDigest && r.ImageDigest == m.ImageDigest && runtimeFilesMatch(r, b, m) && (m.AgentKind != "pi" || piRuntimeMatches(r, m, b)) && (m.AgentKind != "ssh" || lifecycle.SSHRuntimeMatches(r.ArgumentsPrefix, m)) {
 				return nil
 			}
 		}

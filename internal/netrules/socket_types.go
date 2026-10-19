@@ -87,6 +87,10 @@ func EvaluateSocket(plan SocketPlan, operation SocketOperation, now uint64) Deci
 			continue
 		}
 		if operation.Operation == SocketSetOption || operation.Operation == SocketGetOption {
+			if rule.Effect == Allow && operation.Operation == SocketSetOption && operation.Option.Level == 1 &&
+				(operation.Option.Name == 3 || operation.Option.Name == 4) {
+				continue // SO_TYPE and SO_ERROR are getter-only even in a mixed-operation rule.
+			}
 			matched := rule.OptionCount == 0 && rule.Effect == Deny
 			for _, option := range rule.Options[:rule.OptionCount] {
 				if option == operation.Option {

@@ -557,6 +557,12 @@ export function PolicyDetail({
               </>
             )}
             <div className="version-actions">
+              <button className="secondary" onClick={() => navigate(`requests/${v.id}`)}>
+                Requests for this version
+              </button>
+              <button className="secondary" onClick={() => navigate(`audit/${v.id}`)}>
+                Audit history for this version
+              </button>
               {v.state === "draft" && can(actor, "editor") && (
                 <button disabled={documentState.loading || Boolean(documentState.error)} onClick={() => setDecision("proposed")}>
                   Submit for approval
@@ -746,15 +752,19 @@ export function Requests({
   actor,
   epoch,
   refresh,
+  versionID,
 }: {
   actor: Actor;
   epoch: number;
   refresh: () => void;
+  versionID?: string;
 }) {
-  const [filter, setFilter] = useState("pending");
-  const pg = usePaging(filter);
+  const [filter, setFilter] = useState(versionID ? "" : "pending");
+  const pg = usePaging(`${versionID || ""}:${filter}`);
+  const params = new URLSearchParams({ cursor: pg.cursor, state: filter });
+  if (versionID) params.set("version", versionID);
   const { data, error, loading } = useData<Page<Request>>(
-    `requests?cursor=${pg.cursor}&state=${filter}`,
+    `requests?${params}`,
     epoch,
   );
   const [selected, setSelected] = useState<Request>();
@@ -764,7 +774,7 @@ export function Requests({
       <SectionTitle
         eyebrow="HUMAN DECISIONS"
         title="Requests"
-        text="Compare the requested rights and approve one exact published version."
+        text={versionID ? `Requests for policy version ${short(versionID)}. Compare each request with that exact version.` : "Compare the requested rights and approve one exact published version."}
       />
       <div className="table-toolbar">
         <div className="segmented" aria-label="Request state">
@@ -1244,9 +1254,11 @@ export function RunDetail({
 export function AuditExplorer({
   epoch,
   actor,
+  versionID,
 }: {
   epoch: number;
   actor: Actor;
+  versionID?: string;
 }) {
   const [draft, setDraft] = useState({
     actor: "",
@@ -1255,6 +1267,7 @@ export function AuditExplorer({
     action: "",
     after: "",
     before: "",
+    version: versionID || "",
   });
   const [filter, setFilter] = useState(draft);
   const pg = usePaging(JSON.stringify(filter));
@@ -1272,7 +1285,7 @@ export function AuditExplorer({
       <SectionTitle
         eyebrow="APPEND-ONLY CHANGE LOG"
         title="Audit explorer"
-        text="Search authenticated policy, request, admission, and evidence changes."
+        text={versionID ? `Audit records bound to policy version ${short(versionID)}.` : "Search authenticated policy, request, admission, and evidence changes."}
         action={
           can(actor, "auditor") && (
             <a

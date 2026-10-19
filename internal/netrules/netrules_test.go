@@ -30,7 +30,7 @@ func compiled(t *testing.T, rules ...policy.NetworkRule) Policy {
 }
 
 func TestMapABI(t *testing.T) {
-	if binary.Size(Rule{}) != 40 || binary.Size(Policy{}) != 5144 {
+	if binary.Size(Rule{}) != 40 || binary.Size(Policy{}) != 5168 {
 		t.Fatal("BPF map ABI changed")
 	}
 }

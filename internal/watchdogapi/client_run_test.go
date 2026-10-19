@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -65,5 +66,30 @@ func TestRunLiveHeartbeatFailureLatchesFault(t *testing.T) {
 	}
 	if c.Ready() || !c.failed.Load() {
 		t.Fatal("a live heartbeat failure left release available")
+	}
+}
+
+func TestExpectedLeaseCutoffDoesNotBecomeHeartbeatFault(t *testing.T) {
+	clock := &cutoffClock{}
+	clock.now.Store(9)
+	var calls atomic.Int32
+	c := &Client{config: ClientConfig{Clock: clock}, transport: &http.Transport{}}
+	c.running.Store(true)
+	c.http = &http.Client{Transport: runTransport(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("the independent lease rejected a heartbeat")
+	})}
+	c.leases.Store("owned", lifecycle.WatchdogAck{})
+	c.deadlines.Store("owned", uint64(10))
+	if err := c.heartbeat(context.Background()); err == nil || calls.Load() != 1 {
+		t.Fatal("a heartbeat failure before the cutoff was suppressed", err, calls.Load())
+	}
+	clock.now.Store(10)
+	if err := c.heartbeat(context.Background()); err != nil || calls.Load() != 1 {
+		t.Fatal("the expected cutoff caused another heartbeat or a daemon fault", err, calls.Load())
+	}
+	c.Forget(lifecycle.Binding{RunID: "owned"})
+	if _, present := c.deadlines.Load("owned"); present {
+		t.Fatal("the stopped lease retained its local cutoff")
 	}
 }

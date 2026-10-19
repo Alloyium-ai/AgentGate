@@ -173,7 +173,9 @@ func (f *fixture) fill(t *testing.T) {
 		}
 	}
 }
-func terminal() Terminal { return Terminal{"completed", 0, true, true, strings.Repeat("4", 64), true} }
+func terminal() Terminal {
+	return Terminal{State: "completed", ExitCode: 0, Empty: true, RightsRemoved: true, OutputDigest: strings.Repeat("4", 64), CountersAvailable: true}
+}
 func (f *fixture) seal(t *testing.T) {
 	t.Helper()
 	if _, err := f.w.Seal(context.Background(), terminal(), signer{f.node}); err != nil {

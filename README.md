@@ -7,6 +7,7 @@ It does not provide complete workload confinement or a qualified production inst
 Normal full-policy admission remains unavailable until the required behavior contracts pass for the exact target and policy.
 
 The source includes a local policy API and browser UI, versioned policies, approval requests, basic roles, audit export and verification.
+The `ssh/` directory includes a standalone forced-command ingress and a read-only taskboard bridge. The [guarded SSH POC](poc/ssh-diagnostic/README.md) includes portable Docker targets and per-command setup. Full product qualification remains open.
 The local control service uses signed SQLite configuration. Its local authentication path needs no fleet service or vendor account.
 External OIDC is optional. First-party user-space code uses Apache-2.0, BPF uses GPL-2.0-only, and documentation uses CC-BY-4.0.
 Third-party dependencies retain their supplier terms. The component map records the exact license scope.
@@ -28,8 +29,8 @@ The Go target runs the race suite and builds the local service and the limited n
 The BPF target compiles the selected inspection program. Compilation does not load a kernel program or qualify its behavior.
 Read [development instructions](docs/DEVELOPMENT.md) for source verification, dependency records and test prerequisites.
 
-This preview supplies source and build recipes. It supplies no prebuilt image, public registry artifact or production deployment.
-An eventual distributed image must come from reviewed CI and use an immutable registry digest.
+This preview supplies source and build recipes. It supplies no public registry artifact or production deployment.
+After independent review, protected release CI builds the Community product, standalone SSH ingress, coding target and taskboard bridge images and publishes them to the private registry. Deployments must use their immutable manifest digests. An image build alone does not qualify a policy or authorize workload admission.
 
 ## Architecture
 

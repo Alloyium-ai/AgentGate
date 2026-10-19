@@ -3,8 +3,10 @@
 package nodebackend
 
 import (
+	"alloyium.local/kernel-poc/internal/buildinfo"
 	"alloyium.local/kernel-poc/internal/childwire"
 	"alloyium.local/kernel-poc/internal/credentialstage"
+	"alloyium.local/kernel-poc/internal/dockerplacement"
 	"alloyium.local/kernel-poc/internal/domainstore"
 	"alloyium.local/kernel-poc/internal/enforcement"
 	"alloyium.local/kernel-poc/internal/lifecycle"
@@ -12,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"golang.org/x/sys/unix"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -77,6 +80,9 @@ func (b *Backend) prepareCredentials(ctx context.Context, r *run, a lifecycle.Au
 }
 
 func (b *Backend) startChild(ctx context.Context, r *run, m lifecycle.Manifest) (*enforcement.Child, error) {
+	if m.AgentKind == "ssh" {
+		return b.startDockerChild(ctx, r, m)
+	}
 	if r.credentials == nil {
 		return r.group.StartChild(ctx, r.plan, b.config.Helper, b.config.ArtifactDigests["held-helper"], m, r.streams.Paths)
 	}
@@ -90,6 +96,80 @@ func (b *Backend) startChild(ctx context.Context, r *run, m lifecycle.Manifest) 
 	}
 	defer file.Close()
 	return r.group.StartChildNamespace(ctx, r.plan, b.config.Helper, b.config.ArtifactDigests["held-helper"], m, r.streams.Paths, file, childwire.NamespaceIdentity{Device: measurement.NamespaceDevice, Inode: measurement.NamespaceInode})
+}
+
+func dockerIdentity(file *os.File) (childwire.NamespaceIdentity, error) {
+	var st unix.Stat_t
+	if file == nil || unix.Fstat(int(file.Fd()), &st) != nil {
+		return childwire.NamespaceIdentity{}, errors.New("the measured Docker descriptor is unavailable")
+	}
+	return childwire.NamespaceIdentity{Device: uint64(st.Dev), Inode: st.Ino}, nil
+}
+
+func dockerStreamPaths(host childwire.IOPaths, target dockerplacement.Target) (childwire.IOPaths, error) {
+	translate := func(path string) (string, error) {
+		if target.ArtifactPath == "" || target.ArtifactSource == "" || filepath.Clean(path) != path ||
+			!strings.HasPrefix(path, target.ArtifactSource+"/") {
+			return "", errors.New("the Docker stream path is outside its measured mount")
+		}
+		return filepath.Join(target.ArtifactPath, strings.TrimPrefix(path, target.ArtifactSource+"/")), nil
+	}
+	input, err := translate(host.Input)
+	if err != nil {
+		return childwire.IOPaths{}, err
+	}
+	output, err := translate(host.Output)
+	if err != nil {
+		return childwire.IOPaths{}, err
+	}
+	diagnostic, err := translate(host.Error)
+	if err != nil {
+		return childwire.IOPaths{}, err
+	}
+	return childwire.IOPaths{Input: input, Output: output, Error: diagnostic}, nil
+}
+
+func (b *Backend) startDockerChild(ctx context.Context, r *run, m lifecycle.Manifest) (*enforcement.Child, error) {
+	target := b.config.PilotTarget
+	if target == nil || r.document.Network == nil || r.document.Network.Pilot == nil ||
+		m.ImageDigest != target.ImageDigest || m.Workspace != target.Workspace || r.credentials != nil ||
+		!target.MatchesPilot(r.document.Network.Pilot.TaskboardTaskID, r.document.Network.Pilot.TaskboardIP, r.document.Network.Pilot.TaskboardPort) {
+		return nil, errors.New("the signed SSH manifest differs from the measured Docker target")
+	}
+	if err := b.artifacts.OnlyJob(r.binding); err != nil {
+		return nil, err
+	}
+	handles, err := dockerplacement.Open(ctx, *target)
+	if err != nil {
+		return nil, err
+	}
+	defer handles.Close()
+	if err := matchPreparedPilotTarget(r.pilotTarget, handles.Measurement); err != nil {
+		return nil, err
+	}
+	if buildinfo.SourceRevision == "" || handles.Measurement.ImageSourceRevision != buildinfo.SourceRevision {
+		return nil, errors.New("the Docker target image source differs from the node")
+	}
+	descriptors := childwire.DockerDescriptors{Mount: handles.Mount, Network: handles.Network, PID: handles.PID, Root: handles.Root}
+	for _, item := range []struct {
+		file *os.File
+		id   *childwire.NamespaceIdentity
+	}{
+		{handles.Mount, &descriptors.Identity.Mount},
+		{handles.Network, &descriptors.Identity.Network},
+		{handles.PID, &descriptors.Identity.PID},
+		{handles.Root, &descriptors.Identity.Root},
+	} {
+		*item.id, err = dockerIdentity(item.file)
+		if err != nil {
+			return nil, err
+		}
+	}
+	streamPaths, err := dockerStreamPaths(r.streams.Paths, *target)
+	if err != nil {
+		return nil, err
+	}
+	return r.group.StartChildDocker(ctx, r.plan, b.config.Helper, b.config.ArtifactDigests["held-helper"], m, streamPaths, descriptors)
 }
 
 func (b *Backend) verifyCredentialStop(ctx context.Context, r *run, binding lifecycle.Binding, e lifecycle.Evidence) error {

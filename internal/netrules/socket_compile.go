@@ -111,7 +111,7 @@ func supportedSocketOption(family, protocol uint16, operations uint32, option So
 		case 2, 7, 8, 9, 13:
 			return true // Reuse address, buffers, keepalive, and linger.
 		case 3, 4:
-			return operations&SocketSetOption == 0 // Socket type and pending error are getters only.
+			return operations&SocketGetOption != 0 // The evaluator denies setters for these getter-only pairs.
 		}
 	}
 	if option.Level == 6 && option.Name == 1 {

@@ -6,6 +6,7 @@ import (
 	"alloyium.local/kernel-poc/internal/domainstore"
 	"alloyium.local/kernel-poc/internal/jobartifacts"
 	"alloyium.local/kernel-poc/internal/lifecycle"
+	"alloyium.local/kernel-poc/internal/noderuntime"
 	"alloyium.local/kernel-poc/internal/platform"
 	"alloyium.local/kernel-poc/internal/runtimeclosure"
 	"bytes"
@@ -91,6 +92,9 @@ func NewLocalInspector(c LocalConfig) (*LocalInspector, error) {
 		if strings.HasPrefix(name, "runtime.") && strings.HasSuffix(name, ".package") {
 			expectedKind = "tree"
 		}
+		if name == "resolver" {
+			expectedKind = "resolver"
+		}
 		if m.Kind != expectedKind {
 			return nil, errors.New("qualification measurement kind differs from its artifact role")
 		}
@@ -109,6 +113,10 @@ func NewLocalInspector(c LocalConfig) (*LocalInspector, error) {
 		case "cgroup-root":
 			if m.Path != "" || m.Files != nil || !safeID.MatchString(m.OwnedPrefix) || !hex64.MatchString(m.RootReceipt) {
 				return nil, errors.New("invalid root cgroup measurement")
+			}
+		case "resolver":
+			if !protectedPath(m.Path) || m.Files != nil || m.OwnedPrefix != "" || m.RootReceipt != "" {
+				return nil, errors.New("invalid pinned resolver measurement")
 			}
 		default:
 			return nil, fmt.Errorf("unsupported qualification measurement: %s", m.Kind)
@@ -278,6 +286,15 @@ func (i *LocalInspector) measureArtifacts(ctx context.Context) error {
 		m := i.config.Measurements[name]
 		expected := i.config.Expected.ArtifactDigests[name]
 		switch m.Kind {
+		case "resolver":
+			config, err := noderuntime.ReadConfig(m.Path)
+			if err != nil {
+				return err
+			}
+			resolver, err := noderuntime.ConfiguredResolver(config)
+			if err != nil || resolver == nil || noderuntime.ResolverDigest(resolver.Evidence()) != expected {
+				return errors.New("the protected pinned resolver differs from the qualification artifact")
+			}
 		case "file":
 			var st unix.Stat_t
 			if unix.Lstat(m.Path, &st) != nil {

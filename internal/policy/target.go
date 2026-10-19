@@ -193,13 +193,19 @@ func PreviewForTarget(document Document, target VerifiedTarget, now int64) (Prev
 	if err != nil {
 		return preview, err
 	}
-	if target.report.Qualification != nil {
-		digest, err := document.Digest()
-		if err != nil || !containsSorted(target.report.Qualification.PolicyDigests, digest) {
-			return preview, errors.New("the target report does not qualify this exact policy")
-		}
+	scope := target.report.Qualification
+	if scope == nil || scope.Validate() != nil {
+		return preview, errors.New("the full policy preview requires a valid qualification scope")
+	}
+	digest, err := document.Digest()
+	if err != nil || !containsSorted(scope.PolicyDigests, digest) ||
+		len(target.report.Capabilities) != len(scope.RequiredCapabilities) {
+		return preview, errors.New("the target report does not qualify this exact policy and capability set")
 	}
 	for _, name := range required {
+		if !containsSorted(scope.RequiredCapabilities, name) {
+			return preview, fmt.Errorf("target qualification scope omits required capability %s", name)
+		}
 		capability, exists := target.report.Capabilities[name]
 		if !exists || capability.State != "enforced" {
 			return preview, fmt.Errorf("target capability %s lacks enforcement qualification", name)

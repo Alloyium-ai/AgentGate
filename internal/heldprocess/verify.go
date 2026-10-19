@@ -88,6 +88,9 @@ func (h *Held) verify(stopped bool) error {
 	if err := unix.PidfdSendSignal(h.pidfd, 0, nil, 0); err != nil {
 		return err
 	}
+	if h.spec.Docker && (h.launcherPidfd < 0 || unix.PidfdSendSignal(h.launcherPidfd, 0, nil, 0) != nil) {
+		return errors.New("the trusted Docker launcher stopped before its held child")
+	}
 	first, err := readIdentity(h.process.PID)
 	if err != nil {
 		return err
@@ -110,6 +113,22 @@ func (h *Held) verify(stopped bool) error {
 		}
 		if uint64(st.Dev) != h.spec.NamespaceDevice || st.Ino != h.spec.NamespaceInode {
 			return errors.New("the held mount namespace differs")
+		}
+	}
+	if h.spec.Docker {
+		for _, item := range []struct {
+			path          string
+			device, inode uint64
+		}{
+			{"ns/net", h.spec.NetworkDevice, h.spec.NetworkInode},
+			{"ns/pid", h.spec.PIDDevice, h.spec.PIDInode},
+			{"root", h.spec.RootDevice, h.spec.RootInode},
+		} {
+			var st unix.Stat_t
+			if err = unix.Stat(prefix+item.path, &st); err != nil ||
+				uint64(st.Dev) != item.device || st.Ino != item.inode {
+				return errors.New("the held Docker namespace or root differs")
+			}
 		}
 	}
 	raw, err = os.ReadFile(prefix + "syscall")
