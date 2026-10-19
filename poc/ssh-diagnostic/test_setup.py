@@ -9,8 +9,7 @@ from settings import validate_settings
 
 class SettingsTest(unittest.TestCase):
     def fixture(self):
-        return dict(instance='demo', source='a' * 40, policy='b' * 64,
-                    hostname='example.org', public_address='1.1.1.1',
+        return dict(instance='demo', source='a' * 40, policy_format='agentgate.network-poc.v1',
                     target_image='sha256:' + 'c' * 64, bridge_image='sha256:' + 'd' * 64,
                     taskboard_url='http://10.10.10.10:8080/', task_id=1,
                     ipv6_subnet='fd42:1234:5678::/64')
@@ -35,15 +34,14 @@ class SettingsTest(unittest.TestCase):
 
     def test_rejects_mutable_images_and_invalid_revision(self):
         for key, value in [('source', 'main'), ('target_image', 'target:latest'),
-                           ('bridge_image', 'bridge:latest'), ('policy', 'x' * 64)]:
+                           ('bridge_image', 'bridge:latest'), ('policy_format', 'unknown')]:
             data = self.fixture()
             data[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.check(data)
 
     def test_rejects_private_public_address_and_shell_hostname(self):
-        for key, value in [('public_address', '10.0.0.1'), ('hostname', 'x;id.example'),
-                           ('instance', '../escape'), ('hostname', 'EXAMPLE.ORG')]:
+        for key, value in [('instance', '../escape'), ('policy_format', 'kernel-policy.v2')]:
             data = self.fixture()
             data[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):

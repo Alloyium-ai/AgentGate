@@ -3092,6 +3092,36 @@
       "path": "poc/ssh-diagnostic/test_setup.py",
       "kind": "code",
       "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/policy.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/policy_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/network_policy.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/prepare-policy.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/prepare-resolver.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/policy.example.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
     }
   ]
 }

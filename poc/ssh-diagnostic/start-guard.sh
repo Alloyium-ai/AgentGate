@@ -7,15 +7,10 @@ eval "$(python3 "$poc/settings.py" "$poc/settings.json")"
 test -d "$domain"
 grep -q 'populated 0' "$domain/cgroup.events"
 test ! -e "$root/guard-ready" && test ! -e "$root/guard-receipt.json" && test ! -e "$root/config.json"
-address=$(head -n 1 "$diag/dns-addresses.txt")
-python3 - "$address" <<'PY'
-import ipaddress,sys
-assert ipaddress.ip_address(sys.argv[1]).is_global
-PY
 start_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
 nohup "$poc/pilot-network-diagnostic" \
-  "$diag/target.json" "$diag/policy.json" \
-  "$component/network_policy.bpf.o" "$hostname" "$address" \
+  "$diag/target.json" "$diag/policy-active.json" \
+  "$component/network_policy.bpf.o" --network-policy - \
   "$root/guard-ready" "$root/guard-receipt.json" "$source" "$domain" \
   </dev/null >"$root/guard.log" 2>&1 &
 pid=$!
@@ -29,11 +24,11 @@ done
 if test "$ready" -ne 1; then tail -n 20 "$root/guard.log" >&2; exit 1; fi
 test -d "$pins"
 for index in 0 1 2 3 4 5; do test -e "$pins/link-$index"; done
-python3 - "$poc" "$pid" "$name" "$network" "$domain" "$source" "$policy" "$start_ns" "$diag/policy.json" <<'PY'
+python3 - "$poc" "$pid" "$name" "$network" "$domain" "$source" "$policy" "$start_ns" "$diag/policy-active.json" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys,time
 root=pathlib.Path(sys.argv[1]); pid=int(sys.argv[2]); name,network,domain,source,policy=sys.argv[3:8]
 start_ns=int(sys.argv[8]); policy_path=pathlib.Path(sys.argv[9])
-duration=int(json.loads(policy_path.read_text())['lifecycle']['duration_seconds'])
+duration=int(json.loads(policy_path.read_text())['duration_seconds'])
 assert 1 <= duration <= 60
 raw=pathlib.Path(f'/proc/{pid}/stat').read_text()
 ticks=int(raw.rsplit(')',1)[1].split()[19])

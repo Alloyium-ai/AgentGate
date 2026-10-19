@@ -24,7 +24,7 @@ DOMAIN = Path(SETTINGS['domain'])
 PINS = Path(SETTINGS['pins'])
 TARGET = SETTINGS['name']
 SOURCE = SETTINGS['source']
-POLICY = SETTINGS['policy']
+POLICY = None
 
 
 def empty_domain():
@@ -34,7 +34,7 @@ def empty_domain():
 def archive_previous():
     history = ROOT / 'history'
     history.mkdir(mode=0o700, exist_ok=True)
-    files = ('guard-ready', 'guard-receipt.json', 'guard.log', 'config.json')
+    files = ('guard-ready', 'guard-receipt.json', 'guard.log', 'config.json', 'policy-active.json')
     if any((ROOT / name).exists() for name in files):
         directory = history / str(time.time_ns())
         directory.mkdir(mode=0o700)
@@ -135,6 +135,7 @@ def run_gateway():
 
 
 def main():
+    global POLICY
     if os.geteuid() != 0 or os.environ.get('SSH_TTY') or len(sys.argv) != 1:
         raise ValueError('invalid operator diagnostic transport')
     command = os.environ.get('SSH_ORIGINAL_COMMAND', '')
@@ -154,6 +155,7 @@ def main():
         subprocess.run([str(ROOT / 'prepare-command.sh')], check=True, timeout=25,
                        stdout=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'})
         pid = read_guard_pid()
+        POLICY = json.loads((ROOT / 'config.json').read_text())['policy_digest']
         result = run_gateway()
     except BaseException as error:
         append_event({'scope': 'fixed-diagnostic-only; no normal admission',

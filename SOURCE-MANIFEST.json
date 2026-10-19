@@ -1,7 +1,7 @@
 {
   "schema": "agentgate.community.source-preview.v1",
-  "source_id": "agentgate-community-sha256:c7ae637a1bdd83508ce537848d292b16a2acc6ff267edfdd9d6b6063c8e87e41",
-  "source_sha256": "c7ae637a1bdd83508ce537848d292b16a2acc6ff267edfdd9d6b6063c8e87e41",
+  "source_id": "agentgate-community-sha256:a6567fd587a25d353b5cd850648ffb5fcb08d1330b5ba400a545a37fb160ea9c",
+  "source_sha256": "a6567fd587a25d353b5cd850648ffb5fcb08d1330b5ba400a545a37fb160ea9c",
   "stage": "experimental-source-preview",
   "committed_bytes_verified": true,
   "qualification": "experimental; no complete workload qualification",
@@ -98,8 +98,13 @@
     },
     {
       "path": "cmd/pilot-network-diagnostic/main.go",
-      "bytes": 9498,
-      "sha256": "ac52c3c592ebc85720defc88a00103ef12d6c2aabc5443a858b6505cc8b48893"
+      "bytes": 10609,
+      "sha256": "370a52d21ab6e64b0830b4080fc2406bc9f83d4d0ac4938265e004410c0ff7d2"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/network_policy.go",
+      "bytes": 697,
+      "sha256": "e2b77a6fb2d04a1a486d40e12fb8c59cb1d613fa6c6381bf082378c71f24d4ba"
     },
     {
       "path": "cmd/pilot-network-diagnostic/pins_test.go",
@@ -173,8 +178,8 @@
     },
     {
       "path": "COMPONENT-LICENSES.json",
-      "bytes": 74767,
-      "sha256": "6fec6f8740e240ce023c6e6b72cb8c8457b77228ab74a3901c60b0843d24cfab"
+      "bytes": 75488,
+      "sha256": "f7987e065083fff62f318f0ea278cbdab342a09671d1241057dd410e50827f0e"
     },
     {
       "path": "compose.yaml",
@@ -203,8 +208,8 @@
     },
     {
       "path": "docs/DEVELOPMENT.md",
-      "bytes": 4277,
-      "sha256": "9e03e73987b5320ae32ad12f86fb6b0de3adbf6a71b12863e7c455d23fb29a44"
+      "bytes": 4401,
+      "sha256": "032c1c8178f3a62afd4f9a0f9d235c8ca5884ce2124d048fb3c3ee47dee1d61b"
     },
     {
       "path": "docs/LICENSING.md",
@@ -2032,6 +2037,16 @@
       "sha256": "b24059e607de82ef3e1530748c3e7ed02b3f444eb807569f60671343241394e7"
     },
     {
+      "path": "internal/pocpolicy/policy_test.go",
+      "bytes": 3232,
+      "sha256": "34b6403f70fea333615305128edd05eb1ec3bed014f1462c7858100e399e57f2"
+    },
+    {
+      "path": "internal/pocpolicy/policy.go",
+      "bytes": 6798,
+      "sha256": "af97e42e0b98352eb64cc45429836f8fca91ae595a921973dc025e5596e52944"
+    },
+    {
       "path": "internal/policy/digest_test.go",
       "bytes": 942,
       "sha256": "aa0ec7baa14797c0181f0bcc6abab21fed19cd9972dbabb83c1e8fe1dfb26956"
@@ -2803,13 +2818,13 @@
     },
     {
       "path": "poc/ssh-diagnostic/configure.py",
-      "bytes": 4468,
-      "sha256": "99fe0a2d871626e263c8ecf78c7a3791823cd42345ac1c841161bb1a0a1fb64d"
+      "bytes": 4146,
+      "sha256": "1dc54475a71d4ca8975083bb183c9c515830e6acf11cb4aebb52e272747341b8"
     },
     {
       "path": "poc/ssh-diagnostic/Dockerfile",
-      "bytes": 2024,
-      "sha256": "22bc6a24008ac224b0a823e0462b11c2d3d03ef949cec97065cba775cba6e556"
+      "bytes": 2128,
+      "sha256": "34e72d4dad93ce27859f38446612b25f7e96c984dabb4ec42b692450c6731de8"
     },
     {
       "path": "poc/ssh-diagnostic/gateway.py",
@@ -2823,18 +2838,33 @@
     },
     {
       "path": "poc/ssh-diagnostic/operator-gateway.py",
-      "bytes": 6455,
-      "sha256": "456415a2007140405825fd7681dcd2acb94066bde7f5a1c843096fee83001f5e"
+      "bytes": 6562,
+      "sha256": "8226b647a67c7b6126757e2e0bbc930967fd679015296e4508a2f5266eeb77a7"
+    },
+    {
+      "path": "poc/ssh-diagnostic/policy.example.json",
+      "bytes": 604,
+      "sha256": "8bdbe40d620106663d3fd4a4ee0548d2ee10cc5c4d57b6a1a84b490a0130a267"
     },
     {
       "path": "poc/ssh-diagnostic/prepare-command.sh",
-      "bytes": 810,
-      "sha256": "63c2f2013ecd8005c9f69637f827d683c55baf32c1a8620c253a0757cdcc7cd3"
+      "bytes": 843,
+      "sha256": "1eeb5dcc3c22dd2bab59d8375dc24a73cfe4bb430402187c91f7120ed1077f23"
+    },
+    {
+      "path": "poc/ssh-diagnostic/prepare-policy.py",
+      "bytes": 1068,
+      "sha256": "aabade30f2ad10d9caf839466943c7f201638ea114395989f3cec5132e8fed41"
+    },
+    {
+      "path": "poc/ssh-diagnostic/prepare-resolver.py",
+      "bytes": 1210,
+      "sha256": "6da4cd3be5de660a78bdf51d2779ec0e706384ff9aa2cce6dcf676f5a21d7a44"
     },
     {
       "path": "poc/ssh-diagnostic/README.md",
-      "bytes": 7749,
-      "sha256": "ac1f1ba91938985fea18d79759dcc9c32378b75995058d19f0ff8ce5ce628011"
+      "bytes": 10209,
+      "sha256": "20e666958e0a8365797b2a59394b1b1cfe88a52b05494c47d12ea4566a279fd7"
     },
     {
       "path": "poc/ssh-diagnostic/resolve.py",
@@ -2843,8 +2873,8 @@
     },
     {
       "path": "poc/ssh-diagnostic/restart-target.sh",
-      "bytes": 2572,
-      "sha256": "3f95367a8c15695c4d2395963793123a24f256003dfff1c8f79c639e46a7ca96"
+      "bytes": 2440,
+      "sha256": "2947833fd96006c65bd62724510bd4fab785a4880a37e6b1661e5b0b5dc4b4fb"
     },
     {
       "path": "poc/ssh-diagnostic/run-in-target.sh",
@@ -2853,18 +2883,18 @@
     },
     {
       "path": "poc/ssh-diagnostic/settings.py",
-      "bytes": 3553,
-      "sha256": "5bae8fb33c9c14bf2afa357136d37a1e477cb6888c045468535ef406328d30ea"
+      "bytes": 3918,
+      "sha256": "0cd65a780185bffba43974c7f17d93d29df07370552673d4bbd75a393724a8a2"
     },
     {
       "path": "poc/ssh-diagnostic/start-guard.sh",
-      "bytes": 2907,
-      "sha256": "d60c4ccd9578948b7db21f899db1b067d74002322550a92d1283b6f7b5339db2"
+      "bytes": 2754,
+      "sha256": "43d1242f49c3df8fc0ad5828680e446c7bd917d524ca72f760ad7db668e0c92a"
     },
     {
       "path": "poc/ssh-diagnostic/start-target.sh",
-      "bytes": 5330,
-      "sha256": "9111c1e239f21686a977df001f0f3a5ec8b1c0324729c12cda1f6dc344bea2fb"
+      "bytes": 5051,
+      "sha256": "ceadece8d6049afcb3fba5df0689dbc51689167042609622cbcc7c2eeae496da"
     },
     {
       "path": "poc/ssh-diagnostic/stop.py",
@@ -2878,13 +2908,13 @@
     },
     {
       "path": "poc/ssh-diagnostic/test_setup.py",
-      "bytes": 2860,
-      "sha256": "1f09125f97c065df5cebc3cc86464350ec6ba3b389f1c8ed1d263768cc3dec2a"
+      "bytes": 2744,
+      "sha256": "fb0c44869f7dea98f38629529e5a9674a238a6a97bd0d599ae883f3391763b59"
     },
     {
       "path": "README.md",
-      "bytes": 4738,
-      "sha256": "42d61d8c0ca2b814fdcd69c842686b597cdd88e405dc27d33b55bbfa2d9f4d51"
+      "bytes": 5586,
+      "sha256": "e9d2cb61a40d4b97d3d3b00ee682201a390e03d96de74489b1d25fbd09b6cd94"
     },
     {
       "path": "settings.json",
@@ -3411,7 +3441,7 @@
     {
       "path": "SBOM.cdx.json",
       "bytes": 89534,
-      "sha256": "c41e1aafcd0e9e8a7247c6a3d9b5373d49ae64ceaeffe15051591105ac62bcc7"
+      "sha256": "eb3d70e424e51eff5dc6fa7094a1f80f92ef0a31f3c88f670a23cde397bcdc39"
     }
   ]
 }

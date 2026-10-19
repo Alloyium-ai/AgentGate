@@ -11,12 +11,59 @@ One request runs at a time. TTY, agent forwarding, and port forwarding stay disa
 
 This is an **experimental network guard and container POC**.
 Normal product admission remains closed. Full filesystem, process, syscall, and UI approval controls remain incomplete.
-The policy generator supplies network setup input. It does not grant the other declared policy controls.
 The trusted bridge makes an authenticated live `GET /api/tasks/ID` for one task.
 The target receives a Unix socket and four task fields. It receives no upstream bearer token.
 The bridge exposes `/task` and `/auth-probe`; other paths and methods return 403.
 This is a one-task read bridge. General taskboard API scope and identity remain incomplete.
 An allowed IP can serve several hostnames. The guard enforces endpoints, not HTTP host or TLS names on a shared IP.
+
+## The editable network policy
+
+Copy [policy.example.json](policy.example.json) to `policy.json`.
+Edit its taskboard address, port, and task ID before setup. The example contains no credentials.
+The JSON policy controls the real BPF network guard for this SSH POC.
+The browser UI does not edit this POC policy.
+
+The default policy denies all endpoints, then allows:
+
+- DNS: UDP53 and TCP53, only to the exact IPv4 addresses in `dns.resolvers`.
+- HTTP: TCP80 to public IPv4 destinations.
+- HTTPS: TCP443 to public IPv4 destinations.
+- HTTP/3 or QUIC: UDP443 to public IPv4 destinations, when that rule exists.
+- Taskboard: TCP to the exact private address and port in `taskboard`.
+
+IPv6 stays denied. The independent kernel boundary denies other LAN, host, bridge, loopback, and link-local destinations.
+A private DNS answer does not bypass that boundary. Documentation address ranges also stay denied.
+The taskboard exception grants one TCP endpoint. It does not grant other LAN addresses or UDP.
+The authenticated task bridge exposes only the configured task through its Unix socket.
+
+This preset allows any public IPv4 web destination. It enforces protocol, address, and port, not domain or TLS names.
+An allowed public IP can serve several hostnames. A domain allowlist is outside this simple preset.
+Conventional HTTP uses TCP80. UDP443 permits HTTP/3; it does not supply an HTTP/3 client.
+
+To change the installed policy, use the separate management connection:
+
+```sh
+sudo cp /var/lib/agentgate-poc-demo/policy.json ./policy.json
+sudo chmod 0600 ./policy.json
+sudo editor ./policy.json
+sudo /var/lib/agentgate-poc-demo/pilot-network-diagnostic network-info ./policy.json
+sudo install -o root -g root -m 0600 ./policy.json /var/lib/agentgate-poc-demo/policy.next.json
+sudo mv /var/lib/agentgate-poc-demo/policy.next.json /var/lib/agentgate-poc-demo/policy.json
+```
+
+Edits apply to the **next SSH command**. Each command validates and snapshots the current JSON before target creation.
+An active command retains its snapshot. Invalid JSON, unknown fields, duplicate keys, and invalid rules refuse execution.
+The launcher derives the effective SHA256 digest from that snapshot. No digest in `settings.json` needs an edit.
+The audit and guard receipt record that digest. Whitespace changes do not change the canonical effective digest.
+
+Remove a web rule to deny that protocol and port. Use `"rules": []` to deny all public web access.
+Edit `dns.resolvers` to choose one to three approved public IPv4 resolvers.
+DNS always uses UDP53 and TCP53. The network router can intercept those requests normally.
+The launcher replaces only its fresh target's generated resolver file, so ordinary `getent` and `curl` use these resolvers.
+It uses no per-host address mapping, DNS over TLS, or `curl --resolve`.
+The POC requires `duration_seconds: 25`; the command cutoff stays fixed at 25 seconds.
+The taskboard fields bind the authenticated bridge. Create a new instance to change those fields.
 
 ## Prerequisites
 
@@ -75,30 +122,23 @@ On the VM, set these variables to your real inputs:
 - `TASKBOARD_IP`, `TASKBOARD_PORT`, `TASK_ID`: one reachable private taskboard endpoint and one readable task.
 - `TOKEN_FILE`: an absolute root-owned regular file, mode 0600, containing its bearer token.
 - `PUBLIC_KEY`: the copied public key path.
-- `PUBLIC_HOST`: an allowed public HTTPS hostname, for example `example.org`.
-- `IPV6_SUBNET`: an unused private IPv6 /64 owned by this VM.
-- `RESOLVER_IP`, `RESOLVER_NAME`: a reachable TLS DNS endpoint and its certificate name.
+- `IPV6_SUBNET`: an unused private IPv6 /64 owned by this VM for negative verification.
 
 The taskboard must return 401 or 403 without authentication, and 200 with the supplied token.
 The bridge rejects an upstream that accepts unauthenticated reads.
 Run the setup as root from the source clone:
 
 ```sh
-PUBLIC_HOST=example.org
-RESOLVER_IP=1.1.1.1
-RESOLVER_NAME=cloudflare-dns.com
-python3 poc/ssh-diagnostic/resolve.py "$PUBLIC_HOST" /etc/ssl/certs/ca-certificates.crt \
-  "$RESOLVER_IP" "$RESOLVER_NAME" dns-answer.json > dns-addresses.txt
-PUBLIC_ADDRESS=$(head -n 1 dns-addresses.txt)
-artifacts/pilot-network-diagnostic policy "$PUBLIC_HOST" "$TASKBOARD_IP" "$TASKBOARD_PORT" "$TASK_ID" > policy.json
+cp poc/ssh-diagnostic/policy.example.json policy.json
+chmod 0600 policy.json
+editor policy.json
+artifacts/pilot-network-diagnostic network-info policy.json
 python3 poc/ssh-diagnostic/configure.py --instance demo --source-revision "$revision" \
-  --artifacts ./artifacts --policy ./policy.json --public-address "$PUBLIC_ADDRESS" \
+  --artifacts ./artifacts --policy ./policy.json \
   --target-image agentgate-poc-target --bridge-image agentgate-poc-bridge \
   --token-file "$TOKEN_FILE" --public-key "$PUBLIC_KEY" --ipv6-subnet "$IPV6_SUBNET"
 ```
 
-TLS DNS checks the resolver certificate. The target pins the selected public address in `/etc/hosts`.
-Choose a fresh address before a new installation if the hostname changes.
 The setup copies protected inputs to `/var/lib/agentgate-poc-demo`, creates the bridge and workspace, and adds one restricted key.
 The setup refuses an existing installation. It does not change an active endpoint.
 A failed kernel attach returns a precise preflight or BPF error before any command executes.
@@ -117,7 +157,13 @@ ssh -T -i ./poc-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes root@VM_H
 
 The first command prints `12`. The third command returns SSH exit code 7.
 Each command uses a fresh target and guard. The workspace persists between commands.
-The selected public HTTPS endpoint is available through `curl https://HOST` with normal certificate verification.
+Ordinary DNS, HTTP, and HTTPS work without address overrides:
+
+```sh
+ssh -T -i ./poc-key root@VM_HOST 'getent ahostsv4 example.org; curl -fsS http://example.org >/dev/null; curl -fsS https://example.com >/dev/null'
+```
+
+Use strict host checking and the verified host key as shown above.
 Other LAN peers and the wrong taskboard port receive kernel denials.
 Inspect the audit through the separate management connection:
 

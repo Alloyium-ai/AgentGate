@@ -23,6 +23,7 @@ import (
 	"alloyium.local/kernel-poc/internal/dockerplacement"
 	"alloyium.local/kernel-poc/internal/kernel"
 	"alloyium.local/kernel-poc/internal/netrules"
+	"alloyium.local/kernel-poc/internal/pocpolicy"
 	"alloyium.local/kernel-poc/internal/policy"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -98,34 +99,51 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
-	document, err := policy.Parse(raw, "json")
-	if err != nil {
-		return err
-	}
-	if document.Network == nil || document.Network.Pilot == nil {
-		return errors.New("signed pilot network absent")
-	}
-	digest, err := document.Digest()
-	if err != nil {
-		return err
-	}
-	addr, err := netip.ParseAddr(address)
-	if err != nil || !addr.IsGlobalUnicast() {
-		return errors.New("public lease address differs")
-	}
+	simpleMode := hostname == "--network-policy"
+	var simple pocpolicy.Document
+	var digest string
+	var duration int
+	var addr netip.Addr
 	var ruleID string
 	var publicPort uint16
-	for _, rule := range document.Network.Rules {
-		if rule.Destination.Kind == "hostname" && rule.Destination.Value == hostname && rule.Effect == "allow" {
-			if ruleID != "" || rule.Protocol != "tcp" || rule.PortFrom < 1 || rule.PortFrom != rule.PortTo {
-				return errors.New("duplicate hostname rule")
-			}
-			ruleID = rule.ID
-			publicPort = uint16(rule.PortFrom)
+	var document policy.Document
+	if simpleMode {
+		simple, err = pocpolicy.Parse(raw)
+		if err != nil {
+			return err
 		}
-	}
-	if ruleID == "" {
-		return errors.New("the public hostname is not signed")
+		digest = simple.Digest()
+		duration = simple.DurationSeconds
+	} else {
+		document, err = policy.Parse(raw, "json")
+		if err != nil {
+			return err
+		}
+		if document.Network == nil || document.Network.Pilot == nil {
+			return errors.New("signed pilot network absent")
+		}
+		digest, err = document.Digest()
+		if err != nil {
+			return err
+		}
+		addr, err = netip.ParseAddr(address)
+		if err != nil || !addr.IsGlobalUnicast() {
+			return errors.New("public lease address differs")
+		}
+		for _, rule := range document.Network.Rules {
+			if rule.Destination.Kind == "hostname" && rule.Destination.Value == hostname && rule.Effect == "allow" {
+				if ruleID != "" || rule.Protocol != "tcp" || rule.PortFrom < 1 || rule.PortFrom != rule.PortTo {
+					return errors.New("duplicate hostname rule")
+				}
+				ruleID = rule.ID
+				publicPort = uint16(rule.PortFrom)
+			}
+		}
+		if ruleID == "" {
+			return errors.New("the public hostname is not signed")
+		}
+
+		duration = document.Lifecycle.DurationSeconds
 	}
 	if !ownedDiagnosticDomain(cgroup) {
 		return errors.New("the diagnostic domain is not owned and root-level")
@@ -141,15 +159,27 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
-	deadline := now + uint64(time.Duration(document.Lifecycle.DurationSeconds)*time.Second)
-	lease := netrules.Lease{RuleID: ruleID, Hostname: hostname, Address: addr, Chain: []string{hostname}, ExpiresNS: deadline}
-	compiled, err := netrules.Compile(*document.Network, 1, now, deadline, []netrules.Lease{lease})
-	if err != nil {
-		return err
-	}
-	decisions, err := pilotProbeDecisions(compiled.Policy, *document.Network.Pilot, addr, publicPort, now)
-	if err != nil {
-		return err
+	deadline := now + uint64(time.Duration(duration)*time.Second)
+
+	var compiled netrules.Compiled
+	var decisions map[string]netrules.Decision
+	if simpleMode {
+		compiled, err = simple.Compile(now, deadline)
+		if err != nil {
+			return err
+		}
+		decisions = map[string]netrules.Decision{}
+	} else {
+		lease := netrules.Lease{RuleID: ruleID, Hostname: hostname, Address: addr, Chain: []string{hostname}, ExpiresNS: deadline}
+		compiled, err = netrules.Compile(*document.Network, 1, now, deadline, []netrules.Lease{lease})
+		if err != nil {
+			return err
+		}
+		decisions, err = pilotProbeDecisions(compiled.Policy, *document.Network.Pilot, addr, publicPort, now)
+		if err != nil {
+			return err
+		}
+
 	}
 	object, err := os.ReadFile(objectPath)
 	if err != nil {
@@ -224,7 +254,7 @@ func run() (err error) {
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 	// The signed execution cutoff stays unchanged. This extra five seconds
 	// bounds diagnostic collection and is not a workload execution grant.
-	limit := time.NewTimer(time.Duration(document.Lifecycle.DurationSeconds)*time.Second + 5*time.Second)
+	limit := time.NewTimer(time.Duration(duration)*time.Second + 5*time.Second)
 	defer limit.Stop()
 	select {
 	case <-stop:
@@ -257,7 +287,15 @@ func run() (err error) {
 	if err = collection.Maps["net_stats"].Lookup(uint32(0), &out.Counters); err != nil {
 		return err
 	}
-	out.Complete = completePilotBoundary(out, *document.Network.Pilot, addr, publicPort)
+	if simpleMode {
+		out.Scope = "experimental-network-poc-only; no normal admission"
+		out.Complete = out.Counters.Lost == 0 && out.Counters.Decisions == uint64(len(out.Events))
+		if len(out.Events) > 0 {
+			out.Complete = completeGuardEvents(out.Events, out.Counters, out.Domain, out.StartedMonoNS, out.FinishedMonoNS)
+		}
+	} else {
+		out.Complete = completePilotBoundary(out, *document.Network.Pilot, addr, publicPort)
+	}
 	encoded, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
@@ -275,6 +313,9 @@ func main() {
 	operation := run
 	if len(os.Args) > 1 && (os.Args[1] == "policy" || os.Args[1] == "policy-digest") {
 		operation = func() error { return policyCommand(os.Args[1:]) }
+	}
+	if len(os.Args) > 1 && os.Args[1] == "network-info" {
+		operation = func() error { return networkPolicyCommand(os.Args[1:]) }
 	}
 	if err := operation(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

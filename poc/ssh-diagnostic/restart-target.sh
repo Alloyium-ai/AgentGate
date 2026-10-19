@@ -12,19 +12,14 @@ docker container inspect "$name" >/dev/null 2>&1 && exit 2
 image=$(docker image inspect "$target_image" --format '{{.Id}}')
 bridge_image=$(docker image inspect "$bridge_image" --format '{{.Id}}')
 bridge_container_id=$(docker inspect "$bridge_container" --format '{{.Id}}')
-host_args=()
-while IFS= read -r address; do
-  test -n "$address"
-  host_args+=(--add-host "$hostname:$address")
-done < "$root/dns-addresses.txt"
 docker run --pull never -d --name "$name" --init --network "$network" --read-only \
   --user 65534:65534 --cpus 1 --memory 512m --pids-limit 64 --cap-drop ALL \
   --security-opt no-new-privileges --tmpfs /tmp:mode=0700,size=64m \
-  "${host_args[@]}" \
   --mount "type=volume,source=$workspace,target=/var/lib/agentgate/workspace" \
   --mount "type=bind,source=$artifact,target=/run/agentgate/streams" \
   --mount "type=volume,source=$bridge,target=/run/agentgate/taskboard,readonly" \
   --entrypoint /bin/sh "$image" -c 'sleep 600' >/dev/null
+python3 "$poc/prepare-resolver.py"
 container_id=$(docker inspect "$name" --format '{{.Id}}')
 workspace_source=$(docker volume inspect "$workspace" --format '{{.Mountpoint}}')
 bridge_source=$(docker volume inspect "$bridge" --format '{{.Mountpoint}}')

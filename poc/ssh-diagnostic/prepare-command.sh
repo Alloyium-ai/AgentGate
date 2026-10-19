@@ -4,6 +4,7 @@
 # Fixed diagnostic only. This trusted setup runs before the SSH payload.
 set -euo pipefail
 poc=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+python3 "$poc/prepare-policy.py"
 eval "$(python3 "$poc/settings.py" "$poc/settings.json")"
 if test -d "$domain"; then grep -qx 'populated 0' "$domain/cgroup.events"; fi
 test ! -e "$pins"

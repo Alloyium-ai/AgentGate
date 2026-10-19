@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shlex
 import sys
+import subprocess
 from urllib.parse import urlsplit
 
 from gateway import read_root_file
@@ -15,25 +16,19 @@ from gateway import read_root_file
 
 def validate_settings(data, root):
     """Return shell variables from exact, validated diagnostic settings."""
-    required = {'instance', 'source', 'policy', 'hostname', 'public_address',
+    required = {'instance', 'source', 'policy_format',
                 'target_image', 'bridge_image', 'taskboard_url', 'task_id', 'ipv6_subnet'}
     if set(data) != required or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,31}', data['instance']):
         raise ValueError('invalid diagnostic settings')
     if str(root) != '/var/lib/agentgate-poc-' + data['instance']:
         raise ValueError('install below /var/lib/agentgate-poc-INSTANCE')
-    for key, pattern in [('source', r'[a-f0-9]{40}'), ('policy', r'[a-f0-9]{64}'),
+    for key, pattern in [('source', r'[a-f0-9]{40}'),
                          ('target_image', r'sha256:[a-f0-9]{64}'),
                          ('bridge_image', r'sha256:[a-f0-9]{64}')]:
         if not isinstance(data[key], str) or not re.fullmatch(pattern, data[key]):
             raise ValueError('invalid diagnostic digest: ' + key)
-    hostname = data['hostname']
-    if not isinstance(hostname, str) or len(hostname) > 253 or '.' not in hostname or any(
-            not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', part)
-            for part in hostname.split('.')):
-        raise ValueError('invalid public hostname')
-    address = ipaddress.ip_address(data['public_address'])
-    if address.version != 4 or not address.is_global or str(address) != data['public_address']:
-        raise ValueError('a canonical public IPv4 address is required')
+    if data['policy_format'] != 'agentgate.network-poc.v1':
+        raise ValueError('invalid network policy format')
     url = urlsplit(data['taskboard_url'])
     host = ipaddress.ip_address(url.hostname or '')
     if (url.scheme != 'http' or url.username or url.password or url.path != '/' or
@@ -64,6 +59,24 @@ def load_settings(path):
     return validate_settings(json.loads(read_root_file(path)), path.parent)
 
 
+def effective_policy(root, data):
+    """Read the protected per-command snapshot through the native validator."""
+    path = root / 'policy-active.json'
+    read_root_file(path)
+    result = subprocess.check_output([str(root / 'pilot-network-diagnostic'),
+                                      'network-info', str(path)], timeout=5)
+    info = json.loads(result)
+    board = info['document']['taskboard']
+    url = urlsplit(data['taskboard_url'])
+    if (board['address'] != url.hostname or board['port'] != url.port or
+            board['task_id'] != data['task_id']):
+        raise ValueError('policy taskboard differs from the isolated bridge; configure a new instance')
+    return info
+
+
 if __name__ == '__main__':
-    for key, value in load_settings(sys.argv[1]).items():
+    path = Path(sys.argv[1])
+    values = load_settings(path)
+    values['policy'] = effective_policy(path.parent, values)['digest']
+    for key, value in values.items():
         print(f'{key}={shlex.quote(str(value))}')

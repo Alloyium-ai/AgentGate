@@ -30,7 +30,7 @@ def image_id(reference, revision):
 
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('instance', 'source-revision', 'artifacts', 'policy', 'public-address',
+    for name in ('instance', 'source-revision', 'artifacts', 'policy',
                  'target-image', 'bridge-image', 'token-file', 'public-key', 'ipv6-subnet'):
         parser.add_argument('--' + name, required=True)
     return parser.parse_args()
@@ -44,21 +44,16 @@ def main():
     source = Path(__file__).resolve().parent
     artifacts = Path(args.artifacts).resolve()
     policy_bytes = Path(args.policy).read_bytes()
-    document = json.loads(policy_bytes)
-    pilot = document['network']['pilot']
-    host_rules = [r for r in document['network']['rules'] if r['destination']['kind'] == 'hostname']
-    if len(host_rules) != 1 or host_rules[0]['family'] != 'ipv4':
-        raise ValueError('one public IPv4 HTTPS hostname rule is required')
-    ip = pilot['taskboard_ip']
-    authority = ('[' + ip + ']' if ':' in ip else ip) + ':' + str(pilot['taskboard_port'])
-    digest = subprocess.check_output([str(artifacts / 'pilot-network-diagnostic'),
-                                      'policy-digest', str(Path(args.policy).resolve())], timeout=5).decode().strip()
-    data = dict(instance=args.instance, source=args.source_revision, policy=digest,
-                hostname=host_rules[0]['destination']['value'], public_address=args.public_address,
+    info = json.loads(subprocess.check_output([str(artifacts / 'pilot-network-diagnostic'),
+                                               'network-info', str(Path(args.policy).resolve())], timeout=5))
+    board = info['document']['taskboard']
+    authority = board['address'] + ':' + str(board['port'])
+    data = dict(instance=args.instance, source=args.source_revision,
+                policy_format='agentgate.network-poc.v1',
                 target_image=image_id(args.target_image, args.source_revision),
                 bridge_image=image_id(args.bridge_image, args.source_revision),
                 taskboard_url=urlunsplit(('http', authority, '/', '', '')),
-                task_id=pilot['taskboard_task_id'], ipv6_subnet=args.ipv6_subnet)
+                task_id=board['task_id'], ipv6_subnet=args.ipv6_subnet)
     settings = validate_settings(data, root)
     token = read_root_file(Path(args.token_file).resolve())
     if not 16 <= len(token.strip()) <= 4096:
@@ -67,7 +62,7 @@ def main():
     root.mkdir(mode=0o700)
     names = ['gateway.py', 'operator-gateway.py', 'settings.py', 'run-in-target.sh',
              'prepare-command.sh', 'start-target.sh', 'restart-target.sh', 'start-guard.sh',
-             'install-key.py', 'stop.py']
+             'install-key.py', 'stop.py', 'prepare-policy.py', 'prepare-resolver.py']
     for name in names:
         shutil.copyfile(source / name, root / name)
         (root / name).chmod(0o500)
@@ -81,6 +76,7 @@ def main():
     (root / 'secrets').mkdir(mode=0o700)
     (root / 'secrets/taskboard.token').write_bytes(token)
     (root / 'secrets/taskboard.token').chmod(0o600)
+    checked_run(['python3', str(root / 'prepare-policy.py')])
     checked_run([str(root / 'start-target.sh')])
     # The first SSH request starts a fresh target. Setup never executes a payload.
     checked_run(['docker', 'rm', '-f', settings['name']], stdout=subprocess.DEVNULL)
