@@ -1,7 +1,7 @@
 {
   "schema": "agentgate.community.source-preview.v1",
-  "source_id": "agentgate-community-sha256:a6567fd587a25d353b5cd850648ffb5fcb08d1330b5ba400a545a37fb160ea9c",
-  "source_sha256": "a6567fd587a25d353b5cd850648ffb5fcb08d1330b5ba400a545a37fb160ea9c",
+  "source_id": "agentgate-community-sha256:d1262f32cbfafc6494deb0dba457a2344c536ebab69bb99b6b17d0ed5227b069",
+  "source_sha256": "d1262f32cbfafc6494deb0dba457a2344c536ebab69bb99b6b17d0ed5227b069",
   "stage": "experimental-source-preview",
   "committed_bytes_verified": true,
   "qualification": "experimental; no complete workload qualification",
@@ -198,8 +198,8 @@
     },
     {
       "path": "Dockerfile",
-      "bytes": 4989,
-      "sha256": "72fc5ed82f131a854aeba3ee73df654712bd732242b5910eceb87aff4c292ad5"
+      "bytes": 5072,
+      "sha256": "68cc024cc878fc0f0422bdc4e89ed830e52310847e0f02dafef07f8bed0889a4"
     },
     {
       "path": "docs/ARCHITECTURE.md",
@@ -3441,7 +3441,7 @@
     {
       "path": "SBOM.cdx.json",
       "bytes": 89534,
-      "sha256": "eb3d70e424e51eff5dc6fa7094a1f80f92ef0a31f3c88f670a23cde397bcdc39"
+      "sha256": "fd9a6b64a99803af0ea777c8493384cd69a626efc38b00cd58d09ba4b1a827c3"
     }
   ]
 }
