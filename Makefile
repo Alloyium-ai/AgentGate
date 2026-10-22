@@ -19,3 +19,9 @@ build/pilot-network-diagnostic:
 build/network_policy.bpf.o:
 	mkdir -p build
 	clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I/usr/include/x86_64-linux-gnu -c bpf/network_policy.bpf.c -o $@
+build/fs_access.bpf.o:
+	mkdir -p build
+	clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I/usr/include/x86_64-linux-gnu -c bpf/fs_access.bpf.c -o $@
+build/process_guard.bpf.o:
+	mkdir -p build
+	clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I/usr/include/x86_64-linux-gnu -c bpf/process_guard.bpf.c -o $@

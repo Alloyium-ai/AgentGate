@@ -27,7 +27,7 @@ def validate_settings(data, root):
                          ('bridge_image', r'sha256:[a-f0-9]{64}')]:
         if not isinstance(data[key], str) or not re.fullmatch(pattern, data[key]):
             raise ValueError('invalid diagnostic digest: ' + key)
-    if data['policy_format'] != 'agentgate.network-poc.v1':
+    if data['policy_format'] not in ('agentgate.network-poc.v1', 'agentgate.poc.v2'):
         raise ValueError('invalid network policy format')
     url = urlsplit(data['taskboard_url'])
     host = ipaddress.ip_address(url.hostname or '')
@@ -47,6 +47,7 @@ def validate_settings(data, root):
                   domain='/sys/fs/cgroup/' + prefix + '-domain',
                   cgroup='/sys/fs/cgroup/' + prefix + '-domain',
                   pins='/sys/fs/bpf/ag-mvp-net-' + prefix + '-domain',
+                  host_pins='/sys/fs/bpf/ag-mvp-host-' + prefix + '-domain',
                   name=prefix + '-target', target=prefix + '-target', network=prefix + '-net',
                   workspace=prefix + '-work', bridge=prefix + '-bridge-volume',
                   bridge_container=prefix + '-bridge', bridge_network=prefix + '-bridge-net',
@@ -77,6 +78,9 @@ def effective_policy(root, data):
 if __name__ == '__main__':
     path = Path(sys.argv[1])
     values = load_settings(path)
-    values['policy'] = effective_policy(path.parent, values)['digest']
+    info = effective_policy(path.parent, values)
+    values['policy'] = info['digest']
+    # The active policy, not the install-time format, decides the host controls.
+    values['host_controls'] = '1' if info['document'].get('filesystem') is not None else '0'
     for key, value in values.items():
         print(f'{key}={shlex.quote(str(value))}')

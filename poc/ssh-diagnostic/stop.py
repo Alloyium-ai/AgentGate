@@ -19,7 +19,7 @@ def main():
         domain = Path(settings['domain'])
         if domain.exists() and 'populated 0' not in (domain / 'cgroup.events').read_text().splitlines():
             raise RuntimeError('diagnostic domain is active; retry after the command ends')
-        if Path(settings['pins']).exists():
+        if Path(settings['pins']).exists() or Path(settings['host_pins']).exists():
             raise RuntimeError('guard pins remain; inspect the private guard log before stopping')
         public = (root / 'poc-key.pub').read_text().split()
         key_path = Path('/root/.ssh/authorized_keys')

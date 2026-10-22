@@ -10,7 +10,7 @@ The launcher removes the target and releases guard pins only after the domain is
 One request runs at a time. TTY, agent forwarding, and port forwarding stay disabled for the POC key.
 
 This is an **experimental network guard and container POC**.
-Normal product admission remains closed. Full filesystem, process, syscall, and UI approval controls remain incomplete.
+Normal product admission remains closed. Syscall filtering and UI approval controls remain incomplete; filesystem and process controls are opt-in and unverified on a kernel (see Host controls below).
 The trusted bridge makes an authenticated live `GET /api/tasks/ID` for one task.
 The target receives a Unix socket and four task fields. It receives no upstream bearer token.
 The bridge exposes `/task` and `/auth-probe`; other paths and methods return 403.
@@ -86,7 +86,7 @@ You can also build the coding stage directly with `--build-arg CODING_BASE_IMAGE
 
 Copy [policy.example.json](policy.example.json) to `policy.json`.
 Edit its taskboard address, port, and task ID before setup. The example contains no credentials.
-The JSON policy controls the real BPF network guard for this SSH POC.
+The JSON policy controls the real BPF network guard for this SSH POC. Version two documents also control the host components below.
 The browser UI does not edit this POC policy.
 
 The default policy denies all endpoints, then allows:
@@ -129,6 +129,42 @@ The launcher replaces only its fresh target's generated resolver file, so ordina
 It uses no per-host address mapping, DNS over TLS, or `curl --resolve`.
 The POC requires `duration_seconds: 25`; the command cutoff stays fixed at 25 seconds.
 The taskboard fields bind the authenticated bridge. Create a new instance to change those fields.
+
+## Host controls: filesystem, executables, and processes (experimental)
+
+A version two policy (`agentgate.poc.v2`, see [policy.full.example.json](policy.full.example.json)) adds explicit `filesystem` and `process`
+sections. The guard then also attaches the BPF LSM filesystem component (`bpf/fs_access.bpf.c`) and the process component
+(`bpf/process_guard.bpf.c`) to the same per-command cgroup, before the command starts. A version one policy behaves exactly as before.
+
+- **Filesystem:** every path is denied unless a list names it. `workspace` and `scratch` trees are writable (read, write, create, mkdir,
+  delete, rename, symlink, chmod/chown) and never executable. `read_only` trees can be read and mapped. `execute` trees can also run
+  programs and map code. `devices` is a subset of `/dev/{null,zero,full,random,urandom,tty}`. `deny` trees refuse everything and
+  override a broader allowance. Hard links are never allowed, device nodes cannot be created, and `ioctl` is limited to five
+  descriptor queries. Ancestor directories of allowed trees get an exact-path read so `stat` works.
+- **Executables:** `execute` entries are the program allowlist. A writable tree may not also be executable; the policy refuses that
+  overlap. A binary a command writes cannot be run.
+- **Memory:** anonymous mappings may be read, written, and re-protected. Executable anonymous memory (a JIT or libffi closure)
+  needs `"anonymous_execute": true`.
+- **Processes:** a command may signal only its own tree, and only the listed signals. Tracing (`ptrace` attach, `PTRACE_TRACEME`) is always
+  denied. Signal 0 existence probes are denied.
+- **Sockets:** the filesystem component delegates socket I/O to the network guard, which is attached first. The command's stdin, stdout,
+  and stderr are pipes the gateway made outside the domain; the plan allows those and no pipe from another job.
+
+To make this possible the runner joins the cgroup last. It opens `cgroup.procs` as root, enters the target namespaces, and the
+unprivileged shell writes its own PID, closes the descriptor, verifies its cgroup, and only then runs the command. A failed join exits 125
+without running the command. The receipt gains a `host` block: per-operation counts, a SHA-256 over the whole raw event stream, the first
+2000 denials with their paths, and loss counters. Any lost or malformed event marks the receipt incomplete. The gateway also refuses to run
+unless all 23 host links are pinned, and it stops the command if one disappears.
+
+**Verification status.** The Go planning, the shell join logic, and the evidence accounting have unit tests. The BPF objects compile
+cleanly, and their kernel-named structs and fields match a current kernel's BTF. **No BPF LSM kernel was available when this was
+written, so the verifier, the hooks, and the end-to-end behavior are not yet exercised.** Expect first-boot fixes. Known limits:
+
+- The path-building hooks (`path_mknod`, `path_mkdir`, `path_unlink`, `path_rmdir`, `path_rename`, `path_symlink`) rely on `bpf_d_path`
+  being allowed for those hooks. If a kernel refuses one, the object fails to load and the guard fails closed.
+- There is no syscall filter. The container keeps Docker's default seccomp profile. `setxattr`/`utimes` are not path-checked.
+- Every command loads and attaches the 23 hooks again; expect added start-up latency.
+- Policy covers a command's tree only from the moment it joins. The trusted helpers before that run unrestricted.
 
 ## Prerequisites
 

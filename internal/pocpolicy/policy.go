@@ -44,6 +44,9 @@ type Document struct {
 	Web             Web       `json:"web"`
 	Taskboard       Taskboard `json:"taskboard"`
 	DurationSeconds int       `json:"duration_seconds"`
+	// Version two documents also carry the host controls below.
+	Filesystem *Filesystem `json:"filesystem,omitempty"`
+	Process    *Process    `json:"process,omitempty"`
 }
 
 // Parse rejects unknown fields, duplicate keys, trailing values, and invalid policy.
@@ -111,8 +114,11 @@ func publicIPv4(raw string) bool {
 	return true
 }
 func (d Document) Validate() error {
-	if d.Version != "agentgate.network-poc.v1" || d.Default != "deny" || d.IPv6 != "deny" || d.DurationSeconds != 25 {
-		return errors.New("network policy requires version agentgate.network-poc.v1, deny defaults, and duration_seconds 25")
+	if (d.Version != VersionV1 && d.Version != VersionV2) || d.Default != "deny" || d.IPv6 != "deny" || d.DurationSeconds != 25 {
+		return errors.New("network policy requires version " + VersionV1 + " or " + VersionV2 + ", deny defaults, and duration_seconds 25")
+	}
+	if err := d.validateHostControls(); err != nil {
+		return err
 	}
 	if len(d.DNS.Resolvers) < 1 || len(d.DNS.Resolvers) > 3 || d.DNS.Port != 53 || len(d.DNS.Protocols) != 2 ||
 		!((d.DNS.Protocols[0] == "udp" && d.DNS.Protocols[1] == "tcp") ||

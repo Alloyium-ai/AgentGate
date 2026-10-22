@@ -1,7 +1,7 @@
 {
   "schema": "agentgate.community.source-preview.v1",
-  "source_id": "agentgate-community-sha256:c8f641d11234c8c25569f39dc264e4209d07cff8510d5af93835ec774a6fb10f",
-  "source_sha256": "c8f641d11234c8c25569f39dc264e4209d07cff8510d5af93835ec774a6fb10f",
+  "source_id": "agentgate-community-sha256:62c4effa0a0f172b2f44ebf5ce2a553674dda82d3886ef0ec15746470be83a04",
+  "source_sha256": "62c4effa0a0f172b2f44ebf5ce2a553674dda82d3886ef0ec15746470be83a04",
   "stage": "experimental-source-preview",
   "committed_bytes_verified": true,
   "qualification": "experimental; no complete workload qualification",
@@ -18,8 +18,8 @@
     },
     {
       "path": "bpf/fs_access.bpf.c",
-      "bytes": 19203,
-      "sha256": "88c42c64392eba8fffb0738e5c46ac63b0dfc2f3257598d47dcea717d2d874ed"
+      "bytes": 24068,
+      "sha256": "7199c21dbfd9d84fafe7dc5610bb78e459541018f6b805b851e5d9a6f71bbcd8"
     },
     {
       "path": "bpf/network_abi.h",
@@ -97,9 +97,19 @@
       "sha256": "ffd02cd11f72b2d920b39edf26d3c29e1fc54bf42c77cd80a17f54bc0209b6f5"
     },
     {
+      "path": "cmd/pilot-network-diagnostic/hostguard_test.go",
+      "bytes": 3979,
+      "sha256": "810a0a986888c4fff9d5e657a1deb1e8133969c642517707e6c2908bade53057"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/hostguard.go",
+      "bytes": 11926,
+      "sha256": "a9a6ddb5e72209d0bb6a79bc72fe6cc741cb0f22941bcf6a3648cb4e695d41e0"
+    },
+    {
       "path": "cmd/pilot-network-diagnostic/main.go",
-      "bytes": 10609,
-      "sha256": "370a52d21ab6e64b0830b4080fc2406bc9f83d4d0ac4938265e004410c0ff7d2"
+      "bytes": 11837,
+      "sha256": "9dc1f35606462be26c4067f548c5a0047b320bfd9114a8b3a699a4700486efd7"
     },
     {
       "path": "cmd/pilot-network-diagnostic/network_policy.go",
@@ -178,8 +188,8 @@
     },
     {
       "path": "COMPONENT-LICENSES.json",
-      "bytes": 76442,
-      "sha256": "7134d50a68a6b49496d56c18f09cba277d38fdcfb049058d4fd8c78f6ee47599"
+      "bytes": 77060,
+      "sha256": "fa7d1cd0c652d93c0f96853ca632cb2ed52b25f328c59f5cd6cc1573c4f84f75"
     },
     {
       "path": "compose.yaml",
@@ -853,13 +863,13 @@
     },
     {
       "path": "internal/fsrules/compile_test.go",
-      "bytes": 9207,
-      "sha256": "96109c4559b1f4d8d91f08c8338eda04afb0c638e6ecbd7a2277db3004779a2c"
+      "bytes": 12718,
+      "sha256": "b7c8953496cda68bb0eebda6346f0c6d55288533394f3787d35aff5dbdc9df12"
     },
     {
       "path": "internal/fsrules/compile.go",
-      "bytes": 7635,
-      "sha256": "111314420a5475966f3e0f1389bb42b7580056d38c9776a022b7c087dde12524"
+      "bytes": 8786,
+      "sha256": "93414e4a98d3cb08db9547c829f450a9c11eb4dba9e0f680a47adee5a6487226"
     },
     {
       "path": "internal/fsrules/readback.go",
@@ -868,13 +878,13 @@
     },
     {
       "path": "internal/fsrules/runtime.go",
-      "bytes": 6427,
-      "sha256": "c5cdf8af07230057afb90694207b5484da35763693b1be6f73da36550a371ab4"
+      "bytes": 6806,
+      "sha256": "2b73cd20e345218fd12d54f446ba2e6421e823ec73564a0930a86f742ea58073"
     },
     {
       "path": "internal/fsrules/socket_guard.go",
-      "bytes": 2556,
-      "sha256": "c8d883813a6ef338daa2cad32f0047e434422ad1b3f082e11cbbdfa57b61f9c6"
+      "bytes": 3017,
+      "sha256": "d3afef3e62594a1d8b7db990a63ee6e377541350b44e87eeb078c817d352dba4"
     },
     {
       "path": "internal/grant/grant_test.go",
@@ -2037,14 +2047,24 @@
       "sha256": "b24059e607de82ef3e1530748c3e7ed02b3f444eb807569f60671343241394e7"
     },
     {
+      "path": "internal/pocpolicy/filesystem_test.go",
+      "bytes": 7122,
+      "sha256": "2acf74b6235f97e715f6a3f5cf9ebef23a2001467a57a8a35b422da51ca5be2b"
+    },
+    {
+      "path": "internal/pocpolicy/filesystem.go",
+      "bytes": 11506,
+      "sha256": "f2241afe1668d9af67224db4fb7102e1d3c856a7670587169f9d9baa40043b7f"
+    },
+    {
       "path": "internal/pocpolicy/policy_test.go",
       "bytes": 3232,
       "sha256": "34b6403f70fea333615305128edd05eb1ec3bed014f1462c7858100e399e57f2"
     },
     {
       "path": "internal/pocpolicy/policy.go",
-      "bytes": 6798,
-      "sha256": "af97e42e0b98352eb64cc45429836f8fca91ae595a921973dc025e5596e52944"
+      "bytes": 7056,
+      "sha256": "039821ee271ee5a7705a26be7697f5721d8ad56fded7576d782c0a4c2189b7a3"
     },
     {
       "path": "internal/policy/digest_test.go",
@@ -2813,13 +2833,13 @@
     },
     {
       "path": "Makefile",
-      "bytes": 874,
-      "sha256": "6aedf9c4c483674db98624dbf8c19fc382b097afd8e74f4df828466c0fb6c071"
+      "bytes": 1174,
+      "sha256": "99ea6f3c7008b1e6f8dd92f23f982bf252cbf6b017294c791b83fb9687898b40"
     },
     {
       "path": "poc/ssh-diagnostic/appliance_build.py",
-      "bytes": 5652,
-      "sha256": "f7da36899133976b0efb7966cc379ca5c44dced24915f01b414a9cb24958dec4"
+      "bytes": 5694,
+      "sha256": "dd90577f0375864eb9fd15952c649367271c29deec87d1f1337aa267a0a53a60"
     },
     {
       "path": "poc/ssh-diagnostic/appliance_common.py",
@@ -2848,18 +2868,18 @@
     },
     {
       "path": "poc/ssh-diagnostic/configure.py",
-      "bytes": 4229,
-      "sha256": "1bc50407e47dd61670a5a65f2633c97f1810feec0ef28cc372e93a88a9cb05ec"
+      "bytes": 4359,
+      "sha256": "224ac5499304577ba75104431ae58e3bd4ef02c608a7c66e9f5f4f4f74c0d484"
     },
     {
       "path": "poc/ssh-diagnostic/Dockerfile",
-      "bytes": 2128,
-      "sha256": "34e72d4dad93ce27859f38446612b25f7e96c984dabb4ec42b692450c6731de8"
+      "bytes": 2305,
+      "sha256": "a39db04ee9d15a5cf0529e97ae0c6ef6f8ab67224407d3fb5272a387a717e6db"
     },
     {
       "path": "poc/ssh-diagnostic/gateway.py",
-      "bytes": 11172,
-      "sha256": "4e78b2ff8ede82a9667cc27a10e0d22681aec5969e027a60291cbe05299ffb78"
+      "bytes": 12031,
+      "sha256": "dd597c37bfb923b0dbc77e740d515810469b15aa0dbcffa2429fe7a3c5b5a58a"
     },
     {
       "path": "poc/ssh-diagnostic/image_contract.py",
@@ -2882,9 +2902,14 @@
       "sha256": "8bdbe40d620106663d3fd4a4ee0548d2ee10cc5c4d57b6a1a84b490a0130a267"
     },
     {
+      "path": "poc/ssh-diagnostic/policy.full.example.json",
+      "bytes": 1334,
+      "sha256": "81ad323dd0fc4175be0c88a3bb808ea659537a83b7ffc21ee738a2d02da5025e"
+    },
+    {
       "path": "poc/ssh-diagnostic/prepare-command.sh",
-      "bytes": 969,
-      "sha256": "52e34f94a45447c9b895e31d86613bfb559238e5d42256b8cbc9bd9f4f8c4e42"
+      "bytes": 995,
+      "sha256": "f38d45f325f6a32585edc9b975c5bb910962bfbb2e9d42f708a8913fb255ca92"
     },
     {
       "path": "poc/ssh-diagnostic/prepare-policy.py",
@@ -2898,8 +2923,8 @@
     },
     {
       "path": "poc/ssh-diagnostic/README.md",
-      "bytes": 14457,
-      "sha256": "c2dbf7dcdc362c0064fba1cecc7fe88206dca1ffc0cbfc32f9da0ab4b5ec7e52"
+      "bytes": 18073,
+      "sha256": "ecc6b2b3ceaeb5ec307e194b93e200ac0c30fec486580d431a44994e17f8e803"
     },
     {
       "path": "poc/ssh-diagnostic/resolve.py",
@@ -2913,18 +2938,18 @@
     },
     {
       "path": "poc/ssh-diagnostic/run-in-target.sh",
-      "bytes": 819,
-      "sha256": "b749f11ad6d40a6268698358443cfd499aa1252c60f785fefcc9b43fa62879ec"
+      "bytes": 1915,
+      "sha256": "96b0ec197153fd2936730bf235e1d4e3d5c84e82290744556ce5a873f1755ff1"
     },
     {
       "path": "poc/ssh-diagnostic/settings.py",
-      "bytes": 3918,
-      "sha256": "0cd65a780185bffba43974c7f17d93d29df07370552673d4bbd75a393724a8a2"
+      "bytes": 4211,
+      "sha256": "b19981db25d284f290136131dcc3b0d7557e3d58d3e5d08dbd0162d0b6ef5a45"
     },
     {
       "path": "poc/ssh-diagnostic/start-guard.sh",
-      "bytes": 2754,
-      "sha256": "43d1242f49c3df8fc0ad5828680e446c7bd917d524ca72f760ad7db668e0c92a"
+      "bytes": 3308,
+      "sha256": "81f8fc5cefaabf18b70f32bf8a26cf0c3bef591a9d0150a37bea9e86fe3e9716"
     },
     {
       "path": "poc/ssh-diagnostic/start-target.sh",
@@ -2933,8 +2958,8 @@
     },
     {
       "path": "poc/ssh-diagnostic/stop.py",
-      "bytes": 2338,
-      "sha256": "4f0c5132987cd753c40a766ffed3d6fa080d7f24c26f1a1b54f96bcfff019ee0"
+      "bytes": 2378,
+      "sha256": "c42fe1b302467e8564d1021d64b633a1690c5c32f62e08e01802ec6adb81277d"
     },
     {
       "path": "poc/ssh-diagnostic/test_appliance.py",
@@ -2943,8 +2968,8 @@
     },
     {
       "path": "poc/ssh-diagnostic/test_gateway.py",
-      "bytes": 7606,
-      "sha256": "e119f4334ac650d24e14c544004fb27a348393803486638d5137070879b9a6f7"
+      "bytes": 11229,
+      "sha256": "7554ae86d768a2b58787b0edb14b5d1b0b5c1c31f5c042b0cafd492177446a4c"
     },
     {
       "path": "poc/ssh-diagnostic/test_setup.py",
@@ -2953,8 +2978,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 5920,
-      "sha256": "64bbe0cd2e6f3f77584bbbfd0fe0f3a0d300b9bda01b0e61a44b855068d1e97f"
+      "bytes": 6061,
+      "sha256": "bffe174e6408ca12f014c89b10a9aa21fde7414163375b59f67638645d516146"
     },
     {
       "path": "settings.json",

@@ -56,12 +56,13 @@ type receipt struct {
 	FinishedMonoNS uint64                       `json:"finished_mono_ns"`
 	Events         []event                      `json:"events"`
 	Counters       counters                     `json:"counters"`
+	Host           *hostEvidence                `json:"host,omitempty"`
 	Complete       bool                         `json:"complete"`
 }
 
 func run() (err error) {
-	if len(os.Args) != 10 || os.Geteuid() != 0 {
-		return errors.New("usage: pilot-network-guard TARGET POLICY OBJECT HOST ADDRESS READY RECEIPT SOURCE ROOT_DOMAIN_PATH")
+	if (len(os.Args) != 10 && len(os.Args) != 12) || os.Geteuid() != 0 {
+		return errors.New("usage: pilot-network-guard TARGET POLICY OBJECT HOST ADDRESS READY RECEIPT SOURCE ROOT_DOMAIN_PATH [FILESYSTEM_OBJECT PROCESS_OBJECT]")
 	}
 	targetPath, policyPath, objectPath, hostname, address, readyPath, receiptPath, source := os.Args[1], os.Args[2], os.Args[3], os.Args[4], os.Args[5], os.Args[6], os.Args[7], os.Args[8]
 	cgroup := os.Args[9]
@@ -103,6 +104,7 @@ func run() (err error) {
 	var simple pocpolicy.Document
 	var digest string
 	var duration int
+	hostObjects := len(os.Args) == 12
 	var addr netip.Addr
 	var ruleID string
 	var publicPort uint16
@@ -114,7 +116,15 @@ func run() (err error) {
 		}
 		digest = simple.Digest()
 		duration = simple.DurationSeconds
+		// A host-control policy without its objects, or objects without that
+		// policy, would silently run with less or more than the operator wrote.
+		if simple.HasHostControls() != hostObjects {
+			return errors.New("filesystem and process objects must accompany exactly the policies that declare them")
+		}
 	} else {
+		if hostObjects {
+			return errors.New("host controls require the simple network policy format")
+		}
 		document, err = policy.Parse(raw, "json")
 		if err != nil {
 			return err
@@ -232,6 +242,7 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
+	var host *hostGuard
 	defer func() {
 		empty, checkErr := domainIsEmpty(cgroup)
 		if checkErr != nil {
@@ -239,9 +250,20 @@ func run() (err error) {
 		} else if !empty {
 			err = errors.Join(err, errors.New("diagnostic domain still populated; kernel pins retained"))
 		} else {
-			err = errors.Join(err, pins.release())
+			err = errors.Join(err, pins.release(), host.release())
 		}
 	}()
+	if hostObjects {
+		// The network links above must already be live: the filesystem policy
+		// delegates socket I/O to them. Policies install before any hook attaches.
+		if host, err = attachHost(simple, cgroup, stat.Ino, deadline, os.Args[10], os.Args[11]); err != nil {
+			return err
+		}
+		defer host.close()
+		if err = host.pin(); err != nil {
+			return err
+		}
+	}
 	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if err != nil {
 		return err
@@ -289,12 +311,20 @@ func run() (err error) {
 	}
 	if simpleMode {
 		out.Scope = "experimental-network-poc-only; no normal admission"
+		if hostObjects {
+			out.Scope = "experimental-network-and-host-poc-only; no normal admission"
+		}
 		out.Complete = out.Counters.Lost == 0 && out.Counters.Decisions == uint64(len(out.Events))
 		if len(out.Events) > 0 {
 			out.Complete = completeGuardEvents(out.Events, out.Counters, out.Domain, out.StartedMonoNS, out.FinishedMonoNS)
 		}
 	} else {
 		out.Complete = completePilotBoundary(out, *document.Network.Pilot, addr, publicPort)
+	}
+	if host != nil {
+		evidence := host.finish()
+		out.Host = &evidence
+		out.Complete = out.Complete && evidence.Complete
 	}
 	encoded, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
@@ -304,7 +334,7 @@ func run() (err error) {
 		return err
 	}
 	if !out.Complete {
-		return errors.New("network event loss or count mismatch")
+		return errors.New("network or host event loss, count mismatch, or malformed record")
 	}
 	return nil
 }

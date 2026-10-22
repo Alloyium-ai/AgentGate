@@ -13,6 +13,10 @@ import sys
 import time
 
 MAX_PENDING_OUTPUT = 1 << 20
+# Network guard links, and the host-control links (20 filesystem LSM hooks plus
+# 3 process LSM hooks). Go tests pin the host count to the compiled program lists.
+NETWORK_LINKS = 6
+HOST_LINKS = 23
 
 
 def read_root_file(path):
@@ -48,12 +52,12 @@ def alive(pid, ticks):
         return False
 
 
-def pins_live(path):
+def pins_live(path, count=NETWORK_LINKS):
     try:
         meta = os.lstat(path)
         if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != 0 or meta.st_mode & 0o077:
             return False
-        for index in range(6):
+        for index in range(count):
             item = os.lstat(os.path.join(path, f'link-{index}'))
             if not stat.S_ISREG(item.st_mode) or item.st_uid != 0:
                 return False
@@ -176,17 +180,25 @@ def main():
     wanted = {'container', 'container_id', 'image_id', 'network', 'domain',
               'runner_path', 'runner_sha256', 'guard_pid', 'guard_start_ticks',
               'guard_ready', 'guard_pins', 'deadline_ns', 'audit_path',
-              'source_revision', 'policy_digest'}
+              'source_revision', 'policy_digest', 'host_controls', 'host_pins'}
     if set(config) != wanted or not config['container'].startswith('ag-mvp-') or \
        not config['domain'].startswith('/sys/fs/cgroup/ag-mvp-') or \
        not config['runner_path'].startswith('/var/lib/agentgate-poc-') or \
-       not config['guard_pins'].startswith('/sys/fs/bpf/ag-mvp-net-'):
+       not config['guard_pins'].startswith('/sys/fs/bpf/ag-mvp-net-') or \
+       not isinstance(config['host_controls'], bool) or \
+       config['host_controls'] != bool(config['host_pins']) or \
+       (config['host_controls'] and not config['host_pins'].startswith('/sys/fs/bpf/ag-mvp-host-')):
         raise ValueError('invalid SSH diagnostic binding')
+    host_controls = config['host_controls']
+
+    def guard_ok():
+        return alive(guard_pid, guard_ticks) and pins_live(config['guard_pins']) and \
+            (not host_controls or pins_live(config['host_pins'], HOST_LINKS))
     if hashlib.sha256(read_root_file(config['runner_path'])).hexdigest() != config['runner_sha256']:
         raise ValueError('diagnostic runner changed')
     guard_pid = int(config['guard_pid'])
     guard_ticks = int(config['guard_start_ticks'])
-    if not alive(guard_pid, guard_ticks) or not pins_live(config['guard_pins']) or \
+    if not guard_ok() or \
        read_root_file(config['guard_ready']) != b'guard-attached\n' or \
        time.monotonic_ns() >= int(config['deadline_ns']):
         raise ValueError('kernel guard unavailable')
@@ -201,14 +213,16 @@ def main():
     cleanup_wait_ns = 0
     process = None
     try:
+        # With host controls the runner joins the domain last, so the policy never
+        # applies to the trusted helpers that enter the target namespaces.
         process = subprocess.Popen([config['runner_path'], str(target['State']['Pid']),
-                                    config['domain'], command], stdin=sys.stdin.buffer,
+                                    config['domain'], command] + (['late-join'] if host_controls else []),
+                                   stdin=sys.stdin.buffer,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    start_new_session=True, env={'PATH': '/usr/bin:/bin'}, close_fds=True)
         state = 'relay_error'
         state, hashes, lengths = relay_process(
-            process, lambda: alive(parent, parent_ticks),
-            lambda: alive(guard_pid, guard_ticks) and pins_live(config['guard_pins']),
+            process, lambda: alive(parent, parent_ticks), guard_ok,
             int(config['deadline_ns']))
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
@@ -235,6 +249,7 @@ def main():
             append_audit(config['audit_path'], {
                 'scope': 'fixed-diagnostic-only; no normal admission',
                 'source_revision': config['source_revision'], 'policy_digest': config['policy_digest'],
+                'host_controls': host_controls,
                 'container_id': target['Id'], 'image_id': target['Image'],
                 'command_sha256': hashlib.sha256(command.encode()).hexdigest(),
                 'stdout_sha256': hashes['stdout'].hexdigest(), 'stderr_sha256': hashes['stderr'].hexdigest(),

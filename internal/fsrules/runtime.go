@@ -12,7 +12,7 @@ import (
 )
 
 // NewAccessRuntime loads the private access component only in the disposable VM.
-// It does not qualify a complete runtime, mutation policy, or workload admission.
+// It does not qualify a complete runtime or workload admission.
 func NewAccessRuntime(object, domain string) (*kernel.Runtime, error) {
 	return kernel.NewProfile(object, domain, AccessProfile())
 }
@@ -31,7 +31,7 @@ func AccessProfile() kernel.Profile {
 			}
 			return r.Collection.Maps["policies"].Update(r.ID, State{}, ebpf.UpdateNoExist)
 		},
-		LSMPrograms:    []string{"fs_alloc", "fs_free", "fs_open", "fs_use", "fs_receive", "fs_exec", "fs_mmap", "fs_mprotect", "fs_create", "fs_mkdir", "fs_mknod", "fs_unlink", "fs_rmdir", "fs_rename", "fs_link", "fs_symlink", "fs_chmod", "fs_chown", "fs_truncate", "fs_ioctl", "fs_getattr"},
+		LSMPrograms:    []string{"fs_alloc", "fs_free", "fs_open", "fs_use", "fs_receive", "fs_exec", "fs_mmap", "fs_mprotect", "fs_create", "fs_mkdir", "fs_unlink", "fs_rmdir", "fs_rename", "fs_link", "fs_symlink", "fs_chmod", "fs_chown", "fs_truncate", "fs_ioctl", "fs_getattr"},
 		ProgramOptions: ebpf.ProgramOptions{LogLevel: ebpf.LogLevelBranch | ebpf.LogLevelStats, LogSizeStart: 4 << 20},
 	}
 }
@@ -40,9 +40,9 @@ func validateAccessInstall(plan Plan, domain, now, current uint64) error {
 	return validateAccessInstallCoupled(plan, domain, now, current, false)
 }
 func validateAccessInstallCoupled(plan Plan, domain, now, current uint64, anonymous bool) error {
-	allowed := uint64(7)
+	allowed := uint64(7) | InheritedStdio
 	if anonymous {
-		allowed = 63 | AnonymousDelegation
+		allowed = 63 | AnonymousDelegation | InheritedStdio
 	}
 	if plan.state.Pipes&^allowed != 0 || plan.state.Pipes&uint64(56) != 0 && plan.state.Pipes&AnonymousDelegation == 0 {
 		return errors.New("explicit eventfd permissions require the qualified anonymous object guard")
@@ -53,7 +53,12 @@ func validateAccessInstallCoupled(plan Plan, domain, now, current uint64, anonym
 	for _, operation := range plan.allowOperations {
 		switch operation {
 		case "read", "write", "execute", "mmap", "map_execute", "mprotect", "descriptor_receive":
+		case "create", "mkdir", "delete", "rename", "symlink", "metadata":
+			if !plan.mutation {
+				return fmt.Errorf("file access component does not implement allowance %s without mutation enforcement", operation)
+			}
 		default:
+			// "hardlink" always lands here: the kernel hook has no path for the existing inode.
 			return fmt.Errorf("file access component does not implement allowance %s", operation)
 		}
 	}
@@ -70,7 +75,8 @@ func (plan Plan) CheckAccessWithAnonymous(domain, now uint64) error {
 }
 
 // InstallAccess serializes a complete staged forest and its active generation.
-// This private component permits no namespace mutation allowance.
+// Namespace mutation is decided by path policy only for a plan that carries the
+// explicit mutation mark. Hard links are never allowed.
 func InstallAccess(r *kernel.Runtime, plan Plan) error {
 	return installAccess(r, plan, nil)
 }

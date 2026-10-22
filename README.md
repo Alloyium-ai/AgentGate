@@ -21,7 +21,7 @@ The audit records the effective policy digest. The POC uses JSON directly; its b
 The guide includes the owned VM prerequisites, Docker builds, setup, command examples, and audit instructions.
 
 This is experimental software. The SSH POC supports a focused network flow with a 25-second command cutoff.
-Full filesystem, process, syscall, and UI approval controls remain incomplete.
+Filesystem, executable, and process controls are implemented for the SSH POC as an opt-in policy version, but they are not yet exercised on a BPF LSM kernel. Syscall filtering and UI approval controls remain incomplete.
 Normal full-policy product admission remains closed. This does not prevent the explicitly isolated SSH POC.
 
 The source includes a local policy API and browser UI, versioned policies, approval requests, basic roles, audit export and verification.

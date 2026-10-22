@@ -73,7 +73,7 @@
       "path": "bpf/fs_access.bpf.c",
       "kind": "BPF",
       "license": "GPL-2.0-only",
-      "preserved_sha256": "88c42c64392eba8fffb0738e5c46ac63b0dfc2f3257598d47dcea717d2d874ed"
+      "preserved_sha256": "7199c21dbfd9d84fafe7dc5610bb78e459541018f6b805b851e5d9a6f71bbcd8"
     },
     {
       "path": "bpf/network_abi.h",
@@ -3161,6 +3161,31 @@
     {
       "path": "poc/ssh-diagnostic/appliance/Dockerfile",
       "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/hostguard.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/hostguard_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/filesystem.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/filesystem_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/policy.full.example.json",
+      "kind": "metadata",
       "license": "Apache-2.0"
     }
   ]

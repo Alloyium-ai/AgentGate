@@ -55,7 +55,7 @@ def build(root, state, binding):
     copy = output(['docker', 'create', '--name', binding['name'] + '-copy', binding['images']['artifacts'], 'true'])
     try:
         (state / 'artifacts').mkdir(exist_ok=True)
-        for file in ('pilot-network-diagnostic', 'network_policy.bpf.o'):
+        for file in ('pilot-network-diagnostic', 'network_policy.bpf.o', 'fs_access.bpf.o', 'process_guard.bpf.o'):
             run(['docker', 'cp', copy + ':/' + file, str(state / 'artifacts' / file)])
     finally:
         run(['docker', 'rm', copy], stdout=subprocess.DEVNULL)

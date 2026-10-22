@@ -50,7 +50,7 @@ def main():
     board = info['document']['taskboard']
     authority = board['address'] + ':' + str(board['port'])
     data = dict(instance=args.instance, source=args.source_revision,
-                policy_format='agentgate.network-poc.v1',
+                policy_format=info['document']['version'],
                 target_image=image_id(args.target_image, args.source_revision),
                 bridge_image=image_id(args.bridge_image, args.source_revision),
                 taskboard_url=urlunsplit(('http', authority, '/', '', '')),
@@ -68,7 +68,8 @@ def main():
     for name in names:
         shutil.copyfile(source / name, root / name)
         (root / name).chmod(0o500)
-    for name in ('pilot-network-diagnostic', 'network_policy.bpf.o'):
+    # The host-control objects always install; the active policy decides each command.
+    for name in ('pilot-network-diagnostic', 'network_policy.bpf.o', 'fs_access.bpf.o', 'process_guard.bpf.o'):
         shutil.copyfile(artifacts / name, root / name)
         (root / name).chmod(0o500 if name == 'pilot-network-diagnostic' else 0o400)
     for name, content in [('settings.json', json.dumps(data).encode()), ('policy.json', policy_bytes),

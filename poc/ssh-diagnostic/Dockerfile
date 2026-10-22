@@ -9,9 +9,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/pilot-network-diagnostic cmd/pilot-network-diagnostic
 COPY internal internal
-COPY poc/ssh-diagnostic/policy.example.json poc/ssh-diagnostic/policy.example.json
+COPY poc/ssh-diagnostic/policy.example.json poc/ssh-diagnostic/policy.full.example.json poc/ssh-diagnostic/
 RUN printf '%s\n' "$SOURCE_REVISION" | grep -Eq '^[a-f0-9]{40}$' \
- && go test -p 2 ./cmd/pilot-network-diagnostic ./internal/dockerplacement ./internal/netrules ./internal/pocpolicy \
+ && go test -p 2 ./cmd/pilot-network-diagnostic ./internal/dockerplacement ./internal/netrules ./internal/pocpolicy ./internal/fsrules ./internal/processrules \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-X alloyium.local/kernel-poc/internal/buildinfo.SourceRevision=$SOURCE_REVISION" -o /out/pilot-network-diagnostic ./cmd/pilot-network-diagnostic
 RUN mkdir -p /out/licenses && cp /usr/local/go/LICENSE /out/licenses/Go-LICENSE \
  && go version -m /out/pilot-network-diagnostic > /out/build-modules.txt \
@@ -24,10 +24,11 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY bpf bpf
-RUN clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I/usr/include/x86_64-linux-gnu -c bpf/network_policy.bpf.c -o /network_policy.bpf.o
+RUN for object in network_policy fs_access process_guard; do \
+      clang -O2 -g -target bpf -D__TARGET_ARCH_x86 -I/usr/include/x86_64-linux-gnu -c "bpf/$object.bpf.c" -o "/$object.bpf.o" || exit 1; done
 FROM scratch AS artifacts
 COPY --from=guard /out/ /
-COPY --from=bpf /network_policy.bpf.o /
+COPY --from=bpf /network_policy.bpf.o /fs_access.bpf.o /process_guard.bpf.o /
 COPY LICENSE LICENSE-DOCS /licenses/
 COPY licenses/ /licenses/
 ARG SOURCE_REVISION

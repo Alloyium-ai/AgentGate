@@ -54,3 +54,13 @@ func EnableSocketDelegation(plan Plan, peer, socket, custody *kernel.Runtime) (P
 	plan.digest = planDigest(plan)
 	return plan, nil
 }
+
+// WithExternalSocketGuard marks sockets as governed by a separate mandatory
+// guard that this component cannot inspect. It permits no pathname right. The
+// caller must have attached that guard to the same domain before any workload
+// process joins. Without this mark every socket read and write is denied.
+func (plan Plan) WithExternalSocketGuard() Plan {
+	plan.state.SocketGeneration = plan.state.Generation
+	plan.digest = planDigest(plan)
+	return plan
+}

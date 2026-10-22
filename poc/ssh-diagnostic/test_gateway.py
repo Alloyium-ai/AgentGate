@@ -138,6 +138,65 @@ class GatewayCustodyTest(unittest.TestCase):
             (pins / 'link-5').symlink_to(pins / 'link-4')
             self.assertFalse(GATEWAY.pins_live(pins))
 
+    def test_host_control_pins_require_every_host_link(self):
+        if os.geteuid() != 0:
+            self.skipTest('root-owned diagnostic pin custody needs root')
+        with tempfile.TemporaryDirectory() as directory:
+            pins = pathlib.Path(directory) / 'pins'
+            pins.mkdir(mode=0o700)
+            for index in range(GATEWAY.HOST_LINKS):
+                (pins / f'link-{index}').write_bytes(b'pinned')
+            self.assertTrue(GATEWAY.pins_live(pins, GATEWAY.HOST_LINKS))
+            # A network-sized set never satisfies the host-control requirement.
+            (pins / f'link-{GATEWAY.HOST_LINKS - 1}').unlink()
+            self.assertTrue(GATEWAY.pins_live(pins))
+            self.assertFalse(GATEWAY.pins_live(pins, GATEWAY.HOST_LINKS))
+
+    def test_host_link_count_matches_the_compiled_program_lists(self):
+        source = (pathlib.Path(__file__).parents[2] / 'internal/fsrules/runtime.go').read_text()
+        listing = source.split('LSMPrograms:')[1].split('}')[0]
+        filesystem = len(__import__('re').findall(r'"fs_[a-z]+"', listing))
+        process = (pathlib.Path(__file__).parents[2] / 'internal/processrules/runtime.go').read_text()
+        hooks = len(__import__('re').findall(r'"process_[a-z]+"', process.split('func Programs')[1].split('}')[0]))
+        self.assertEqual(filesystem + hooks, GATEWAY.HOST_LINKS)
+        guard = (pathlib.Path(__file__).with_name('start-guard.sh')).read_text()
+        self.assertIn('seq 0 %d' % (GATEWAY.HOST_LINKS - 1), guard)
+
+    def test_late_join_runs_the_command_only_after_joining(self):
+        script = pathlib.Path(__file__).with_name('run-in-target.sh').read_text()
+        inner = script.split("/bin/sh -c \\\n    '")[1].split("' \\\n    agentgate-join")[0]
+        self.assertIn('echo "$$" >&3', inner)
+        unified = [line for line in pathlib.Path('/proc/self/cgroup').read_text().splitlines()
+                   if line.startswith('0::/')]
+        if len(unified) != 1:
+            self.skipTest('cgroup v2 membership format required')
+        current = unified[0]
+        member = current[len('0::/'):]
+        def join(procs, command, domain):
+            # The trusted runner opens the descriptor, so an outer shell does the same.
+            return subprocess.run(
+                ['/bin/sh', '-c', 'exec 3>"$1"; shift; exec /bin/sh -c "$@"', 'outer', str(procs),
+                 inner, 'agentgate-join', command, domain],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+
+        with tempfile.TemporaryDirectory() as directory:
+            procs = pathlib.Path(directory) / 'cgroup.procs'
+            done = join(procs, 'ls /proc/$$/fd | tr "\\n" " "', member)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertRegex(procs.read_text(), r'^\d+\n$')
+            # The command sees stdio only: the join descriptor is already closed.
+            self.assertNotIn('3', done.stdout.decode().split())
+            # A wrong membership exits 125 and never reaches the command.
+            marker = pathlib.Path(directory) / 'ran'
+            refused = join(procs, f'touch {marker}', 'not-this-domain')
+            self.assertEqual(refused.returncode, 125)
+            self.assertFalse(marker.exists())
+            # A failed join write also stops the command.
+            closed = subprocess.run(['/bin/sh', '-c', inner, 'agentgate-join', f'touch {marker}', member],
+                                    stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+            self.assertNotEqual(closed.returncode, 0)
+            self.assertFalse(marker.exists())
+
     def test_root_file_rejects_accessible_mode_and_symlink(self):
         if os.geteuid() != 0:
             self.skipTest('root-owned diagnostic file custody needs root')
