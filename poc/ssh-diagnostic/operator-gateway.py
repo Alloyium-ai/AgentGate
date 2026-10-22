@@ -146,6 +146,9 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise RuntimeError('operator diagnostic busy')
+    if (ROOT / 'appliance-stopping').exists():
+        os.close(lock)
+        raise RuntimeError('appliance stop requested; use the start command')
     pid = None
     result = 1
     try:

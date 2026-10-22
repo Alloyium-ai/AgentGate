@@ -11,8 +11,10 @@ test ! -e "$poc/config.json"
 docker container inspect "$name" >/dev/null 2>&1 && exit 2
 image=$(docker image inspect "$target_image" --format '{{.Id}}')
 bridge_image=$(docker image inspect "$bridge_image" --format '{{.Id}}')
+# /run is volatile across guest reboot. Restore only this configured root-owned mount.
+install -d -o 0 -g 0 -m 0711 "$artifact"
 bridge_container_id=$(docker inspect "$bridge_container" --format '{{.Id}}')
-docker run --pull never -d --name "$name" --init --network "$network" --read-only \
+docker run --pull never -d --name "$name" --no-healthcheck --init --network "$network" --read-only \
   --user 65534:65534 --cpus 1 --memory 512m --pids-limit 64 --cap-drop ALL \
   --security-opt no-new-privileges --tmpfs /tmp:mode=0700,size=64m \
   --mount "type=volume,source=$workspace,target=/var/lib/agentgate/workspace" \

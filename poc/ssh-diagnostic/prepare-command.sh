@@ -11,6 +11,8 @@ test ! -e "$pins"
 test ! -e "$root/guard-ready" && test ! -e "$root/config.json" && test ! -e "$root/guard-receipt.json"
 if docker container inspect "$target" >/dev/null 2>&1; then echo target_still_present >&2; exit 1; fi
 if test -e "$root/initialized"; then
+  # A guest reboot clears cgroups; the protected settings name only this owned domain.
+  test -d "$domain" || mkdir "$domain"
   "$poc/restart-target.sh"
 else
   test ! -e "$domain"

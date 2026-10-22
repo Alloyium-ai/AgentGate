@@ -17,6 +17,71 @@ The bridge exposes `/task` and `/auth-probe`; other paths and methods return 403
 This is a one-task read bridge. General taskboard API scope and identity remain incomplete.
 An allowed IP can serve several hostnames. The guard enforces endpoints, not HTTP host or TLS names on a shared IP.
 
+## One-command Docker appliance
+
+Use a Linux x86_64 host with Docker Engine, Docker Buildx, `/dev/kvm`, Python3, and OpenSSH client tools.
+The launcher fails clearly on unsupported hosts. It does not install a host kernel or change host SSH.
+The outer Docker container runs a disposable QEMU VM from a SHA256-verified public Ubuntu cloud image.
+The VM enables BPF LSM and installs Docker automatically. The existing kernel preflight remains mandatory.
+The first start needs network access for pinned images, the cloud image, and package installation.
+
+Copy `policy.example.json` to your protected `policy.json` and edit the taskboard fields.
+Supply the real taskboard token in a separate caller-owned file. Keep both files at mode0600.
+Run this command from a source checkout:
+
+```sh
+python3 poc/ssh-diagnostic/appliance.py start --policy ./policy.json --token-file ./taskboard.token
+```
+
+The command builds the separate guard, bridge, workload, and appliance images.
+It generates separate management, workload, and guest host keys before boot.
+It pins the guest host identity, validates the workload contract, and runs a real guarded readiness command.
+It prints `ready=true` and a complete SSH command that prints12.
+A bounded TCP relay preserves SSH bytes and half-close behavior while avoiding outer/guest Docker subnet overlap.
+The host listener binds only127.0.0.1 on port22365. Use `--port` for another loopback port.
+
+The default state directory is `~/.local/share/agentgate/poc`, mode0700.
+It retains the VM disk, keys, policy, audit, and Docker workspace. Use `--state DIR` for another instance.
+Matching `start` calls reuse the state and pinned keys.
+Use `--builder NAME` only to reuse an owned idle Buildx builder. The launcher retains the4 CPU/6 GiB limits. A changed source, base, port, token, or policy binding refuses overwrite.
+Interrupted image builds reuse matching initialization state. A partial guest installation refuses clearly and retains its evidence.
+
+```sh
+python3 poc/ssh-diagnostic/appliance.py status
+python3 poc/ssh-diagnostic/appliance.py audit
+python3 poc/ssh-diagnostic/appliance.py policy --policy ./policy.json
+python3 poc/ssh-diagnostic/appliance.py stop
+python3 poc/ssh-diagnostic/appliance.py start
+```
+
+The `policy` command validates and atomically applies rule edits for the next SSH command. It needs no image rebuild.
+Taskboard fields stay bound to the authenticated bridge. Create a new state directory to change those fields.
+Stop refuses an active command. It preserves the disk, workspace, audit, and keys.
+Start after stop and Docker restart reuse the same pinned identities.
+Inspect startup failures with `docker logs NAME` and the protected `build.log` in the state directory.
+The printed instance name also appears in `binding.json`.
+
+### Choose the workload base
+
+The default workload base uses the pinned Ubuntu image in `ssh/Dockerfile`.
+Only the coding stage uses `CODING_BASE_IMAGE`; the enforcer, bridge, and appliance keep their separate pins.
+For a Debian-compatible alternative, use a new state directory:
+
+```sh
+python3 poc/ssh-diagnostic/appliance.py start --state ~/.local/share/agentgate/debian-poc \
+  --policy ./policy.json --token-file ./taskboard.token --port 22366 --coding-base debian:bookworm-slim
+```
+
+The launcher resolves a supplied tag to a digest and records that digest in `binding.json`.
+Choose only trusted operator-selected Linux images. The contract checks prerequisites, not image trust.
+The coding Dockerfile needs Debian/Ubuntu-compatible `apt-get`. It installs Python3, curl, certificates, dash, and util-linux.
+The target requires `/bin/sh`, `/usr/bin/setpriv`, runtime directories, and UID/GID65534 execution.
+The launcher rejects declared image volumes, disables inherited health checks, and validates the image before key installation.
+It enforces UID/GID65534, read-only root, no capabilities, no-new-privileges, and the BPF guard regardless of base.
+The cleared command environment exposes `/usr/local/bin:/usr/bin:/bin`, including standard development tools.
+Alpine and arbitrary incompatible images are not supported by this Dockerfile.
+You can also build the coding stage directly with `--build-arg CODING_BASE_IMAGE=IMAGE` for the manual setup below.
+
 ## The editable network policy
 
 Copy [policy.example.json](policy.example.json) to `policy.json`.

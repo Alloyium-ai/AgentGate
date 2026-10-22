@@ -3122,6 +3122,46 @@
       "path": "poc/ssh-diagnostic/policy.example.json",
       "kind": "metadata",
       "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_common.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_build.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_guest.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/image_contract.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_appliance.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance/boot.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance/Dockerfile",
+      "kind": "code",
+      "license": "Apache-2.0"
     }
   ]
 }

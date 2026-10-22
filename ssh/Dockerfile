@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Dan Metcalf
+ARG CODING_BASE_IMAGE=ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 FROM oven/bun@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS runtime
 
 USER root
@@ -21,11 +22,14 @@ EXPOSE 2222
 ENTRYPOINT ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/ssh/sshd_config"]
 
 FROM runtime AS test
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 COPY --chmod=0444 ssh/tests/transport.test.ts /opt/agentgate/tests/
 COPY --chmod=0444 ssh/tests/taskboard_bridge.test.ts /opt/agentgate/tests/
 RUN chmod 0755 /opt/agentgate/tests && bun test /opt/agentgate/tests/transport.test.ts /opt/agentgate/tests/taskboard_bridge.test.ts
 
-FROM ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55 AS coding-target
+FROM ${CODING_BASE_IMAGE} AS coding-target
+USER root
+HEALTHCHECK NONE
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.revision=$SOURCE_REVISION
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1
@@ -44,6 +48,7 @@ ARG SOURCE_REVISION
 LABEL org.opencontainers.image.revision=$SOURCE_REVISION
 USER root
 WORKDIR /
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 RUN install -d -m 0755 /opt/agentgate
 COPY --chmod=0444 ssh/taskboard_bridge.mts /opt/agentgate/taskboard_bridge.mts
 ENTRYPOINT ["/usr/local/bin/bun", "/opt/agentgate/taskboard_bridge.mts"]

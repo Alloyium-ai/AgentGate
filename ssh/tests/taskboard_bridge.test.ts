@@ -5,7 +5,7 @@ import { createServer, request } from 'node:http'
 import { access, chmod, mkdtemp, readFile, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readBoundedTaskBody, startBridge } from '../taskboard_bridge.mts'
+import { readBoundedTaskBody, removeStaleSocket, startBridge } from '../taskboard_bridge.mts'
 
 const owned: Array<() => Promise<void>> = []
 afterAll(async () => { for (const close of owned.reverse()) await close() })
@@ -76,6 +76,36 @@ test('the Unix bridge exposes only one authenticated task read', async () => {
 test('the bridge bounds the full upstream task response before parsing', async () => {
   const response = new Response(JSON.stringify({description:'x'.repeat(1 << 20)}))
   await expect(readBoundedTaskBody(response)).rejects.toThrow('bridge-upstream-oversize')
+})
+
+test('startup removes only an unchanged owned stale Unix socket', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentgate-stale-socket-'))
+  owned.push(() => rm(root, {recursive:true, force:true}))
+  const socketPath = join(root, 'bridge.sock')
+  const child = Bun.spawn([process.execPath, '-e',
+    'require("node:net").createServer().listen(process.argv[1],()=>console.log("ready"))', socketPath],
+    {stdout:'pipe',stderr:'pipe'})
+  await child.stdout.getReader().read()
+  child.kill('SIGKILL'); await child.exited
+  await chmod(socketPath, 0o660)
+  await removeStaleSocket(socketPath, process.getgid())
+  await expect(access(socketPath)).rejects.toThrow()
+  await writeFile(socketPath, 'regular', {mode:0o660})
+  await expect(removeStaleSocket(socketPath, process.getgid())).rejects.toThrow('bridge-socket-custody-invalid')
+  await symlink(socketPath, join(root,'linked'))
+  await expect(removeStaleSocket(join(root,'linked'), process.getgid())).rejects.toThrow('bridge-socket-custody-invalid')
+})
+
+test('startup preserves an owned socket with a live listener', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agentgate-live-socket-'))
+  owned.push(() => rm(root, {recursive:true, force:true}))
+  const socketPath = join(root, 'bridge.sock')
+  const server = createServer()
+  await new Promise<void>(resolve => server.listen(socketPath, resolve))
+  owned.push(() => new Promise(resolve => server.close(() => resolve())))
+  await chmod(socketPath, 0o660)
+  await expect(removeStaleSocket(socketPath, process.getgid())).rejects.toThrow('bridge-socket-listener-active')
+  await access(socketPath)
 })
 
 test('the bridge rejects a linked token and a DNS-selected upstream', async () => {

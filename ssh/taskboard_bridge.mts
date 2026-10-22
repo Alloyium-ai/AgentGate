@@ -80,6 +80,35 @@ async function readToken(path: string): Promise<string> {
   }
 }
 
+export async function removeStaleSocket(path: string, gid: number): Promise<void> {
+  const before = await lstat(path).catch(error => {
+    if (error.code === 'ENOENT') return undefined
+    throw error
+  })
+  if (!before) return
+  if (!before.isSocket() || before.uid !== process.getuid() || before.gid !== gid ||
+      before.nlink !== 1 || (before.mode & 0o777) !== 0o660) throw new Error('bridge-socket-custody-invalid')
+  // The pinned Bun maps stale Unix connection failures to ENOENT. Read the
+  // native errno instead; only ECONNREFUSED permits removal of this inode.
+  const code = `import errno,socket,sys
+s=socket.socket(socket.AF_UNIX);s.settimeout(0.5)
+try:
+ s.connect(sys.argv[1]);sys.exit(2)
+except OSError as error:
+ sys.exit(0 if error.errno==errno.ECONNREFUSED else 3)
+finally:s.close()
+`
+  const probe = Bun.spawnSync(['/usr/bin/python3', '-c', code, path],
+    {timeout:1000,killSignal:'SIGKILL',stdin:'ignore',stdout:'pipe',stderr:'pipe'})
+  if (probe.exitCode === 2) throw new Error('bridge-socket-listener-active')
+  if (!probe.success) throw new Error('bridge-socket-probe-failed')
+  const after = await lstat(path)
+  if (!after.isSocket() || before.dev !== after.dev || before.ino !== after.ino ||
+      before.uid !== after.uid || before.gid !== after.gid || before.mode !== after.mode ||
+      before.nlink !== after.nlink) throw new Error('bridge-socket-custody-changed')
+  await unlink(path)
+}
+
 export async function startBridge(config: BridgeConfig): Promise<Server> {
   const upstream = requireConfig(config)
   const token = await readToken(config.tokenFile)
@@ -87,6 +116,7 @@ export async function startBridge(config: BridgeConfig): Promise<Server> {
   await mkdir(parent, { recursive: true, mode: 0o750 })
   await chown(parent, process.getuid(), config.socketGID)
   await chmod(parent, 0o750)
+  await removeStaleSocket(config.socketPath, config.socketGID)
   const taskURL = new URL(`/api/tasks/${config.taskID}`, upstream)
   const credentialGate = async (): Promise<number> => {
     const result = await fetch(taskURL, {

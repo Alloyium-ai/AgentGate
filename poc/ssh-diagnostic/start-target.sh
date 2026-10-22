@@ -40,7 +40,7 @@ done
 if test "$ready" -ne 1; then echo bridge_snapshot_absent >&2; exit 1; fi
 mkdir -p "$artifact"
 docker run --pull never --rm --network none --cpus 1 --memory 128m --pids-limit 32 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --user 0:0 --entrypoint /bin/sh -v "$artifact:/artifact" "$target_image" -ec 'chown 0:0 /artifact; chmod 0711 /artifact'
-docker run --pull never -d --name "$name" --init --network "$network" --read-only --user 65534:65534 --cpus 1 --memory 512m --pids-limit 64 --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:mode=0700,size=64m \
+docker run --pull never -d --name "$name" --no-healthcheck --init --network "$network" --read-only --user 65534:65534 --cpus 1 --memory 512m --pids-limit 64 --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:mode=0700,size=64m \
   --mount "type=volume,source=$workspace,target=/var/lib/agentgate/workspace" \
   --mount "type=bind,source=$artifact,target=/run/agentgate/streams" \
   --mount "type=volume,source=$bridge,target=/run/agentgate/taskboard,readonly" \

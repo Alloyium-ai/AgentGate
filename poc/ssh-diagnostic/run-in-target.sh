@@ -15,7 +15,7 @@ test -r "/proc/$target_pid/ns/net"
 test -r "/proc/$target_pid/root/bin/sh"
 test -x "/proc/$target_pid/root/usr/bin/setpriv"
 printf '%s\n' "$$" > "$domain/cgroup.procs"
-exec env -i PATH=/usr/bin:/bin nsenter --target "$target_pid" \
+exec env -i PATH=/usr/local/bin:/usr/bin:/bin nsenter --target "$target_pid" \
   --mount --net --pid --uts --ipc --root="/proc/$target_pid/root" \
   --wdns=/var/lib/agentgate/workspace --setuid=65534 --setgid=65534 -- \
   /usr/bin/setpriv --no-new-privs -- /bin/sh -c "$command"

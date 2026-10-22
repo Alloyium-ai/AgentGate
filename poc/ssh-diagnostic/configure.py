@@ -13,6 +13,7 @@ from urllib.parse import urlunsplit
 
 from gateway import read_root_file
 from settings import validate_settings
+from image_contract import validate_image
 
 
 def checked_run(args, **kwargs):
@@ -55,6 +56,7 @@ def main():
                 taskboard_url=urlunsplit(('http', authority, '/', '', '')),
                 task_id=board['task_id'], ipv6_subnet=args.ipv6_subnet)
     settings = validate_settings(data, root)
+    validate_image(data['target_image'])
     token = read_root_file(Path(args.token_file).resolve())
     if not 16 <= len(token.strip()) <= 4096:
         raise ValueError('invalid taskboard token length')

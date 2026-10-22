@@ -3,6 +3,14 @@
 A kernel-level firewall for AI agents.
 
 Start with the [guarded SSH POC](poc/ssh-diagnostic/README.md) and its [editable JSON policy](poc/ssh-diagnostic/policy.example.json).
+On a supported Linux Docker/KVM host, one command provisions the guarded VM and coding container:
+
+```sh
+python3 poc/ssh-diagnostic/appliance.py start --policy ./policy.json --token-file ./taskboard.token
+```
+
+The guide explains the two protected input files, ready-to-copy SSH command, persistent state, and workload base override.
+
 It runs authenticated coding commands in a fresh Docker target with a real BPF network guard.
 The default policy allows IPv4 DNS through configured resolvers, public HTTP and HTTPS, and explicit UDP443 for QUIC.
 It denies other endpoints and IPv6. An independent kernel boundary blocks LAN access except the exact taskboard TCP endpoint.

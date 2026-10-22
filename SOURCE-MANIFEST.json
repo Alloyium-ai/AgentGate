@@ -1,7 +1,7 @@
 {
   "schema": "agentgate.community.source-preview.v1",
-  "source_id": "agentgate-community-sha256:d1262f32cbfafc6494deb0dba457a2344c536ebab69bb99b6b17d0ed5227b069",
-  "source_sha256": "d1262f32cbfafc6494deb0dba457a2344c536ebab69bb99b6b17d0ed5227b069",
+  "source_id": "agentgate-community-sha256:c8f641d11234c8c25569f39dc264e4209d07cff8510d5af93835ec774a6fb10f",
+  "source_sha256": "c8f641d11234c8c25569f39dc264e4209d07cff8510d5af93835ec774a6fb10f",
   "stage": "experimental-source-preview",
   "committed_bytes_verified": true,
   "qualification": "experimental; no complete workload qualification",
@@ -178,8 +178,8 @@
     },
     {
       "path": "COMPONENT-LICENSES.json",
-      "bytes": 75488,
-      "sha256": "f7987e065083fff62f318f0ea278cbdab342a09671d1241057dd410e50827f0e"
+      "bytes": 76442,
+      "sha256": "7134d50a68a6b49496d56c18f09cba277d38fdcfb049058d4fd8c78f6ee47599"
     },
     {
       "path": "compose.yaml",
@@ -2817,9 +2817,39 @@
       "sha256": "6aedf9c4c483674db98624dbf8c19fc382b097afd8e74f4df828466c0fb6c071"
     },
     {
+      "path": "poc/ssh-diagnostic/appliance_build.py",
+      "bytes": 5652,
+      "sha256": "f7da36899133976b0efb7966cc379ca5c44dced24915f01b414a9cb24958dec4"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_common.py",
+      "bytes": 4638,
+      "sha256": "3b74ee5b7393a4591a1d28301d101b50568829ccaecd191a9c54c50ec5738965"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_guest.py",
+      "bytes": 6307,
+      "sha256": "7a951feaaa949de003970397f14b10fea5877348ecc2f02fb3fed07e2ac45768"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance.py",
+      "bytes": 10789,
+      "sha256": "2f77207824245dd31b29aa5cc5db41a22bb44dd9aed787bf8c3d2feb73fd8b79"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance/boot.py",
+      "bytes": 3610,
+      "sha256": "7475a5fbae700680ff2d256893cde13aeb11cbbc618e2ed7ba97993158eb5f8e"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance/Dockerfile",
+      "bytes": 910,
+      "sha256": "87a22aed9734708c43186bab482a4f3c3742a1101f81674407e3fc808c18fe23"
+    },
+    {
       "path": "poc/ssh-diagnostic/configure.py",
-      "bytes": 4146,
-      "sha256": "1dc54475a71d4ca8975083bb183c9c515830e6acf11cb4aebb52e272747341b8"
+      "bytes": 4229,
+      "sha256": "1bc50407e47dd61670a5a65f2633c97f1810feec0ef28cc372e93a88a9cb05ec"
     },
     {
       "path": "poc/ssh-diagnostic/Dockerfile",
@@ -2832,14 +2862,19 @@
       "sha256": "4e78b2ff8ede82a9667cc27a10e0d22681aec5969e027a60291cbe05299ffb78"
     },
     {
+      "path": "poc/ssh-diagnostic/image_contract.py",
+      "bytes": 1269,
+      "sha256": "987a437192b3821c63e21dd4ac3464104a1618b4524b89f05ed6ffade5c15b57"
+    },
+    {
       "path": "poc/ssh-diagnostic/install-key.py",
       "bytes": 1808,
       "sha256": "73a6e8bd67ccb3afeda69f14d6ca6beed2cf25dfa8c232e72e53550b1e0b11d0"
     },
     {
       "path": "poc/ssh-diagnostic/operator-gateway.py",
-      "bytes": 6562,
-      "sha256": "8226b647a67c7b6126757e2e0bbc930967fd679015296e4508a2f5266eeb77a7"
+      "bytes": 6710,
+      "sha256": "20a86160058ec542847e89ad1f0059d7dc7f8300b5a3db43f155495e445b8c49"
     },
     {
       "path": "poc/ssh-diagnostic/policy.example.json",
@@ -2848,8 +2883,8 @@
     },
     {
       "path": "poc/ssh-diagnostic/prepare-command.sh",
-      "bytes": 843,
-      "sha256": "1eeb5dcc3c22dd2bab59d8375dc24a73cfe4bb430402187c91f7120ed1077f23"
+      "bytes": 969,
+      "sha256": "52e34f94a45447c9b895e31d86613bfb559238e5d42256b8cbc9bd9f4f8c4e42"
     },
     {
       "path": "poc/ssh-diagnostic/prepare-policy.py",
@@ -2863,8 +2898,8 @@
     },
     {
       "path": "poc/ssh-diagnostic/README.md",
-      "bytes": 10209,
-      "sha256": "20e666958e0a8365797b2a59394b1b1cfe88a52b05494c47d12ea4566a279fd7"
+      "bytes": 14457,
+      "sha256": "c2dbf7dcdc362c0064fba1cecc7fe88206dca1ffc0cbfc32f9da0ab4b5ec7e52"
     },
     {
       "path": "poc/ssh-diagnostic/resolve.py",
@@ -2873,13 +2908,13 @@
     },
     {
       "path": "poc/ssh-diagnostic/restart-target.sh",
-      "bytes": 2440,
-      "sha256": "2947833fd96006c65bd62724510bd4fab785a4880a37e6b1661e5b0b5dc4b4fb"
+      "bytes": 2585,
+      "sha256": "9f8720e9ba02d630a3e4ad48abd79131e720f08da3e6bdf15b62c7725dd82c2a"
     },
     {
       "path": "poc/ssh-diagnostic/run-in-target.sh",
-      "bytes": 804,
-      "sha256": "da4848023dbc1dbf6c1c6f543d7168a01249a04d1ee670f1ee77280b99aedceb"
+      "bytes": 819,
+      "sha256": "b749f11ad6d40a6268698358443cfd499aa1252c60f785fefcc9b43fa62879ec"
     },
     {
       "path": "poc/ssh-diagnostic/settings.py",
@@ -2893,13 +2928,18 @@
     },
     {
       "path": "poc/ssh-diagnostic/start-target.sh",
-      "bytes": 5051,
-      "sha256": "ceadece8d6049afcb3fba5df0689dbc51689167042609622cbcc7c2eeae496da"
+      "bytes": 5068,
+      "sha256": "53958bd3b6e67e2f3dc9fa31f0c9c16ac0160fa628fffd63184dce7d0afc7192"
     },
     {
       "path": "poc/ssh-diagnostic/stop.py",
       "bytes": 2338,
       "sha256": "4f0c5132987cd753c40a766ffed3d6fa080d7f24c26f1a1b54f96bcfff019ee0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_appliance.py",
+      "bytes": 8218,
+      "sha256": "e2a732f78aa35848334665208d1313768c9b4112368235735dfd34c864b7955e"
     },
     {
       "path": "poc/ssh-diagnostic/test_gateway.py",
@@ -2913,8 +2953,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 5586,
-      "sha256": "e9d2cb61a40d4b97d3d3b00ee682201a390e03d96de74489b1d25fbd09b6cd94"
+      "bytes": 5920,
+      "sha256": "64bbe0cd2e6f3f77584bbbfd0fe0f3a0d300b9bda01b0e61a44b855068d1e97f"
     },
     {
       "path": "settings.json",
@@ -2948,8 +2988,8 @@
     },
     {
       "path": "ssh/Dockerfile",
-      "bytes": 2428,
-      "sha256": "25ad15ec3307dd6551ae212658a39ec11913c53bc96eb6792a6b6716d17a6c99"
+      "bytes": 2737,
+      "sha256": "e6b71111ab50453f34f25e02e2d05b1f73dda65cbbed8b1ed157a21837daee35"
     },
     {
       "path": "ssh/README.md",
@@ -2963,13 +3003,13 @@
     },
     {
       "path": "ssh/taskboard_bridge.mts",
-      "bytes": 8338,
-      "sha256": "4a8d149bb8466ab2312492aa36128f869c66507d656ce6f4f3cadad0d201d335"
+      "bytes": 9825,
+      "sha256": "baf9dbda1daa4a6037ca88fd0a78879dc4b989794b8a8f0f0c1d57143df2070b"
     },
     {
       "path": "ssh/tests/taskboard_bridge.test.ts",
-      "bytes": 6980,
-      "sha256": "bb818de4669532cbe722e83a0f7dbb0a848fe652515ba955d84133fac4194bfc"
+      "bytes": 8626,
+      "sha256": "843f3b4129f5d278778e7574ff35d59c298483e1b4b12d49df0608811f43fb78"
     },
     {
       "path": "ssh/tests/transport.test.ts",
@@ -3441,7 +3481,7 @@
     {
       "path": "SBOM.cdx.json",
       "bytes": 89534,
-      "sha256": "fd9a6b64a99803af0ea777c8493384cd69a626efc38b00cd58d09ba4b1a827c3"
+      "sha256": "044ad8d42d834a04de329274f9292ed258e1d95aa6cca2582c0d8f3ba3971b30"
     }
   ]
 }
