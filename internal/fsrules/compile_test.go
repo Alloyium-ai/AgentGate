@@ -197,3 +197,77 @@ func TestSocketDelegationRequiresLiveCompleteGuards(t *testing.T) {
 		t.Fatal("socket delegation bypassed mandatory guard verification")
 	}
 }
+
+func TestMutationAllowancesNeedTheExplicitMarkAndHardLinksNever(t *testing.T) {
+	for _, operation := range []string{"create", "mkdir", "delete", "rename", "symlink", "metadata"} {
+		files := policy.Files{Defaults: policy.FileDefaults{Read: "deny", Write: "deny"}, ResourceUse: "recheck-and-terminate", Rules: []policy.FileRule{
+			{ID: "work", Selector: policy.Selector{Kind: "subtree", Path: "/work"}, Operations: []string{operation}, Effect: "allow"}}}
+		plan, err := Compile(files, policy.Programs{Default: "deny"}, 42, 1, 1000)
+		if err != nil {
+			t.Fatal(operation, err)
+		}
+		// The product pipeline never sets the mark, so it still refuses the right.
+		if validateAccessInstall(plan, 42, 500, 0) == nil || plan.CheckAccess(42, 500) == nil {
+			t.Fatalf("%s installed without the mutation mark", operation)
+		}
+		marked := plan.WithMutationEnforcement()
+		if marked.Digest() == plan.Digest() || plan.mutation {
+			t.Fatal("the mark changed the source plan or missed its digest")
+		}
+		if err = validateAccessInstall(marked, 42, 500, 0); err != nil {
+			t.Fatalf("%s allowance refused: %v", operation, err)
+		}
+		if marked.Effect("/work/new", operation) != "allow" || marked.Effect("/etc/new", operation) != "deny" || marked.Effect("/work/new", "read") != "deny" {
+			t.Fatalf("%s allowance leaked into another path or operation", operation)
+		}
+		forged := plan
+		forged.mutation = true
+		if validateAccessInstall(forged, 42, 500, 0) == nil {
+			t.Fatalf("%s: setting the mark without recomputing the digest installed", operation)
+		}
+	}
+	files := policy.Files{Defaults: policy.FileDefaults{Read: "deny", Write: "deny"}, ResourceUse: "recheck-and-terminate", Rules: []policy.FileRule{
+		{ID: "link", Selector: policy.Selector{Kind: "subtree", Path: "/work"}, Operations: []string{"hardlink"}, Effect: "allow"}}}
+	plan, err := Compile(files, policy.Programs{Default: "deny"}, 42, 1, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validateAccessInstall(plan.WithMutationEnforcement(), 42, 500, 0) == nil {
+		t.Fatal("a hard link allowance installed without a kernel hook that can enforce it")
+	}
+	// An unmarked, read-only plan keeps its digest from before the mark existed.
+	read := policy.Files{Defaults: policy.FileDefaults{Read: "deny", Write: "deny"}, ResourceUse: "recheck-and-terminate"}
+	a, _ := Compile(read, policy.Programs{Default: "deny"}, 42, 1, 1000)
+	if a.Digest() != planDigest(a) {
+		t.Fatal("unmarked digest differs")
+	}
+}
+
+func TestInheritedStdioIsExplicitAndGrantsNoPathRight(t *testing.T) {
+	files := policy.Files{Defaults: policy.FileDefaults{Read: "deny", Write: "deny"}, ResourceUse: "recheck-and-terminate"}
+	plan, err := Compile(files, policy.Programs{Default: "deny"}, 42, 1, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.State().Pipes&InheritedStdio != 0 {
+		t.Fatal("inherited stdio is on by default")
+	}
+	marked := plan.WithInheritedStdio()
+	if marked.State().Pipes != InheritedStdio || plan.State().Pipes != 0 || marked.Digest() == plan.Digest() {
+		t.Fatal("the mark changed the source plan or missed its digest")
+	}
+	if err = validateAccessInstall(marked, 42, 500, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range Operations() {
+		if marked.Effect("/anything", operation) != "deny" {
+			t.Fatal("inherited stdio granted a pathname right")
+		}
+	}
+	unknown := plan
+	unknown.state.Pipes = uint64(1) << 61
+	unknown.digest = planDigest(unknown)
+	if validateAccessInstall(unknown, 42, 500, 0) == nil {
+		t.Fatal("an undefined pipe permission bit installed")
+	}
+}

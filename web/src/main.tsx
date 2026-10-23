@@ -207,7 +207,7 @@ function App() {
       );
       break;
     case "requests":
-      content = <Requests actor={actor} epoch={epoch} refresh={refresh} />;
+      content = <Requests key={path} actor={actor} epoch={epoch} refresh={refresh} versionID={path.split("/")[1]} />;
       break;
     case "runs":
       content = path.includes("/") ? (
@@ -217,7 +217,7 @@ function App() {
       );
       break;
     case "audit":
-      content = <AuditExplorer epoch={epoch} actor={actor} />;
+      content = <AuditExplorer key={path} epoch={epoch} actor={actor} versionID={path.split("/")[1]} />;
       break;
     default:
       content = <Overview epoch={epoch} navigate={navigate} />;

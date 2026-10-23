@@ -1,0 +1,39 @@
+{
+  "version": "agentgate.network-poc.v1",
+  "default": "deny",
+  "ipv6": "deny",
+  "dns": {
+    "resolvers": [
+      "1.1.1.1"
+    ],
+    "protocols": [
+      "udp",
+      "tcp"
+    ],
+    "port": 53
+  },
+  "web": {
+    "destination": "public-ipv4",
+    "rules": [
+      {
+        "protocol": "tcp",
+        "port": 80
+      },
+      {
+        "protocol": "tcp",
+        "port": 443
+      },
+      {
+        "protocol": "udp",
+        "port": 443
+      }
+    ]
+  },
+  "taskboard": {
+    "address": "10.10.10.10",
+    "protocol": "tcp",
+    "port": 8080,
+    "task_id": 1
+  },
+  "duration_seconds": 25
+}

@@ -15,6 +15,7 @@ import (
 	"alloyium.local/kernel-poc/internal/enforcement"
 	"alloyium.local/kernel-poc/internal/execbroker"
 	"alloyium.local/kernel-poc/internal/fsrules"
+	"alloyium.local/kernel-poc/internal/policy"
 	"alloyium.local/kernel-poc/internal/qualification"
 	"alloyium.local/kernel-poc/internal/syscallrules"
 	"golang.org/x/sys/unix"
@@ -29,19 +30,65 @@ func verifyActorDescriptors(request qualification.Request, r candidateReceipt) e
 	if processFields(r.Active.Status)["Seccomp_filters"] != "2" || len(r.Active.Descriptors) != 2 {
 		return errors.New("the candidate retains a bootstrap descriptor or lacks the final filter")
 	}
-	for i, id := range []string{"input", "output"} {
-		path := ""
-		for _, rule := range request.Document.Files.Rules {
-			if rule.ID == id || rule.ID == "job-"+id {
-				path = rule.Selector.Path
-			}
-		}
+	paths, err := candidateDescriptorTargets(request, r.Active.Descriptors)
+	if err != nil {
+		return err
+	}
+	for i, path := range paths {
 		d := r.Active.Descriptors[i]
 		if path == "" || d.Number != fmt.Sprint(i) || d.Target != path || d.Mode&unix.S_IFMT != unix.S_IFREG || d.Mode&0777 != 0600 || d.UID != 65534 || d.GID != 65534 || d.Links != 1 || d.Inode == 0 {
 			return errors.New("the active candidate regular descriptor differs")
 		}
 	}
 	return nil
+}
+
+func candidateDescriptorTargets(request qualification.Request, descriptors []descriptorSnapshot) ([2]string, error) {
+	var paths [2]string
+	if request.Document.Files == nil || len(descriptors) != 2 {
+		return paths, errors.New("the active candidate regular descriptor differs")
+	}
+	for i, id := range []string{"input", "output"} {
+		for _, rule := range request.Document.Files.Rules {
+			if rule.ID == id || rule.ID == "job-"+id {
+				paths[i] = rule.Selector.Path
+			}
+		}
+	}
+	if paths[0] != "" || paths[1] != "" {
+		if paths[0] == "" || paths[1] == "" {
+			return [2]string{}, errors.New("the active candidate regular descriptor differs")
+		}
+		return paths, nil
+	}
+	if request.Document.Network == nil || request.Document.Network.Pilot == nil {
+		return paths, errors.New("the active candidate regular descriptor differs")
+	}
+	root := ""
+	for _, rule := range request.Document.Files.Rules {
+		if rule.ID == "job-streams" && rule.Effect == "allow" && rule.Selector.Kind == "subtree" &&
+			slices.Contains(rule.Operations, "read") && slices.Contains(rule.Operations, "write") {
+			root = rule.Selector.Path
+		}
+	}
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
+		return paths, errors.New("the active candidate stream root differs")
+	}
+	paths = [2]string{descriptors[0].Target, descriptors[1].Target}
+	directory := filepath.Dir(paths[0])
+	name := strings.TrimPrefix(filepath.Base(directory), ".qualification-")
+	if !strictDescendant(root, directory) || filepath.Dir(directory) != root ||
+		!strings.HasPrefix(filepath.Base(directory), ".qualification-") || len(name) == 0 || len(name) > 16 ||
+		strings.IndexFunc(name, func(r rune) bool { return r < '0' || r > '9' && r < 'A' || r > 'Z' && r < 'a' || r > 'z' }) >= 0 ||
+		filepath.Dir(paths[1]) != directory || filepath.Base(paths[0]) != "input" || filepath.Base(paths[1]) != "output" ||
+		filepath.Clean(paths[0]) != paths[0] || filepath.Clean(paths[1]) != paths[1] ||
+		policy.FileEffect(*request.Document.Files, paths[0], "read") != "allow" ||
+		policy.FileEffect(*request.Document.Files, paths[1], "read") != "allow" ||
+		policy.FileEffect(*request.Document.Files, paths[1], "write") != "allow" ||
+		descriptors[0].Device != descriptors[1].Device || descriptors[0].Inode == descriptors[1].Inode {
+		return [2]string{}, errors.New("the active candidate stream descriptors differ")
+	}
+	return paths, nil
 }
 
 func verifyBrokerConfig(request qualification.Request, result qualification.Result, r candidateReceipt) error {

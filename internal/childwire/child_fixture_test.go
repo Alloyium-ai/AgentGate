@@ -82,4 +82,23 @@ func TestMeasuredChildParsesOnlyBoundedExactFrames(t *testing.T) {
 			t.Fatalf("the child accepted a malformed namespace identity at byte%d", offset)
 		}
 	}
+	docker, err := EncodeDocker(manifest(), IOPaths{Input: "/owned/input", Output: "/owned/output", Error: "/owned/error"}, DockerIdentity{
+		Mount: NamespaceIdentity{1, 2}, Network: NamespaceIdentity{3, 4},
+		PID: NamespaceIdentity{5, 6}, Root: NamespaceIdentity{7, 8},
+	})
+	if err != nil || run(docker) != nil {
+		t.Fatal("the exact Docker frame failed", err)
+	}
+	for i := 0; i < 100; i++ {
+		if err = run(docker[:i]); err == nil {
+			t.Fatalf("the child accepted a truncated Docker header at byte%d", i)
+		}
+	}
+	for _, offset := range []int{20, 40, 60, 80} {
+		bad := append([]byte{}, docker...)
+		bad[offset] = 0
+		if err = run(bad); err == nil {
+			t.Fatalf("the child accepted a substituted Docker descriptor at byte%d", offset)
+		}
+	}
 }

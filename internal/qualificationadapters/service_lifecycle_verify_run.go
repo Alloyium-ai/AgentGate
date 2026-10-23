@@ -24,6 +24,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func serviceLifecycleExecutedCandidate(request qualification.Request, recipe serviceLifecycleRecipe) bool {
+	requested, err := request.Document.Canonical()
+	if err != nil {
+		return false
+	}
+	executed, err := recipe.Document.Canonical()
+	if err != nil {
+		return false
+	}
+	return recipe.Spec.Binding.PolicyDigest == request.Binding.PolicyDigest &&
+		recipe.Spec.CandidateDigest == request.Binding.PolicyDigest &&
+		bytes.Equal(requested, executed) && bytes.Equal(requested, recipe.Spec.Document)
+}
+
 func (a *serviceLifecycleAdapter) Verify(request qualification.Request, result qualification.Result) ([]qualification.Coverage, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, err
@@ -56,6 +70,27 @@ func (a *serviceLifecycleAdapter) Verify(request qualification.Request, result q
 		if scene.Error != "" {
 			continue
 		}
+		if a.mode == "watchdog-loss" {
+			if err := verifyServiceLifecycleLoss(request, result, receipt, scene); err != nil {
+				return nil, err
+			}
+			add("lifecycle.baseline.v1", "watchdog-loss-stops-descendants")
+			continue
+		}
+		if a.mode == "node-loss" {
+			if err := verifyServiceLifecycleNodeLoss(request, result, receipt, scene); err != nil {
+				return nil, err
+			}
+			add("lifecycle.baseline.v1", "node-loss-stops-descendants", "incomplete-recovery-terminal")
+			continue
+		}
+		if a.mode == "prepare-reply-loss" {
+			if err := verifyServiceLifecyclePrepareReplyLoss(request, result, receipt, scene); err != nil {
+				return nil, err
+			}
+			add("lifecycle.baseline.v1", "lost-prepare-reply-expires")
+			continue
+		}
 		if err := verifyServiceLifecycleScene(request, result, receipt, scene); err != nil {
 			return nil, err
 		}
@@ -83,6 +118,17 @@ func (a *serviceLifecycleAdapter) Verify(request qualification.Request, result q
 			add("lifecycle.baseline.v1", "revoked-grant-stops")
 		}
 	}
+	// Fixed lifecycle scenes run their own deliberately narrow document. Their
+	// verified observations are useful diagnostics, but a candidate report may
+	// claim a case only when that exact requested document was executed.
+	for _, scene := range receipt.Scenes {
+		if scene.Error != "" {
+			continue
+		}
+		if !serviceLifecycleExecutedCandidate(request, scene.Recipe) {
+			return nil, nil
+		}
+	}
 	coverage := []qualification.Coverage{}
 	for _, contract := range request.Contracts {
 		names := []string{}
@@ -98,6 +144,73 @@ func (a *serviceLifecycleAdapter) Verify(request qualification.Request, result q
 	return coverage, nil
 }
 func verifyServiceLifecycleScene(request qualification.Request, result qualification.Result, receipt serviceLifecycleReceipt, scene serviceLifecycleScene) error {
+	if err := verifyServiceLifecycleActive(request, result, receipt, scene); err != nil {
+		return err
+	}
+	binding := scene.Prepared.Record.Binding
+	var err error
+	for _, status := range []noderuntime.QualificationStatus{scene.Stopped, scene.Repeat} {
+		if status.Protocol != noderuntime.QualificationStatusProtocol || status.Purpose != lifecycle.QualificationFixturePurpose || status.Record.State != "stopped" || !reflect.DeepEqual(status.Record.Binding, binding) || status.Terminal == nil || !reflect.DeepEqual(status.Terminal.Binding, binding) || !status.Terminal.DomainEmpty || !status.Terminal.RightsRemoved || status.Terminal.EvidenceVerdict != "VALID_COMPLETE" {
+			return errors.New("the actual lifecycle stopped record or audit differs")
+		}
+		if len(status.Record.Evidence) == 0 {
+			return errors.New("the lifecycle stop readback is absent")
+		}
+		evidence := status.Record.Evidence[len(status.Record.Evidence)-1]
+		if lifecycle.VerifyReadback(evidence, binding, "stopped") != nil || !evidence.CountersAvailable || evidence.Lost != 0 {
+			return errors.New("the lifecycle stop counters or readback differ")
+		}
+	}
+	if !bytes.Equal(scene.Stopped.Terminal.Output, scene.Wire) || digestBytes(scene.Wire) != scene.Stopped.Terminal.OutputDigest {
+		return errors.New("the actual lifecycle output digest differs")
+	}
+	if !reflect.DeepEqual(scene.Stopped.Record, scene.Repeat.Record) || !reflect.DeepEqual(scene.Stopped.Terminal, scene.Repeat.Terminal) {
+		return errors.New("the repeated lifecycle stop changed its terminal")
+	}
+	if err = verifyServiceLifecycleSceneMode(scene); err != nil {
+		return err
+	}
+	if scene.AuditFile != nil && (scene.AuditFile.StartedNS < result.StartedMonoNS || scene.AuditFile.FinishedNS > result.FinishedMonoNS) {
+		return errors.New("the actual audit file read falls outside its result clocks")
+	}
+	if err = verifyServiceLifecycleAuditFile(scene); err != nil {
+		return err
+	}
+	if err = verifyServiceLifecycleAuditLinks(scene); err != nil {
+		return err
+	}
+	if err = verifyServiceLifecycleMaps(scene); err != nil {
+		return err
+	}
+	if err = verifyServiceLifecycleActors(scene, binding, result); err != nil {
+		return err
+	}
+	var prepareCall *serviceLifecycleHTTPCall
+	for index := range scene.Calls {
+		call := &scene.Calls[index]
+		if call.MonoNS < result.StartedMonoNS || call.MonoNS > result.FinishedMonoNS || call.Status != 200 {
+			return errors.New("the actual lifecycle HTTP observation differs")
+		}
+		if err = verifyServiceLifecycleHTTPCall(*call, scene); err != nil {
+			return err
+		}
+		if call.Path == "/fixture/prepare" {
+			if prepareCall != nil {
+				return errors.New("the lifecycle prepare repeats")
+			}
+			prepareCall = call
+			var actual noderuntime.QualificationPrepared
+			if lifecycle.DecodeTransport(bytes.NewReader(call.Response), &actual) != nil || !reflect.DeepEqual(actual, scene.Prepared) {
+				return errors.New("the actual prepare response bytes differ")
+			}
+		}
+	}
+	if prepareCall == nil || prepareCall.MonoNS < scene.Prepared.PreparedMonoNS || prepareCall.MonoNS >= scene.Prepared.Record.PreparationDeadlineNS {
+		return errors.New("the actual lifecycle preparation observation is stale")
+	}
+	return nil
+}
+func verifyServiceLifecycleActive(request qualification.Request, result qualification.Result, receipt serviceLifecycleReceipt, scene serviceLifecycleScene) error {
 	image, err := serviceLifecycleImageDigest(receipt.ServiceImage)
 	if err != nil || scene.Recipe.Spec.Manifest.ImageDigest != image {
 		return errors.New("the lifecycle executed image digest differs")
@@ -174,65 +287,6 @@ func verifyServiceLifecycleScene(request qualification.Request, result qualifica
 			return err
 		}
 	}
-	for _, status := range []noderuntime.QualificationStatus{scene.Stopped, scene.Repeat} {
-		if status.Protocol != noderuntime.QualificationStatusProtocol || status.Purpose != lifecycle.QualificationFixturePurpose || status.Record.State != "stopped" || !reflect.DeepEqual(status.Record.Binding, binding) || status.Terminal == nil || !reflect.DeepEqual(status.Terminal.Binding, binding) || !status.Terminal.DomainEmpty || !status.Terminal.RightsRemoved || status.Terminal.EvidenceVerdict != "VALID_COMPLETE" {
-			return errors.New("the actual lifecycle stopped record or audit differs")
-		}
-		if len(status.Record.Evidence) == 0 {
-			return errors.New("the lifecycle stop readback is absent")
-		}
-		evidence := status.Record.Evidence[len(status.Record.Evidence)-1]
-		if lifecycle.VerifyReadback(evidence, binding, "stopped") != nil || !evidence.CountersAvailable || evidence.Lost != 0 {
-			return errors.New("the lifecycle stop counters or readback differ")
-		}
-	}
-	if !bytes.Equal(scene.Stopped.Terminal.Output, scene.Wire) || digestBytes(scene.Wire) != scene.Stopped.Terminal.OutputDigest {
-		return errors.New("the actual lifecycle output digest differs")
-	}
-	if !reflect.DeepEqual(scene.Stopped.Record, scene.Repeat.Record) || !reflect.DeepEqual(scene.Stopped.Terminal, scene.Repeat.Terminal) {
-		return errors.New("the repeated lifecycle stop changed its terminal")
-	}
-	if err = verifyServiceLifecycleSceneMode(scene); err != nil {
-		return err
-	}
-	if scene.AuditFile != nil && (scene.AuditFile.StartedNS < result.StartedMonoNS || scene.AuditFile.FinishedNS > result.FinishedMonoNS) {
-		return errors.New("the actual audit file read falls outside its result clocks")
-	}
-	if err = verifyServiceLifecycleAuditFile(scene); err != nil {
-		return err
-	}
-	if err = verifyServiceLifecycleAuditLinks(scene); err != nil {
-		return err
-	}
-	if err = verifyServiceLifecycleMaps(scene); err != nil {
-		return err
-	}
-	if err = verifyServiceLifecycleActors(scene, binding, result); err != nil {
-		return err
-	}
-	var prepareCall *serviceLifecycleHTTPCall
-	for index := range scene.Calls {
-		call := &scene.Calls[index]
-		if call.MonoNS < result.StartedMonoNS || call.MonoNS > result.FinishedMonoNS || call.Status != 200 {
-			return errors.New("the actual lifecycle HTTP observation differs")
-		}
-		if err = verifyServiceLifecycleHTTPCall(*call, scene); err != nil {
-			return err
-		}
-		if call.Path == "/fixture/prepare" {
-			if prepareCall != nil {
-				return errors.New("the lifecycle prepare repeats")
-			}
-			prepareCall = call
-			var actual noderuntime.QualificationPrepared
-			if lifecycle.DecodeTransport(bytes.NewReader(call.Response), &actual) != nil || !reflect.DeepEqual(actual, scene.Prepared) {
-				return errors.New("the actual prepare response bytes differ")
-			}
-		}
-	}
-	if prepareCall == nil || prepareCall.MonoNS < prepared.MonoNS || prepareCall.MonoNS >= scene.Prepared.Record.PreparationDeadlineNS {
-		return errors.New("the actual lifecycle preparation observation is stale")
-	}
 	return nil
 }
 func verifyServiceLifecyclePhases(record lifecycle.Record) error {
@@ -299,11 +353,14 @@ func verifyServiceLifecycleActors(scene serviceLifecycleScene, binding lifecycle
 }
 
 func verifyServiceLifecycleAuditLinks(scene serviceLifecycleScene) error {
+	return verifyServiceLifecycleAuditTerminal(scene, scene.Stopped.Record, scene.Stopped.Terminal)
+}
+
+func verifyServiceLifecycleAuditTerminal(scene serviceLifecycleScene, record lifecycle.Record, terminal *lifecycle.Terminal) error {
 	bundle, err := jobauthority.DecodeAuditBundle(scene.Audit)
 	if err != nil {
 		return err
 	}
-	terminal := scene.Stopped.Terminal
 	if bundle.Seal == nil || terminal == nil || bundle.Seal.Terminal.State != terminal.State || bundle.Seal.Terminal.ExitCode != terminal.ExitCode || bundle.Seal.Terminal.OutputDigest != terminal.OutputDigest {
 		return errors.New("the actual lifecycle terminal differs from the node seal")
 	}
@@ -340,7 +397,7 @@ func verifyServiceLifecycleAuditLinks(scene serviceLifecycleScene) error {
 			return errors.New("an actual lifecycle control phase is absent: " + name)
 		}
 	}
-	if len(scene.Stopped.Record.Evidence) == 0 || stopped == nil || !reflect.DeepEqual(*stopped, scene.Stopped.Record.Evidence[len(scene.Stopped.Record.Evidence)-1]) || terminal.EvidenceDigest != stopped.Digest {
+	if len(record.Evidence) == 0 || stopped == nil || !reflect.DeepEqual(*stopped, record.Evidence[len(record.Evidence)-1]) || terminal.EvidenceDigest != stopped.Digest {
 		return errors.New("the actual stopped audit evidence differs from the journal")
 	}
 	return nil

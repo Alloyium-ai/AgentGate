@@ -18,6 +18,11 @@ const Purpose = "agentgate.files-programs-component.v1"
 const OperationCount = 14
 const AnonymousDelegation = uint64(1) << 63
 
+// InheritedStdio lets a managed job use pipes made outside every managed
+// domain, such as the launcher's stdin, stdout and stderr. It still requires
+// the explicit pipe read and write rights, and it grants no pathname right.
+const InheritedStdio = uint64(1) << 62
+
 var operations = [OperationCount]string{"read", "write", "create", "mkdir", "delete", "rename", "hardlink", "symlink", "metadata", "mmap", "descriptor_receive", "execute", "map_execute", "mprotect"}
 
 type State struct {
@@ -35,12 +40,31 @@ type Plan struct {
 	digest          string
 	reference       [OperationCount]openrules.Plan
 	allowOperations []string
+	mutation        bool
 }
 
 // WithAnonymousGuard selects a separate mandatory guard. It grants no right.
 // Default access installation refuses this flag without the coupled runtime.
 func (plan Plan) WithAnonymousGuard() Plan {
 	plan.state.Pipes |= AnonymousDelegation
+	plan.digest = planDigest(plan)
+	return plan
+}
+
+// WithMutationEnforcement permits the namespace mutation allowances that the
+// access object's path hooks enforce: create, mkdir, delete, rename, symlink and
+// metadata. It exists for the SSH POC only. The composite product plan never
+// sets it, so product admission keeps refusing those rights until they qualify.
+// Hard links stay refused: their kernel hook has no path for the old inode.
+func (plan Plan) WithMutationEnforcement() Plan {
+	plan.mutation = true
+	plan.digest = planDigest(plan)
+	return plan
+}
+
+// WithInheritedStdio selects InheritedStdio and recomputes the plan digest.
+func (plan Plan) WithInheritedStdio() Plan {
+	plan.state.Pipes |= InheritedStdio
 	plan.digest = planDigest(plan)
 	return plan
 }
@@ -217,6 +241,10 @@ func planDigest(plan Plan) string {
 	for _, operation := range plan.allowOperations {
 		_ = binary.Write(h, binary.LittleEndian, uint32(len(operation)))
 		h.Write([]byte(operation))
+	}
+	if plan.mutation {
+		// Appended only when set, so every unmarked plan keeps its digest.
+		h.Write([]byte("mutation-enforcement.v1"))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

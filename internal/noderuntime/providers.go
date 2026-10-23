@@ -126,25 +126,58 @@ func NewSources(c Config) (*Sources, error) {
 			return nil, errors.New("the node enrollment repeats")
 		}
 		for kind, r := range e.Runtimes {
-			manifest := lifecycle.Manifest{Protocol: "agentgate.job.manifest.v1", AgentKind: kind, RuntimeVersion: r.Version, Executable: r.Executable, ExecutableDigest: r.ExecutableDigest, ImageDigest: r.ImageDigest, Arguments: []string{}, Workspace: "/var/lib/agentgate/workspace", Environment: map[string]string{}, InputDigest: policy.SchemaDigest()}
+			arguments, inputDigest := []string{}, policy.SchemaDigest()
+			workspace := "/var/lib/agentgate/workspace"
+			environment := map[string]string{}
+			if kind == "ssh" {
+				arguments = []string{"-c", ":"}
+				inputDigest = lifecycle.SSHEmptyInputDigest
+				if c.PilotTarget == nil {
+					return nil, errors.New("the enrolled SSH runtime has no configured Docker target")
+				}
+				workspace = c.PilotTarget.Workspace
+				environment = enrolledEnvironment(r.Environment)
+			} else if len(r.Environment) != 0 {
+				return nil, errors.New("a non-SSH enrollment has an SSH toolchain environment")
+			}
+			manifest := lifecycle.Manifest{Protocol: "agentgate.job.manifest.v1", AgentKind: kind, RuntimeVersion: r.Version, Executable: r.Executable, ExecutableDigest: r.ExecutableDigest, ImageDigest: r.ImageDigest, Arguments: arguments, Workspace: workspace, Environment: environment, InputDigest: inputDigest}
 			if err = manifest.Validate(); err != nil {
 				return nil, err
 			}
-			if err = jobartifacts.VerifyExecutable(r.Executable, r.ExecutableDigest); err != nil {
-				return nil, err
+			if kind != "ssh" {
+				if err = jobartifacts.VerifyExecutable(r.Executable, r.ExecutableDigest); err != nil {
+					return nil, err
+				}
+			} else if c.PilotTarget == nil || r.ImageDigest != c.PilotTarget.ImageDigest || manifest.Workspace != c.PilotTarget.Workspace {
+				return nil, errors.New("the enrolled SSH runtime differs from the configured Docker target")
 			}
 		}
 		s.enrollments[e.AgentID] = clone(e)
 	}
 	for _, e := range s.enrollments {
 		for kind, runtime := range e.Runtimes {
-			m := lifecycle.Manifest{AgentKind: kind, RuntimeVersion: runtime.Version, Executable: runtime.Executable, ExecutableDigest: runtime.ExecutableDigest, ImageDigest: runtime.ImageDigest, Arguments: append([]string{}, runtime.ArgumentsPrefix...), Environment: map[string]string{}}
+			arguments := append([]string{}, runtime.ArgumentsPrefix...)
+			workspace := "/var/lib/agentgate/workspace"
+			environment := map[string]string{}
+			if kind == "ssh" {
+				arguments = append(arguments, ":")
+				workspace = c.PilotTarget.Workspace
+				environment = enrolledEnvironment(runtime.Environment)
+			}
+			m := lifecycle.Manifest{AgentKind: kind, RuntimeVersion: runtime.Version, Executable: runtime.Executable, ExecutableDigest: runtime.ExecutableDigest, ImageDigest: runtime.ImageDigest, Arguments: arguments, Workspace: workspace, Environment: environment, InputDigest: lifecycle.SSHEmptyInputDigest}
 			if err = s.VerifyRuntime(context.Background(), lifecycle.Binding{AgentID: e.AgentID, ArtifactDigests: s.Config.ArtifactDigests}, m); err != nil {
 				return nil, err
 			}
 		}
 	}
 	return s, nil
+}
+func enrolledEnvironment(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 func (s *Sources) Resolve(ctx context.Context, digest string) (policy.Document, error) {
 	if err := ctx.Err(); err != nil {

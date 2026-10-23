@@ -35,6 +35,28 @@ func TestNamespaceFrameBindsTheReservedDescriptorAndIdentity(t *testing.T) {
 	}
 }
 
+func TestDockerFrameBindsFourTargetDescriptors(t *testing.T) {
+	identity := DockerIdentity{
+		Mount: NamespaceIdentity{1, 2}, Network: NamespaceIdentity{3, 4},
+		PID: NamespaceIdentity{5, 6}, Root: NamespaceIdentity{7, 8},
+	}
+	raw, err := EncodeDocker(manifest(), IOPaths{"/owned/input", "/owned/output", "/owned/error"}, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw[:8]) != "AGJOB003" || binary.LittleEndian.Uint32(raw[8:]) != 3 ||
+		binary.LittleEndian.Uint32(raw[20:]) != DockerMountFD ||
+		binary.LittleEndian.Uint32(raw[40:]) != DockerNetworkFD ||
+		binary.LittleEndian.Uint32(raw[60:]) != DockerPIDFD ||
+		binary.LittleEndian.Uint32(raw[80:]) != DockerRootFD {
+		t.Fatal("the Docker descriptor frame differs")
+	}
+	identity.Network.Inode = 0
+	if _, err = EncodeDocker(manifest(), IOPaths{"/owned/input", "/owned/output", "/owned/error"}, identity); err == nil {
+		t.Fatal("an incomplete Docker descriptor identity was encoded")
+	}
+}
+
 func TestNamespaceTransportVerifiesTypeIdentityAndDuplicateCustody(t *testing.T) {
 	p, err := runtimeguard.Compile(policy.Runtime{Profile: "managed-unprivileged.v1", UID: 65534, GID: 65534, SupplementaryGroups: []int{}, Capabilities: []string{}, NoNewPrivileges: true, Seccomp: policy.Seccomp{Profile: "explicit-allowlist-notify.v2", Architecture: "x86_64", Default: "deny", AllowSyscalls: []string{"getpid"}}})
 	if err != nil {
@@ -76,6 +98,48 @@ func TestNamespaceTransportVerifiesTypeIdentityAndDuplicateCustody(t *testing.T)
 	}
 	if _, err = NewNamespace(manifest(), paths, p, file, NamespaceIdentity{uint64(st.Dev), st.Ino}); err == nil {
 		t.Fatal("an ordinary file became a mount namespace")
+	}
+}
+
+func TestDockerTransportRetainsOnlyMeasuredDescriptors(t *testing.T) {
+	p, err := runtimeguard.Compile(policy.Runtime{Profile: "managed-unprivileged.v1", UID: 65534, GID: 65534, SupplementaryGroups: []int{}, Capabilities: []string{}, NoNewPrivileges: true, Seccomp: policy.Seccomp{Profile: "explicit-allowlist-notify.v2", Architecture: "x86_64", Default: "deny", AllowSyscalls: []string{"getpid"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input DockerDescriptors
+	for _, item := range []struct {
+		path string
+		file **os.File
+		id   *NamespaceIdentity
+	}{
+		{"/proc/self/ns/mnt", &input.Mount, &input.Identity.Mount},
+		{"/proc/self/ns/net", &input.Network, &input.Identity.Network},
+		{"/proc/self/ns/pid", &input.PID, &input.Identity.PID},
+		{"/", &input.Root, &input.Identity.Root},
+	} {
+		*item.file, err = os.Open(item.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer (*item.file).Close()
+		var st unix.Stat_t
+		if err = unix.Fstat(int((*item.file).Fd()), &st); err != nil {
+			t.Fatal(err)
+		}
+		*item.id = NamespaceIdentity{uint64(st.Dev), st.Ino}
+	}
+	paths := IOPaths{"/owned/input", "/owned/output", "/owned/error"}
+	transport, err := NewDocker(manifest(), paths, p, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transport.ExtraFiles()) != 7 || transport.Docker.Mount.Fd() == input.Mount.Fd() {
+		t.Fatal("the Docker transport descriptor custody differs")
+	}
+	transport.Close()
+	input.Identity.Network.Inode++
+	if _, err = NewDocker(manifest(), paths, p, input); err == nil {
+		t.Fatal("a substituted Docker network namespace was accepted")
 	}
 }
 func TestBoundedManifestAndSealedCustody(t *testing.T) {

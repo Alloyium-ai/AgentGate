@@ -29,3 +29,10 @@ var numbers = map[string]uint32{
 	"pipe2": unix.SYS_PIPE2, "dup": unix.SYS_DUP, "dup2": unix.SYS_DUP2, "dup3": unix.SYS_DUP3, "fcntl": unix.SYS_FCNTL,
 	"readlinkat": unix.SYS_READLINKAT, "getcwd": unix.SYS_GETCWD, "chdir": unix.SYS_CHDIR, "prlimit64": unix.SYS_PRLIMIT64,
 }
+
+// Number returns the same target syscall number used by the policy compiler.
+// Qualification uses this lookup to match a permitted call to raw kernel evidence.
+func Number(name string) (uint32, bool) {
+	number, ok := numbers[name]
+	return number, ok
+}

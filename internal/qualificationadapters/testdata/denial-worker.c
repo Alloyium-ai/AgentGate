@@ -2,19 +2,31 @@
 // Copyright (c) 2026 Dan Metcalf
 // Fixed qualification actor. Initial exec is a fixture; agent exec never occurs.
 #define _GNU_SOURCE
+#include <asm/prctl.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <linux/filter.h>
+#include <linux/futex.h>
 #include <linux/seccomp.h>
+#include <linux/random.h>
+#include <linux/stat.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/epoll.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -31,7 +43,161 @@ static struct sock_filter final[4096];
 static uint16_t final_length;
 static const char *input_path,*output_path;
 static long heap_base;
+static uint8_t pilot_family;
+static uint16_t pilot_port;
+static uint8_t pilot_address[16];
+static int clear_child_tid;
+static int futex_word;
+static struct robust_list_head robust_head;
 static int candidate_body(void);
+static int emit(uint32_t id, long value, int error);
+
+// These bounded calls produce real post-install syscall and file events. A
+// denied call contributes no positive case; the verifier checks raw results.
+static void probe_one_byte(const char *path)
+{
+    int fd=(int)syscall(SYS_openat,AT_FDCWD,path,O_RDONLY|O_CLOEXEC,0);
+    if(fd>=0){unsigned char value;syscall(SYS_read,fd,&value,1);syscall(SYS_close,fd);}
+}
+
+static void probe_safe_syscalls(int input_fd)
+{
+    char cwd[256],random_bytes[8],entries[512];
+    struct utsname system_name;
+    struct rlimit limit;
+    struct stat file_stat;
+    struct statx extended_stat;
+    cpu_set_t affinity;
+    struct pollfd polled={.fd=input_fd,.events=POLLIN};
+    struct timespec zero={0};
+    struct epoll_event event={.events=EPOLLIN,.data.fd=input_fd},ready;
+    syscall(SYS_getpid);syscall(SYS_gettid);
+    syscall(SYS_getuid);syscall(SYS_geteuid);
+    syscall(SYS_getgid);syscall(SYS_getegid);
+    syscall(SYS_getcwd,cwd,sizeof(cwd));
+    syscall(SYS_uname,&system_name);
+    syscall(SYS_getrandom,random_bytes,sizeof(random_bytes),GRND_NONBLOCK);
+    syscall(SYS_getrlimit,RLIMIT_NOFILE,&limit);
+    syscall(SYS_prlimit64,0,RLIMIT_NOFILE,0,&limit);
+    syscall(SYS_sched_getaffinity,0,sizeof(affinity),&affinity);
+    unsigned long fs_base=0;
+    syscall(SYS_arch_prctl,ARCH_GET_FS,&fs_base);
+    struct sigaction old_action;
+    sigset_t old_mask;
+    syscall(SYS_rt_sigaction,SIGUSR1,0,&old_action,sizeof(unsigned long));
+    syscall(SYS_rt_sigprocmask,SIG_SETMASK,0,&old_mask,sizeof(unsigned long));
+    syscall(SYS_fcntl,input_fd,F_GETFD);
+    syscall(SYS_newfstatat,AT_FDCWD,"/usr/bin/dash",&file_stat,0);
+    syscall(SYS_statx,AT_FDCWD,"/usr/bin/dash",0,STATX_BASIC_STATS,&extended_stat);
+    syscall(SYS_poll,&polled,1,0);
+    syscall(SYS_ppoll,&polled,1,&zero,0,0);
+    int epfd=(int)syscall(SYS_epoll_create1,EPOLL_CLOEXEC);
+    if(epfd>=0){
+        syscall(SYS_epoll_ctl,epfd,EPOLL_CTL_ADD,input_fd,&event);
+        syscall(SYS_epoll_wait,epfd,&ready,1,0);
+        syscall(SYS_close,epfd);
+    }
+    int directory=(int)syscall(SYS_openat,AT_FDCWD,"/usr",O_RDONLY|O_DIRECTORY|O_CLOEXEC,0);
+    if(directory>=0){syscall(SYS_getdents64,directory,entries,sizeof(entries));syscall(SYS_close,directory);}
+    probe_one_byte("/usr/bin/dash");
+    probe_one_byte("/etc/passwd");
+    void *memory=(void*)syscall(SYS_mmap,0,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    if(memory!=MAP_FAILED){
+        *(volatile unsigned char*)memory=0x5a;
+        long moved=syscall(SYS_mremap,memory,4096,8192,MREMAP_MAYMOVE);
+        size_t length=4096;
+        if(moved>=0){memory=(void*)moved;length=8192;}
+        syscall(SYS_madvise,memory,length,MADV_DONTNEED);
+        syscall(SYS_mprotect,memory,length,PROT_READ);
+        syscall(SYS_munmap,memory,length);
+    }
+    int duplicate=(int)syscall(SYS_dup2,input_fd,100);
+    if(duplicate==100)syscall(SYS_close,duplicate);
+    syscall(SYS_futex,&futex_word,FUTEX_WAKE_PRIVATE,1,0,0,0);
+    syscall(SYS_set_tid_address,&clear_child_tid);
+    robust_head.list.next=&robust_head.list;
+    syscall(SYS_set_robust_list,&robust_head,sizeof(robust_head));
+}
+
+static void probe_signed_taskboard_endpoint(void)
+{
+    if(pilot_family!=4 && pilot_family!=6)return;
+    int family=pilot_family==4?AF_INET:AF_INET6;
+    int fd=(int)syscall(SYS_socket,family,SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC,IPPROTO_TCP);
+    if(fd<0)return;
+    int enabled=1,connection_error=0;
+    socklen_t length=sizeof(connection_error);
+    syscall(SYS_setsockopt,fd,SOL_SOCKET,SO_KEEPALIVE,&enabled,sizeof(enabled));
+    syscall(SYS_getsockopt,fd,SOL_SOCKET,SO_ERROR,&connection_error,&length);
+    struct sockaddr_storage local={0};
+    socklen_t local_length=sizeof(local);
+    syscall(SYS_getsockname,fd,&local,&local_length);
+    struct sockaddr_storage destination={0};
+    socklen_t destination_length;
+    if(pilot_family==4){
+        struct sockaddr_in *v4=(struct sockaddr_in*)&destination;
+        v4->sin_family=AF_INET;v4->sin_port=htons(pilot_port);
+        memcpy(&v4->sin_addr,pilot_address,4);
+        destination_length=sizeof(*v4);
+    }else{
+        struct sockaddr_in6 *v6=(struct sockaddr_in6*)&destination;
+        v6->sin6_family=AF_INET6;v6->sin6_port=htons(pilot_port);
+        memcpy(&v6->sin6_addr,pilot_address,16);
+        destination_length=sizeof(*v6);
+    }
+    errno=0;
+    long connected=syscall(SYS_connect,fd,&destination,destination_length);
+    if(connected==0 || (connected<0 && errno==EINPROGRESS)){
+        struct pollfd waiting={.fd=fd,.events=POLLOUT};
+        if(syscall(SYS_poll,&waiting,1,250)>0){
+            length=sizeof(connection_error);
+            if(syscall(SYS_getsockopt,fd,SOL_SOCKET,SO_ERROR,&connection_error,&length)==0 && connection_error==0){
+                struct sockaddr_storage peer={0};
+                socklen_t peer_length=sizeof(peer);
+                syscall(SYS_getpeername,fd,&peer,&peer_length);
+                static const char request[]="HEAD /api/health HTTP/1.0\r\nHost: taskboard\r\n\r\n";
+                syscall(SYS_sendto,fd,request,sizeof(request)-1,MSG_DONTWAIT,0,0);
+                waiting.events=POLLIN;
+                if(syscall(SYS_poll,&waiting,1,250)>0){
+                    char response;
+                    syscall(SYS_recvfrom,fd,&response,1,MSG_DONTWAIT,0,0);
+                }
+                syscall(SYS_shutdown,fd,SHUT_RDWR);
+            }
+        }
+    }
+    syscall(SYS_close,fd);
+}
+
+// Both destinations are this VM's own loopback. A failed guard cannot turn
+// this fixed denial stimulus into a scan of a LAN peer.
+static int probe_owned_loopback(int family, uint32_t socket_id, uint32_t connect_id)
+{
+    errno=0;
+    int fd=(int)syscall(SYS_socket,family,SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC,IPPROTO_TCP);
+    int socket_error=errno;
+    if(emit(socket_id,fd,socket_error))return -1;
+    if(fd<0)return emit(connect_id,-2,0);
+    struct sockaddr_storage destination={0};
+    socklen_t length;
+    if(family==AF_INET){
+        struct sockaddr_in *v4=(struct sockaddr_in*)&destination;
+        v4->sin_family=AF_INET;v4->sin_port=htons(pilot_port);
+        v4->sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        length=sizeof(*v4);
+    }else{
+        struct sockaddr_in6 *v6=(struct sockaddr_in6*)&destination;
+        v6->sin6_family=AF_INET6;v6->sin6_port=htons(pilot_port);
+        v6->sin6_addr.s6_addr[15]=1;
+        length=sizeof(*v6);
+    }
+    errno=0;
+    long connected=syscall(SYS_connect,fd,&destination,length);
+    int connect_error=errno;
+    int recorded=emit(connect_id,connected,connect_error);
+    syscall(SYS_close,fd);
+    return recorded;
+}
 
 static __attribute__((noreturn)) void finish(int status)
 {
@@ -92,9 +258,27 @@ static int send_listener(int listener,const char *binding)
     return syscall(SYS_sendmsg,4,&message,0)==(long)sizeof(data)?0:-1;
 }
 
+static int pilot_stream_pair(const char *input,const char *output)
+{
+    const char *prefix="/run/agentgate/streams/.qualification-";
+    size_t length=strlen(prefix);
+    if(strncmp(input,prefix,length) || strncmp(output,prefix,length))return 0;
+    const char *input_leaf=strchr(input+length,'/');
+    const char *output_leaf=strchr(output+length,'/');
+    if(!input_leaf || !output_leaf || input_leaf==input+length ||
+       (size_t)(input_leaf-input)>=length+25 ||
+       output_leaf-output!=input_leaf-input ||
+       strncmp(input,output,(size_t)(input_leaf-input)) ||
+       strcmp(input_leaf,"/input") || strcmp(output_leaf,"/output"))return 0;
+    for(const char *p=input+length;p<input_leaf;p++)
+        if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')))return 0;
+    return 1;
+}
+
 int main(int argc,char **argv)
 {
-    if(argc!=4 || strncmp(argv[1],"/var/lib/",9) || strncmp(argv[2],"/var/lib/",9))return 2;
+    if(argc!=4 || !((!strncmp(argv[1],"/var/lib/",9) && !strncmp(argv[2],"/var/lib/",9)) ||
+                    pilot_stream_pair(argv[1],argv[2])))return 2;
     if(strcmp(argv[3],"candidate-listener"))return 2;
     char marker[64]={0};int fd=open("/etc/alloyium-disposable-vm",O_RDONLY);
     if(fd<0)return 3;
@@ -103,7 +287,8 @@ int main(int argc,char **argv)
     struct sock_filter setup[4096];uint16_t setup_length=0;
     input_path=argv[1];output_path=argv[2];
     char header[8],binding[64];
-    if(read_all(3,header,sizeof(header)) || memcmp(header,"AGQCF002",8) || read_all(3,&setup_length,sizeof(setup_length)) || read_all(3,&final_length,sizeof(final_length)) || read_all(3,binding,sizeof(binding)))return 4;
+    if(read_all(3,header,sizeof(header)) || memcmp(header,"AGQCF003",8) || read_all(3,&setup_length,sizeof(setup_length)) || read_all(3,&final_length,sizeof(final_length)) || read_all(3,binding,sizeof(binding)) || read_all(3,&pilot_family,sizeof(pilot_family)) || read_all(3,&pilot_port,sizeof(pilot_port)) || read_all(3,pilot_address,sizeof(pilot_address)))return 4;
+    if((pilot_family!=0 && pilot_family!=4 && pilot_family!=6) || (pilot_family==0 && pilot_port!=0) || (pilot_family!=0 && pilot_port==0))return 4;
     if(!setup_length || setup_length>4096 || !final_length || final_length>4096 || read_all(3,setup,setup_length*sizeof(setup[0])) || read_all(3,final,final_length*sizeof(final[0])))return 4;
     for(unsigned i=0;i<sizeof(binding);i++)if(!((binding[i]>='0'&&binding[i]<='9')||(binding[i]>='a'&&binding[i]<='f')))return 4;
     close(3);actor_pid=(uint32_t)getpid();pid_t parent=getppid();authorized_parent=parent;
@@ -131,15 +316,49 @@ static int candidate_body(void)
     output_fd=(int)syscall(SYS_openat,AT_FDCWD,output_path,O_WRONLY,0);
     if(input_fd<0 || output_fd<0)return 8;
     if(emit(1,0,0) || emit(2,release_pid,0) || emit(3,release_uid,0) || emit(4,release_code,0) || barrier(input_fd,1))return 9;
+    probe_safe_syscalls(input_fd);
+    probe_signed_taskboard_endpoint();
+    if(pilot_family && (probe_owned_loopback(AF_INET,60,61) ||
+                        probe_owned_loopback(AF_INET6,62,63)))return 41;
     RECORD(10,syscall(SYS_getppid));
     RECORD(11,syscall(0x3fffffff));
     RECORD(12,syscall(SYS_clone3,0,0));
-    CREATE_RECORD(50,syscall(SYS_clone,SIGCHLD,0,0,0,0));
+    errno=0;long child=syscall(SYS_clone,SIGCHLD,0,0,0,0);int child_error=errno;
+    if(child==0)finish(90);
+    if(emit(50,child,child_error))return 40;
+    if(child>0){
+        int status=0;
+        RECORD(53,syscall(SYS_wait4,child,&status,0,0));
+        if(emit(54,status,0))return 40;
+    }
     CREATE_RECORD(51,syscall(SYS_fork));
     CREATE_RECORD(52,syscall(SYS_vfork));
     int descriptors[2]={-1,-1};
     RECORD(13,syscall(SYS_pipe,descriptors));
     RECORD(14,syscall(SYS_pipe2,descriptors,0));
+    if(descriptors[0]>=0 && descriptors[1]>=0){
+        struct stat read_stat={0},write_stat={0};
+        unsigned char sent=0x5a,received=0;
+        RECORD(28,syscall(SYS_fstat,descriptors[0],&read_stat));
+        if(emit(29,read_stat.st_mode,0) || emit(30,read_stat.st_ino,0))return 40;
+        RECORD(31,syscall(SYS_fstat,descriptors[1],&write_stat));
+        if(emit(32,write_stat.st_mode,0) || emit(33,write_stat.st_ino,0))return 40;
+        RECORD(34,syscall(SYS_write,descriptors[1],&sent,1));
+        RECORD(35,syscall(SYS_read,descriptors[0],&received,1));
+        if(emit(36,received,0))return 40;
+        struct iovec vector={.iov_base=&sent,.iov_len=1};
+        syscall(SYS_writev,descriptors[1],&vector,1);
+        vector.iov_base=&received;
+        syscall(SYS_readv,descriptors[0],&vector,1);
+        int epfd=(int)syscall(SYS_epoll_create1,EPOLL_CLOEXEC);
+        if(epfd>=0){
+            struct epoll_event event={.events=EPOLLIN,.data.fd=descriptors[0]},ready;
+            syscall(SYS_epoll_ctl,epfd,EPOLL_CTL_ADD,descriptors[0],&event);
+            syscall(SYS_epoll_wait,epfd,&ready,1,0);
+            syscall(SYS_close,epfd);
+        }
+        syscall(SYS_close,descriptors[0]);syscall(SYS_close,descriptors[1]);
+    }
     RECORD(15,syscall(SYS_eventfd,0));
     RECORD(16,syscall(SYS_eventfd2,0,0));
     RECORD(17,syscall(SYS_kill,actor_pid,0));

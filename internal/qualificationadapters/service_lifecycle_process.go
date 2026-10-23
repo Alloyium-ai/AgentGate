@@ -60,7 +60,7 @@ func sealedServiceLifecycleStart(start noderuntime.QualificationStart) (*os.File
 	return file, nil
 }
 func startServiceLifecycleProcess(ctx context.Context, path, hash, root, name string, args []string, files []*os.File) (*serviceLifecycleProcess, error) {
-	if name != "node" && name != "watchdog" {
+	if name != "node" && name != "node-restarted" && name != "watchdog" {
 		return nil, errors.New("the fixed fixture process role differs")
 	}
 	if err := jobartifacts.VerifyExecutable(path, hash); err != nil {
@@ -81,7 +81,7 @@ func startServiceLifecycleProcess(ctx context.Context, path, hash, root, name st
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if name == "node" {
+	if name == "node" || name == "node-restarted" {
 		command.SysProcAttr.Pdeathsig = syscall.SIGKILL
 	}
 	process := &serviceLifecycleProcess{command: command, done: make(chan struct{})}

@@ -54,3 +54,5 @@ The examples require durable state, trust, backup and TLS storage. The TLS examp
 Before any application deployment, use an independently reviewed CI image pinned by digest and protect its bootstrap input.
 This source preview supplies no prebuilt image or production deployment approval.
 Read the local configuration and authentication code before using the examples with real data.
+
+The browser workspace test uses owned mock API responses. These browser fixtures do not replace the SSH POC network guard.

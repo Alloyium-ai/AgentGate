@@ -17,6 +17,12 @@ func Evaluate(p Policy, endpoint Endpoint, nowNS uint64) Decision {
 		result.Reason = "unsupported-endpoint"
 		return result
 	}
+	if p.PilotMode > 1 || (p.PilotMode == 1 && pilotPrivate(endpoint.Address) &&
+		!(addressBytes(endpoint.Address) == p.PilotAddress && endpoint.Port == p.PilotPort && endpoint.Protocol == TCP &&
+			((endpoint.Address.Is4() && p.PilotFamily == IPv4) || (endpoint.Address.Is6() && p.PilotFamily == IPv6)))) {
+		result.Reason = "pilot-lan-boundary"
+		return result
+	}
 	family := uint8(IPv6)
 	if endpoint.Address.Is4() {
 		family = IPv4

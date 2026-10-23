@@ -33,11 +33,16 @@ type Rule struct {
 // Policy is one atomic map value. A zero value denies every endpoint.
 // The trusted manager binds the map key to one prepared root-level job cgroup.
 type Policy struct {
-	Generation uint64
-	ExpiresNS  uint64
-	Count      uint32
-	Reserved   uint32 // Kernel DNS lease revision; zero for ordinary literal plans.
-	Rules      [MaxRules]Rule
+	Generation   uint64
+	ExpiresNS    uint64
+	Count        uint32
+	Reserved     uint32 // Kernel DNS lease revision; zero for ordinary literal plans.
+	PilotAddress [16]byte
+	PilotPort    uint16
+	PilotFamily  uint8
+	PilotMode    uint8
+	PilotPadding uint32
+	Rules        [MaxRules]Rule
 }
 
 // Lease comes only from a trusted resolver, never from an agent policy document.

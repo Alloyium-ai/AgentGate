@@ -94,6 +94,16 @@ type Network struct {
 	Default string        `json:"default"`
 	Rules   []NetworkRule `json:"rules"`
 	DNS     DNS           `json:"dns"`
+	Pilot   *PilotNetwork `json:"pilot,omitempty"`
+}
+
+// PilotNetwork is an explicit, signed boundary for an SSH coding workload.
+// The endpoint and one-task bridge scope come from private policy settings.
+type PilotNetwork struct {
+	Mode            string `json:"mode"`
+	TaskboardIP     string `json:"taskboard_ip"`
+	TaskboardPort   int    `json:"taskboard_port"`
+	TaskboardTaskID int    `json:"taskboard_task_id"`
 }
 type Identity struct {
 	TrustSource       string `json:"trust_source"`

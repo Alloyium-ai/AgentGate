@@ -73,13 +73,13 @@
       "path": "bpf/fs_access.bpf.c",
       "kind": "BPF",
       "license": "GPL-2.0-only",
-      "preserved_sha256": "3e88a8a7bfa7dbf3988fa81a4f6a6e14dbe6516f09e0a15e635a48dade66cc17"
+      "preserved_sha256": "7199c21dbfd9d84fafe7dc5610bb78e459541018f6b805b851e5d9a6f71bbcd8"
     },
     {
       "path": "bpf/network_abi.h",
       "kind": "BPF",
       "license": "GPL-2.0-only",
-      "preserved_sha256": "e3ca58acfb26799a13a1f084b4e54631889720f9d155625fc1d784d5b65e27ea"
+      "preserved_sha256": "d1a59b7754966a644f9492a163eb8f0c947396e22579ab286ee0f91feb0b6493"
     },
     {
       "path": "bpf/network_custody.bpf.c",
@@ -97,7 +97,7 @@
       "path": "bpf/network_peer_match.h",
       "kind": "BPF",
       "license": "GPL-2.0-only",
-      "preserved_sha256": "aa2076e961474eb727cc66551b74ab8d92c9fe221f85cd1bee5885bcf423714f"
+      "preserved_sha256": "c8460becab4918a94cb7785744e706f4b7ad4650f7e66cdd7f3e12f38c3af80e"
     },
     {
       "path": "bpf/network_policy.bpf.c",
@@ -121,7 +121,7 @@
       "path": "bpf/network_sockets.bpf.c",
       "kind": "BPF",
       "license": "GPL-2.0-only",
-      "preserved_sha256": "b6a50df5ab0d0b3f7353915a07017da78b6b60c622f3697c79a4ce43bf19817a"
+      "preserved_sha256": "0d7d922f2924cb0d9109818ef22576f17f9725132800931e2f0ba40ef024fe66"
     },
     {
       "path": "bpf/process_guard.bpf.c",
@@ -193,6 +193,31 @@
     },
     {
       "path": "cmd/poc/workload_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/main.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/pins.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/pins_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/probes.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/probes_test.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
@@ -632,6 +657,51 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/dockerplacement/bridge.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/bridge_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/handles.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/handles_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/hosts.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/hosts_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/snapshot_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/target.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/target_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/domainstore/cgroup.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -883,6 +953,11 @@
     },
     {
       "path": "internal/jobartifacts/artifact_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/jobartifacts/isolation_test.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
@@ -1292,6 +1367,16 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/lifecycle/ssh.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/lifecycle/ssh_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/lifecycle/stop_reason_retry_test.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -1373,6 +1458,16 @@
     },
     {
       "path": "internal/netrules/netrules_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/netrules/pilot.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/netrules/pilot_test.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
@@ -1467,6 +1562,11 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/nodeapi/ssh_runtime_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/nodeapi/types.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -1537,6 +1637,11 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/nodebackend/docker_streams_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/nodebackend/expiry.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -1568,6 +1673,26 @@
     },
     {
       "path": "internal/nodebackend/operations.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/nodebackend/pilot_hosts.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/nodebackend/pilot_hosts_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/nodebackend/pilot_target.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/nodebackend/pilot_target_test.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
@@ -1877,6 +2002,11 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/noderuntime/runtime_files_target.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/noderuntime/runtime_files_test.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -2047,6 +2177,11 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/qualification/matrix.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/qualification/producer.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -2082,6 +2217,11 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/qualificationadapters/actor_network_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/qualificationadapters/actual_test.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -2097,6 +2237,16 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/qualificationadapters/candidate_network.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/candidate_network_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/qualificationadapters/evidence.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -2108,6 +2258,11 @@
     },
     {
       "path": "internal/qualificationadapters/io.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/io_pilot_test.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
@@ -2128,6 +2283,36 @@
     },
     {
       "path": "internal/qualificationadapters/maps.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/pilot_bridge.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/pilot_bridge_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/pilot_hosts.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/pilot_target.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/pilot_target_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/pipe_positive_test.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
@@ -2227,6 +2412,11 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/qualificationadapters/service_lifecycle_candidate_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/qualificationadapters/service_lifecycle_complete_actual_test.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -2272,6 +2462,26 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/qualificationadapters/service_lifecycle_loss_journal.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/service_lifecycle_loss_run.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/service_lifecycle_loss_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/service_lifecycle_loss_verify.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/qualificationadapters/service_lifecycle_maps.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -2282,12 +2492,22 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/qualificationadapters/service_lifecycle_node_loss.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/qualificationadapters/service_lifecycle_observe.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
     {
       "path": "internal/qualificationadapters/service_lifecycle_process.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/qualificationadapters/service_lifecycle_prepare_reply_loss.go",
       "kind": "code",
       "license": "Apache-2.0"
     },
@@ -2452,6 +2672,16 @@
       "license": "Apache-2.0"
     },
     {
+      "path": "internal/runtimeclosure/verify_at.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/runtimeclosure/verify_at_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "internal/runtimeguard/bootstrap.go",
       "kind": "code",
       "license": "Apache-2.0"
@@ -2589,8 +2819,88 @@
       "preserved_sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
     },
     {
+      "path": "poc/ssh-diagnostic/README.md",
+      "kind": "documentation",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/gateway.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/run-in-target.sh",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_gateway.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
       "path": "settings.json",
       "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/Dockerfile",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/README.md",
+      "kind": "documentation",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "ssh/agentgate_gateway_bootstrap.ts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/agentgate_gateway_policy.ts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/agentgate_gateway_runtime.ts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/agentgate_node_trust.ts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/agentgate_ssh_command.mts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/sshd_config",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/taskboard_bridge.mts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/tests/taskboard_bridge.test.ts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/tests/transport.test.ts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "ssh/verify-fail-closed.sh",
+      "kind": "code",
       "license": "Apache-2.0"
     },
     {
@@ -2711,6 +3021,211 @@
     {
       "path": "web/tsconfig.json",
       "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/policy.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/policy_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/Dockerfile",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/configure.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/install-key.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/operator-gateway.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/prepare-command.sh",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/resolve.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/restart-target.sh",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/settings.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/start-guard.sh",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/start-target.sh",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/stop.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_setup.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/policy.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/policy_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/network_policy.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/prepare-policy.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/prepare-resolver.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/policy.example.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_common.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_build.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance_guest.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/image_contract.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_appliance.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance/boot.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/appliance/Dockerfile",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/hostguard.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/hostguard_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/filesystem.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/pocpolicy/filesystem_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/policy.full.example.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/guard_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/hostmounts.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/dockerplacement/hostmounts_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/mounts.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_mounts.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/grants.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/presets.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_grants.py",
+      "kind": "code",
       "license": "Apache-2.0"
     }
   ]

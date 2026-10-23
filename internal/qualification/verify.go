@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"reflect"
+	"slices"
 	"time"
 )
 
@@ -32,6 +33,15 @@ func (p *Producer) VerifyOutput(out Output, key ed25519.PublicKey, now int64) er
 	r := target.Report()
 	if !reflect.DeepEqual(r, out.Report) || r.SourceRevision != b.SourceRevision || r.ArtifactSHA256 != b.ArtifactDigests["qualification"] || r.InventorySHA256 != b.InventorySHA256 || r.BTFSHA256 != b.BTFSHA256 || r.KernelConfigSHA256 != b.KernelConfigSHA256 || r.Kernel != b.Kernel {
 		return errors.New("qualification publication report identity differs")
+	}
+	if !reflect.DeepEqual(out.CaseMatrix, buildCaseMatrix(p.requests, out.Evidence.Records, r)) {
+		return errors.New("qualification per-case evidence index differs")
+	}
+	for _, record := range out.Evidence.Records {
+		if record.Failure != "" && (complete || len(record.Coverage) != 0 ||
+			!slices.Contains(out.AdapterErrors, record.AdapterID+": "+record.Failure)) {
+			return errors.New("a failed qualification result supplied case coverage or lost its error")
+		}
 	}
 	policies := make([]string, 0, len(p.requests))
 	required := map[string]bool{}

@@ -4,6 +4,8 @@ package nodebackend
 
 import (
 	"alloyium.local/kernel-poc/internal/anonrules"
+	"alloyium.local/kernel-poc/internal/buildinfo"
+	"alloyium.local/kernel-poc/internal/dockerplacement"
 	"alloyium.local/kernel-poc/internal/domainstore"
 	"alloyium.local/kernel-poc/internal/enforcement"
 	"alloyium.local/kernel-poc/internal/jobaudit"
@@ -228,6 +230,32 @@ func (b *Backend) Prepare(ctx context.Context, binding lifecycle.Binding) (out l
 		return out, err
 	}
 	doc = copyValue(doc)
+	// The pilot target must be live and measured before domain reservation.
+	// Qualification still requires the separate Docker placement contract.
+	var pilotTarget *dockerplacement.Measurement
+	if doc.Network != nil && doc.Network.Pilot != nil {
+		if b.config.PilotTarget == nil {
+			return out, errors.New("the SSH Docker target configuration is absent")
+		}
+		if !b.config.PilotTarget.MatchesPilot(doc.Network.Pilot.TaskboardTaskID, doc.Network.Pilot.TaskboardIP, doc.Network.Pilot.TaskboardPort) {
+			return out, errors.New("the Docker bridge task differs from the signed policy")
+		}
+		if err := b.config.PilotTarget.RegistryReady(); err != nil {
+			return out, err
+		}
+		handles, targetErr := dockerplacement.Open(ctx, *b.config.PilotTarget)
+		if targetErr != nil {
+			return out, targetErr
+		}
+		if buildinfo.SourceRevision == "" || handles.Measurement.ImageSourceRevision != buildinfo.SourceRevision {
+			return out, errors.Join(errors.New("the Docker target image source differs from the node"), handles.Close())
+		}
+		measured := handles.Measurement
+		pilotTarget = &measured
+		if closeErr := handles.Close(); closeErr != nil {
+			return out, closeErr
+		}
+	}
 	if needsCredentials(doc) && b.config.Credentials == nil {
 		return out, errors.New("the credential namespace has no configured broker custody")
 	}
@@ -245,7 +273,7 @@ func (b *Backend) Prepare(ctx context.Context, binding lifecycle.Binding) (out l
 	if binding.DeadlineNS <= now {
 		return out, errors.New("the prepared deadline expired")
 	}
-	r := &run{binding: copyValue(binding), document: doc, phase: "preparing", exitCode: -1}
+	r := &run{binding: copyValue(binding), document: doc, pilotTarget: pilotTarget, phase: "preparing", exitCode: -1}
 	if err = b.qualification(ctx, r); err != nil {
 		return out, err
 	}

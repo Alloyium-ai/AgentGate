@@ -175,7 +175,8 @@ export function TargetPreview({ versionID }: { versionID: string }) {
       </summary>
       <p>
         The API checks the stored document, enrolled node, boot, report
-        freshness, and required capability qualification.
+        freshness, and a signed qualification scope for this policy and its
+        required capabilities.
       </p>
       <form onSubmit={preview}>
         <fieldset disabled={busy}>

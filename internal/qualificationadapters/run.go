@@ -32,13 +32,17 @@ func candidateSupported(request qualification.Request) error {
 			return fmt.Errorf("the fixed actor requires the candidate's explicit %s permission", name)
 		}
 	}
-	for _, name := range []string{"getppid", "clone", "fork", "vfork", "pipe2", "eventfd2", "kill", "tkill", "tgkill"} {
+	for _, name := range []string{"getppid", "fork", "vfork", "eventfd2", "kill", "tkill", "tgkill"} {
 		if slices.Contains(r.Seccomp.AllowSyscalls, name) {
 			return fmt.Errorf("the fixed denial actor cannot test a positive %s grant", name)
 		}
 	}
-	if len(request.Document.Network.Rules) != 0 || len(request.Document.Sockets.Rules) != 0 {
-		return errors.New("the fixed denial actor requires empty network and socket rules")
+	if slices.Contains(r.Seccomp.AllowSyscalls, "clone") && !slices.Contains(r.Seccomp.AllowSyscalls, "wait4") {
+		return errors.New("the fixed clone actor requires an explicit wait4 grant")
+	}
+	if slices.Contains(r.Seccomp.AllowSyscalls, "pipe2") &&
+		(r.IPC == nil || !slices.Contains(r.IPC.Pipes, "create") || !slices.Contains(r.Seccomp.AllowSyscalls, "fstat")) {
+		return errors.New("the fixed pipe actor requires an explicit pipe create grant and fstat")
 	}
 	if r.Memory != nil && slices.Contains(r.Memory.Anonymous, "execute") {
 		return errors.New("the fixed denial actor does not implement a positive anonymous execute grant")
@@ -71,7 +75,7 @@ func (a *candidateDenial) runCandidate(ctx context.Context, request qualificatio
 		}
 		r.Artifacts[name] = request.Binding.ArtifactDigests[name]
 	}
-	io, err := a.prepareIO(request.Document)
+	io, err := a.prepareIO(ctx, request)
 	if io != nil {
 		defer func() { err = errors.Join(err, io.close()) }()
 	}
@@ -120,7 +124,11 @@ func (a *candidateDenial) runCandidate(ctx context.Context, request qualificatio
 		}
 	}()
 	r.DeadlineNS = out.StartedMonoNS + uint64(20*time.Second)
-	plan, err := enforcement.Compile(request.Document, r.DomainID, r.Generation, out.StartedMonoNS, r.DeadlineNS, nil)
+	r.Network, err = a.candidateNetwork(ctx, request, r.DomainID, r.Generation, r.DeadlineNS)
+	if err != nil {
+		return out, err
+	}
+	plan, err := enforcement.Compile(request.Document, r.DomainID, r.Generation, out.StartedMonoNS, r.DeadlineNS, r.Network.Leases)
 	if err != nil {
 		return out, err
 	}
@@ -129,7 +137,11 @@ func (a *candidateDenial) runCandidate(ctx context.Context, request qualificatio
 	if err = observer.Collection.Maps["audit_bindings"].Update(r.DomainID, syscallrules.Binding{Generation: r.Generation, ExpiresNS: r.DeadlineNS}, 0); err != nil {
 		return out, err
 	}
-	actor, err := a.startActor(ctx, paths["qualification-denial-worker"], r.Artifacts["qualification-denial-worker"], io, plan.Syscalls(), digestJSON(request.Binding))
+	endpoint, err := pilotActorEndpoint(request.Document.Network)
+	if err != nil {
+		return out, err
+	}
+	actor, err := a.startActor(ctx, paths["qualification-denial-worker"], r.Artifacts["qualification-denial-worker"], io, plan.Syscalls(), digestJSON(request.Binding), endpoint)
 	if actor == nil {
 		return out, err
 	}

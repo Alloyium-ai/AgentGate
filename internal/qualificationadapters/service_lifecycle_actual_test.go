@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"alloyium.local/kernel-poc/internal/jobaudit"
@@ -40,7 +41,7 @@ func actualServiceLifecycleFixture(t *testing.T) (qualification.Request, []quali
 	return request, output.Results
 }
 
-func TestActualServiceLifecycleExpiryAndFailedScenes(t *testing.T) {
+func TestHistoricalServiceLifecycleCannotQualifyCurrentSchema(t *testing.T) {
 	request, results := actualServiceLifecycleFixture(t)
 	var old serviceLifecycleReceipt
 	if err := json.Unmarshal(results[2].Raw, &old); err != nil {
@@ -51,15 +52,8 @@ func TestActualServiceLifecycleExpiryAndFailedScenes(t *testing.T) {
 	}
 	for index, mode := range []string{"stop", "expiry", "revoke"} {
 		coverage, err := (&serviceLifecycleAdapter{mode: mode}).Verify(request, results[index+1])
-		if err != nil {
-			t.Fatal(mode, err)
-		}
-		count := 0
-		for _, item := range coverage {
-			count += len(item.Cases)
-		}
-		if mode == "expiry" && (count != 21 || len(coverage) != 6) || mode != "expiry" && count != 0 {
-			t.Fatal("the actual scene coverage differs", mode, coverage)
+		if err == nil || !strings.Contains(err.Error(), "qualification candidate binding differs") || len(coverage) != 0 {
+			t.Fatal("a historical service scene supplied current-schema coverage", mode, coverage, err)
 		}
 	}
 }

@@ -106,11 +106,51 @@ func targetFixture(t *testing.T, state string) ([]byte, ed25519.PublicKey, Targe
 	report.InventorySHA256 = strings.Repeat("d", 64)
 	report.BTFSHA256 = strings.Repeat("e", 64)
 	report.KernelConfigSHA256 = strings.Repeat("f", 64)
+	digest, err := fullFixture().Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Qualification = &QualificationScope{
+		Protocol: QualificationScopeVersion, ProducerSHA256: strings.Repeat("1", 64),
+		CompilerSHA256: strings.Repeat("2", 64), ArtifactsSHA256: strings.Repeat("3", 64),
+		PolicyDigests: []string{digest}, RequiredCapabilities: required,
+		ContractsSHA256: strings.Repeat("4", 64), EvidenceSHA256: strings.Repeat("5", 64),
+	}
 	raw, err := SignReport(report, key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return raw, pub, binding
+}
+func TestFullPreviewRequiresExactSignedQualificationScope(t *testing.T) {
+	raw, pub, binding := targetFixture(t, "enforced")
+	target, err := VerifyTarget(raw, pub, binding, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PreviewForTarget(fullFixture(), target, 150); err != nil {
+		t.Fatal(err)
+	}
+	target.report.Qualification = nil
+	if _, err = PreviewForTarget(fullFixture(), target, 150); err == nil {
+		t.Fatal("an unscoped enforced report supplied a full-policy preview")
+	}
+	target, err = VerifyTarget(raw, pub, binding, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.report.Qualification.PolicyDigests[0] = strings.Repeat("6", 64)
+	if _, err = PreviewForTarget(fullFixture(), target, 150); err == nil {
+		t.Fatal("another policy's qualification supplied a preview")
+	}
+	target, err = VerifyTarget(raw, pub, binding, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.report.Qualification.RequiredCapabilities = target.report.Qualification.RequiredCapabilities[:1]
+	if _, err = PreviewForTarget(fullFixture(), target, 150); err == nil {
+		t.Fatal("an incomplete capability set supplied a preview")
+	}
 }
 func TestProbeAvailabilityCannotGrantEnforcementCapability(t *testing.T) {
 	raw, pub, binding := targetFixture(t, "probe-only")

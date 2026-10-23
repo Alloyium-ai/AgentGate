@@ -55,6 +55,32 @@ func TestServiceLifecycleSceneRejectsCrossSceneAndOversizeReceipts(t *testing.T)
 	}
 }
 
+func TestNodeLossRequiresItsOwnMeasuredScene(t *testing.T) {
+	request := adapterRequest(t)
+	adapter := &serviceLifecycleAdapter{mode: "node-loss"}
+	result := qualification.Result{Binding: request.Binding, StartedMonoNS: 1, FinishedMonoNS: 2,
+		Raw: serviceJSON(serviceLifecycleReceipt{Protocol: serviceLifecycleReceiptVersion, AdapterID: adapter.ID(), Binding: request.Binding,
+			Scenes: []serviceLifecycleScene{{Mode: "node-loss", Error: "the actual node fault is absent"}}})}
+	coverage, err := adapter.Verify(request, result)
+	if err != nil || len(coverage) != 0 {
+		t.Fatal("a failed node-loss scene supplied coverage", coverage, err)
+	}
+	var receipt serviceLifecycleReceipt
+	if err := lifecycle.DecodeTransport(strings.NewReader(string(result.Raw)), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	receipt.Scenes[0].Error = ""
+	result.Raw = serviceJSON(receipt)
+	if coverage, err = adapter.Verify(request, result); err == nil || len(coverage) != 0 {
+		t.Fatal("a node-loss scene without measured process death supplied coverage", coverage, err)
+	}
+	receipt.Scenes[0].Mode = "watchdog-loss"
+	result.Raw = serviceJSON(receipt)
+	if coverage, err = adapter.Verify(request, result); err == nil || len(coverage) != 0 {
+		t.Fatal("a watchdog-loss scene supplied node-loss coverage", coverage, err)
+	}
+}
+
 func TestServiceLifecycleSceneRequiresItsActualStopCause(t *testing.T) {
 	for mode, state := range map[string]string{"stop": "cancelled", "expiry": "expired", "revoke": "revoked"} {
 		t.Run(mode, func(t *testing.T) {

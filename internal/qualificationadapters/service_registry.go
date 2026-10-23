@@ -12,17 +12,19 @@ import (
 	"reflect"
 
 	"alloyium.local/kernel-poc/internal/buildinfo"
+	"alloyium.local/kernel-poc/internal/dnslease"
 	"alloyium.local/kernel-poc/internal/jobartifacts"
 	"alloyium.local/kernel-poc/internal/kernel"
 	"alloyium.local/kernel-poc/internal/lifecycle"
+	"alloyium.local/kernel-poc/internal/noderuntime"
 	"alloyium.local/kernel-poc/internal/qualification"
 )
 
 const serviceReceiptVersion = "agentgate.service-identity-receipt.v1"
 
-// NewLifecycle supplies isolated service actors. These actors never mint a
-// qualification report. Lifecycle releases use only the fixed worker permit. Partial cases do not supply
-// a complete capability contract.
+// NewLifecycle supplies isolated service actors and, when configured, a
+// measured Docker target custody actor. Lifecycle releases use only the fixed
+// worker permit. Partial cases cannot satisfy a complete capability contract.
 func NewLifecycle(config Config) ([]qualification.Adapter, error) {
 	if err := protectedDirectory(config.ScratchRoot); err != nil {
 		return nil, err
@@ -31,12 +33,39 @@ func NewLifecycle(config Config) ([]qualification.Adapter, error) {
 	for name, path := range config.Artifacts {
 		owned.Artifacts[name] = path
 	}
-	return []qualification.Adapter{
+	adapters := []qualification.Adapter{
 		&serviceIdentity{config: owned},
 		&serviceLifecycleAdapter{config: owned, mode: "stop"},
 		&serviceLifecycleAdapter{config: owned, mode: "expiry"},
 		&serviceLifecycleAdapter{config: owned, mode: "revoke"},
-	}, nil
+		&serviceLifecycleAdapter{config: owned, mode: "watchdog-loss"},
+		&serviceLifecycleAdapter{config: owned, mode: "node-loss"},
+		&serviceLifecycleAdapter{config: owned, mode: "prepare-reply-loss"},
+	}
+	if config.PilotTarget != nil {
+		target := *config.PilotTarget
+		if err := target.Validate(); err != nil {
+			return nil, err
+		}
+		var resolver dnslease.Resolver
+		if config.NodeConfigFile != "" {
+			node, err := noderuntime.ReadConfig(config.NodeConfigFile)
+			if err != nil {
+				return nil, err
+			}
+			if node.PilotTarget == nil || !reflect.DeepEqual(*node.PilotTarget, target) {
+				return nil, errors.New("the qualifier target differs from the protected node configuration")
+			}
+			resolver, err = noderuntime.ConfiguredResolver(node)
+			if err != nil {
+				return nil, err
+			}
+		}
+		// The existing target-only diagnostic omits the node configuration. It
+		// can retain partial custody cases but cannot gain trusted-host coverage.
+		adapters = append(adapters, &pilotTargetAdapter{target: target, resolver: resolver})
+	}
+	return adapters, nil
 }
 
 type serviceIdentity struct{ config Config }

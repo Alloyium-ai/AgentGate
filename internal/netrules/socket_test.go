@@ -111,6 +111,22 @@ func TestSocketOptionsRequireExplicitSupportedPairs(t *testing.T) {
 	if _, err := CompileSockets(socketPolicy(rule), 7, 100, 1000); err == nil {
 		t.Fatal("allowed implicit option list")
 	}
+	mixed := socketRule("mixed-options", "ipv4", "tcp", "allow", "set_option", "get_option")
+	mixed.Options = []policy.SocketOption{{Level: 1, Name: 4}, {Level: 1, Name: 9}}
+	plan = socketPlan(t, mixed)
+	op.Option = SocketOptionPlan{Level: 1, Name: 4}
+	op.Operation = SocketGetOption
+	if !EvaluateSocket(plan, op, 200).Allowed {
+		t.Fatal("mixed rule denied SO_ERROR getter")
+	}
+	op.Operation = SocketSetOption
+	if EvaluateSocket(plan, op, 200).Allowed {
+		t.Fatal("mixed rule allowed SO_ERROR setter")
+	}
+	op.Option.Name = 9
+	if !EvaluateSocket(plan, op, 200).Allowed {
+		t.Fatal("mixed rule denied keepalive setter")
+	}
 }
 func TestSocketUnsupportedAllowAndRequiredLocal(t *testing.T) {
 	for _, rule := range []policy.SocketRule{

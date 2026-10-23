@@ -38,6 +38,40 @@ static __always_inline int supported(struct endpoint *ep)
     return any != 0;
 }
 
+// The SSH pilot guard runs before the ordinary policy rule matcher. A DNS
+// lease, broad prefix, or direct numeric address cannot bypass this boundary.
+static __always_inline int pilot_private(struct endpoint *ep)
+{
+    __u8 *a = ep->address;
+    if (ep->family == IPV4) {
+        if (a[0] == 0 || a[0] == 10 || a[0] == 127 || a[0] >= 224) return 1;
+        if (a[0] == 100 && (a[1] & 0xc0) == 64) return 1;
+        if (a[0] == 169 && a[1] == 254) return 1;
+        if (a[0] == 172 && (a[1] & 0xf0) == 16) return 1;
+        if (a[0] == 192 && (a[1] == 168 || a[1] == 0)) return 1;
+        if (a[0] == 198 && (a[1] == 18 || a[1] == 19)) return 1;
+        return 0;
+    }
+    if (ep->family != IPV6) return 1;
+    if ((a[0] & 0xfe) == 0xfc || (a[0] == 0xfe && (a[1] & 0x80)) || a[0] == 255) return 1;
+    if (a[0] == 0 && a[1] == 0x64 && a[2] == 0xff && a[3] == 0x9b) return 1;
+    if (a[0] == 0x20 && (a[1] == 0x02 || (a[1] == 0x01 && a[2] == 0 && a[3] == 0))) return 1;
+    int zero = 1;
+#pragma unroll
+    for (int i = 0; i < 12; i++) if (a[i]) zero = 0;
+    return zero;
+}
+
+static __always_inline int pilot_endpoint(struct net_policy *p, struct endpoint *ep)
+{
+    if (!p || p->pilot_mode > 1) return 0;
+    if (!p->pilot_mode || !pilot_private(ep)) return 1;
+    if (ep->family != p->pilot_family || ep->protocol != TCP || ep->port != p->pilot_port) return 0;
+#pragma unroll
+    for (int i = 0; i < 16; i++) if (ep->address[i] != p->pilot_address[i]) return 0;
+    return 1;
+}
+
 static __always_inline int prefix_match(struct endpoint *ep, struct net_rule *r)
 {
 #pragma unroll
@@ -101,6 +135,7 @@ static __always_inline struct decision evaluate_mode(struct net_policy *p, struc
     __u64 now = bpf_ktime_get_ns();
     if (!p || !p->generation || p->count > MAX_RULES || now >= p->expires_ns) return result;
     if (!mode && !supported(ep)) return result;
+    if (!mode && !pilot_endpoint(p, ep)) return result;
     if (mode && (mode != 1 || (ep->family != IPV4 && ep->family != IPV6) || ep->protocol != UDP)) return result;
     __u32 zero = 0;
     struct peer_eval_state *s = bpf_map_lookup_elem(&peer_eval, &zero);

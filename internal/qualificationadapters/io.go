@@ -3,13 +3,16 @@
 package qualificationadapters
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"alloyium.local/kernel-poc/internal/dockerplacement"
 	"alloyium.local/kernel-poc/internal/policy"
+	"alloyium.local/kernel-poc/internal/qualification"
 	"golang.org/x/sys/unix"
 )
 
@@ -22,8 +25,63 @@ type ownedIO struct {
 func strictDescendant(root, path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && strings.HasPrefix(path, root+string(filepath.Separator))
 }
-func (a *candidateDenial) prepareIO(d policy.Document) (out *ownedIO, err error) {
+
+// The fixed actor can use the pilot's measured stream mount only when the
+// source and target paths are identical. A different mount path needs a
+// namespace-aware actor and must remain unqualified.
+func (a *candidateDenial) pilotStreamRoot(d policy.Document) string {
+	t := a.config.PilotTarget
+	if t == nil || d.Files == nil || d.Network == nil || d.Network.Pilot == nil || t.ArtifactPath == "" ||
+		t.ArtifactSource != t.ArtifactPath || !filepath.IsAbs(t.ArtifactPath) ||
+		filepath.Clean(t.ArtifactPath) != t.ArtifactPath {
+		return ""
+	}
+	for _, rule := range d.Files.Rules {
+		if rule.ID == "job-streams" && rule.Effect == "allow" && rule.Selector.Kind == "subtree" &&
+			rule.Selector.Path == t.ArtifactPath && slices.Contains(rule.Operations, "read") &&
+			slices.Contains(rule.Operations, "write") {
+			return t.ArtifactPath
+		}
+	}
+	return ""
+}
+
+func (a *candidateDenial) pilotIO(ctx context.Context, request qualification.Request, out *ownedIO) (string, error) {
+	root := a.pilotStreamRoot(request.Document)
+	if root == "" || protectedDirectory(root) != nil {
+		return "", errors.New("the candidate has no measured policy stream root")
+	}
+	handles, err := dockerplacement.Open(ctx, *a.config.PilotTarget)
+	if err != nil {
+		return "", err
+	}
+	defer handles.Close()
+	var actual unix.Stat_t
+	if handles.Measurement.ImageSourceRevision != request.Binding.SourceRevision ||
+		unix.Lstat(root, &actual) != nil || uint64(actual.Dev) != handles.Measurement.ArtifactDevice ||
+		actual.Ino != handles.Measurement.ArtifactInode || actual.Uid != 0 || actual.Mode&0022 != 0 {
+		return "", errors.New("the pilot stream root differs from the measured Docker mount")
+	}
+	directory, err := os.MkdirTemp(root, ".qualification-")
+	if err != nil {
+		return "", err
+	}
+	out.dirs = append(out.dirs, directory)
+	if err = os.Chmod(directory, 0711); err != nil {
+		return "", err
+	}
+	out.input, out.output = filepath.Join(directory, "input"), filepath.Join(directory, "output")
+	if policy.FileEffect(*request.Document.Files, out.input, "read") != "allow" ||
+		policy.FileEffect(*request.Document.Files, out.output, "read") != "allow" ||
+		policy.FileEffect(*request.Document.Files, out.output, "write") != "allow" {
+		return "", errors.New("the measured pilot streams lack signed read and write rights")
+	}
+	return root, nil
+}
+func (a *candidateDenial) prepareIO(ctx context.Context, request qualification.Request) (out *ownedIO, err error) {
 	out = &ownedIO{files: map[string]unix.Stat_t{}}
+	root := a.config.ScratchRoot
+	d := request.Document
 	for _, rule := range d.Files.Rules {
 		if rule.Effect != "allow" || rule.Selector.Kind != "exact" || !strictDescendant(a.config.ScratchRoot, rule.Selector.Path) {
 			continue
@@ -35,11 +93,17 @@ func (a *candidateDenial) prepareIO(d policy.Document) (out *ownedIO, err error)
 			out.output = rule.Selector.Path
 		}
 	}
+	if out.input == "" && out.output == "" && a.pilotStreamRoot(d) != "" {
+		root, err = a.pilotIO(ctx, request, out)
+		if err != nil {
+			return out, err
+		}
+	}
 	if out.input == "" || out.output == "" || out.input == out.output {
 		return out, errors.New("the candidate has no exact owned regular input/output selectors")
 	}
 	for _, path := range []string{out.input, out.output} {
-		if err = out.parents(a.config.ScratchRoot, filepath.Dir(path)); err != nil {
+		if err = out.parents(root, filepath.Dir(path)); err != nil {
 			return out, err
 		}
 		file, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)

@@ -48,3 +48,9 @@ func configuredResolver(c Config) (dnslease.Resolver, error) {
 	}
 	return resolver, nil
 }
+
+// ConfiguredResolver opens the same pinned TLS resolver as the normal node.
+// The qualifier calls it from a protected node configuration.
+func ConfiguredResolver(c Config) (dnslease.Resolver, error) {
+	return configuredResolver(c)
+}

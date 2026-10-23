@@ -75,6 +75,17 @@ func validateConfig(c Config) error {
 			return err
 		}
 	}
+	if c.PilotTarget != nil {
+		if c.MaxRuns != 1 {
+			return errors.New("the dedicated SSH Docker target requires one active job")
+		}
+		if err := c.PilotTarget.Validate(); err != nil {
+			return err
+		}
+		if c.PilotTarget.ArtifactSource != c.ArtifactRoot || c.PilotTarget.ArtifactPath == "" || c.PilotTarget.BridgePath == "" {
+			return errors.New("the Docker target stream or scoped bridge mount is absent")
+		}
+	}
 	if c.ArtifactDigests["domain-root"] != c.Domain.Proof.Digest() {
 		return errors.New("the backend root proof digest differs")
 	}
@@ -158,6 +169,7 @@ func New(c Config) (out *Backend, err error) {
 	}
 	b := &Backend{config: c, runs: map[string]*run{}}
 	b.config.Credentials = copyValue(c.Credentials)
+	b.config.PilotTarget = copyValue(c.PilotTarget)
 	b.config.ArtifactDigests = cloneJSON(c.ArtifactDigests)
 	b.config.NodeKeys = copyValue(c.NodeKeys)
 	b.config.AuthorityKeys = copyValue(c.AuthorityKeys)

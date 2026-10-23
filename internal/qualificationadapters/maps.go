@@ -89,7 +89,7 @@ func verifyMaps(request qualification.Request, r candidateReceipt) error {
 	if r.Before.Files != expectedFiles || !reflect.DeepEqual(r.Before.Nodes, filePlan.Entries()) {
 		return errors.New("qualification file map differs from the exact candidate")
 	}
-	peers, err := netrules.Compile(*request.Document.Network, r.Generation, r.HeldInstalled.MonoNS, r.DeadlineNS, nil)
+	peers, err := netrules.Compile(*request.Document.Network, r.Generation, r.HeldInstalled.MonoNS, r.DeadlineNS, r.Network.Leases)
 	if err != nil {
 		return err
 	}

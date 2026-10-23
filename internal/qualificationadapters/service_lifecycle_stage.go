@@ -211,6 +211,10 @@ func stageServiceLifecycleNode(base serviceLifecycleBase, recipe serviceLifecycl
 	config.Journal = filepath.Join(root, "private/node.db")
 	config.AuditRoot = filepath.Join(root, "private/audit")
 	config.ArtifactRoot = filepath.Join(root, "streams")
+	// The lifecycle scene is a fixed host actor with its own measured domain.
+	// It cannot borrow the candidate Docker placement: its streams and bridge
+	// belong to the actual target and are verified by the target adapter.
+	config.PilotTarget = nil
 	config.ArtifactDigests = recipe.Spec.Binding.ArtifactDigests
 	config.Limits = nodebackend.Limits{MemoryBytes: 256 << 20, PIDs: 16, CPUQuotaUS: 100000}
 	config.OutputLimit = 1 << 20
@@ -225,7 +229,8 @@ func stageServiceLifecycleNode(base serviceLifecycleBase, recipe serviceLifecycl
 	config.Enrollments = []nodeapi.Enrollment{{AgentID: recipe.Spec.Binding.AgentID, AgentKey: recipe.Spec.Binding.AgentKey, PeerUID: 0, PeerGID: 0, Enabled: true, Runtimes: map[string]nodeapi.RuntimeArtifact{"codex": recipe.Runtime}}}
 	config.Qualification.ReportFile = filepath.Join(root, "private/unavailable-target.json")
 	config.Authority = noderuntime.AuthorityConfig{SocketPath: filepath.Join(root, "private/authority.sock"), AuthorityID: serviceLifecycleAuthorityID, Epoch: "qualification-" + authority.scope[:24], PeerUID: 0, TimeoutMS: 1000}
-	config.Resolver = nil
+	// Preserve the candidate's measured resolver when its artifact is bound.
+	// The fixture policy still grants no DNS or network operation to its worker.
 	config.Credentials = nil
 	watchdog := noderuntime.WatchdogConfig{Protocol: "agentgate.watchdog-config.v1", NodeID: config.NodeID, InstanceID: "watchdog-" + digestJSON(recipe.Spec)[:20], SocketPath: config.WatchdogSocket, StatePath: config.WatchdogStore, DomainState: config.DomainState, OwnedPrefix: config.OwnedPrefix, RootQualificationDigest: config.RootQualificationDigest, KeyFile: watchPath, PublicKey: config.WatchdogPublicKey, ArtifactDigest: config.ArtifactDigests["watchdog"], SourceRevision: recipe.Spec.SourceRevision, StopTimeoutMS: 5000, HeartbeatTimeoutMS: 1000}
 	staged = serviceLifecycleStaged{node: config, watchdog: watchdog, nodePath: filepath.Join(root, "private/node.json"), watchdogPath: filepath.Join(root, "private/watchdog.json"), nodeKeys: map[string]ed25519.PublicKey{config.NodeID + "/" + config.NodeKeyID: nodeKey}, watchdogKey: watchKey}
