@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Dan Metcalf
-"""Start the guarded SSH POC in one Docker-managed disposable KVM VM."""
+"""Start the guarded SSH POC in one Docker-managed disposable KVM VM.
+
+Use "appliance.py grant --help" to grant or revoke access without editing JSON.
+"""
 import argparse
 import fcntl
 import hashlib
@@ -13,28 +16,19 @@ import shlex
 import subprocess
 import sys
 
-from appliance_common import (DEFAULT_BASE, LABEL, admin, copy_guest, inspect_owned,
-    load, output, preflight, protected, ready_command, run, ssh, wait_guest, write)
+from appliance_common import (DEFAULT_BASE, LABEL, admin, inspect_owned,
+    load, output, preflight, protected, ready_command, run, ssh, state_directory, wait_guest, write)
 from appliance_build import build, revision
 from appliance_guest import GUEST, audit, configure, health, transition
+import grants
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def state_directory(value):
-    path = Path(value).expanduser().absolute()
-    if path.is_symlink() or path.resolve() != path:
-        raise ValueError('state path must not contain symlinks')
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    meta = path.stat()
-    if meta.st_uid != os.getuid() or meta.st_mode & 0o077:
-        raise ValueError('state directory must be caller-owned with mode0700')
-    return path
-
-
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('start', 'status', 'audit', 'stop', 'policy'))
+    parser.add_argument('action', choices=('start', 'status', 'audit', 'stop', 'policy'),
+                        help='or "grant": see "appliance.py grant --help"')
     parser.add_argument('--state', default=str(Path.home() / '.local/share/agentgate/poc'))
     parser.add_argument('--policy', help='protected network policy JSON; policy action applies this file')
     parser.add_argument('--token-file', help='protected taskboard token; initial start only')
@@ -115,7 +109,8 @@ def matching(state, args, binding):
     if args.port and args.port != binding['port']:
         raise ValueError('port binding differs; use a new state directory')
     if args.policy and hashlib.sha256(protected(Path(args.policy).absolute())).hexdigest() != binding['policy_sha256']:
-        raise ValueError('policy binding differs; apply edits with the policy command')
+        raise ValueError('policy binding differs: the instance policy changed through grant or the policy '
+                         'command. Run start without --policy; use "grant" or "policy" for edits')
     if args.token_file and protected(Path(args.token_file).absolute()) != protected(state / 'taskboard.token'):
         raise ValueError('token binding differs; use a new state directory')
     if hashlib.sha256(protected(state / 'policy.json')).hexdigest() != binding['policy_sha256']:
@@ -140,12 +135,19 @@ def start_container(state, binding):
 
 
 def start(state, args):
-    binding = load(state) if (state / 'binding.json').exists() else new_binding(state, args)
+    existing = (state / 'binding.json').exists()
+    binding = load(state) if existing else new_binding(state, args)
+    if existing:
+        # Finish or discard a grant an interruption left, before the binding is checked.
+        grants.start_sync(state, binding, guest=False)
     matching(state, args, binding)
     start_container(state, binding)
     wait_guest(state, binding)
     configure(ROOT, state, binding)
     transition(state, binding, False)
+    if binding.get('policy_pending'):
+        # Grants made while stopped apply now, before the readiness command.
+        grants.start_sync(state, binding)
     run(ssh(state, binding, 'workload-key') + ['true'], timeout=45, stdout=subprocess.DEVNULL)
     admin(state, binding, 'touch ' + GUEST + '/appliance-installed; chmod 0400 ' + GUEST + '/appliance-installed')
     result = health(state, binding)
@@ -154,32 +156,19 @@ def start(state, args):
 
 
 def apply_policy(state, binding, file):
+    """Validate and apply an operator file through the same engine as grant."""
     if not file:
         raise ValueError('policy action requires --policy FILE')
-    raw = protected(Path(file).absolute())
-    path = state / 'policy.pending.json'
-    write(path, raw)
     try:
-        info = validate_policy(state, binding, path)
-        current = json.loads(protected(state / 'policy.json'))
-        if info['document']['taskboard'] != current['taskboard']:
-            raise ValueError('taskboard binding differs; use a new state directory')
-        copy_guest(state, binding, path, GUEST + '/policy.pending.json')
-        command = ('flock -n ' + GUEST + '/single-job.lock sh -ec ' + shlex.quote(
-            'chmod0600 ' + GUEST + '/policy.pending.json; ' + GUEST +
-            '/pilot-network-diagnostic network-info ' + GUEST + '/policy.pending.json >/dev/null; '
-            'mv ' + GUEST + '/policy.pending.json ' + GUEST + '/policy.json'))
-        admin(state, binding, command.replace('chmod0600', 'chmod 0600'))
-        write(state / 'policy.json', raw)
-        binding['policy_sha256'] = hashlib.sha256(raw).hexdigest()
-        binding['policy_digest'] = info['digest']
-        write(state / 'binding.json', json.dumps(binding, sort_keys=True).encode())
-        print('policy_applied=true next_command=true digest=' + info['digest'])
-    finally:
-        path.unlink(missing_ok=True)
+        grants.apply_file(state, binding, file)
+    except grants.GrantError as error:
+        raise RuntimeError(str(error)) from None
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'grant':
+        # grant needs Docker only for the appliance validator; it takes the same state lock.
+        return grants.main(sys.argv[2:], 'python3 ' + shlex.quote(sys.argv[0]) + ' grant')
     args = arguments()
     preflight()
     state = state_directory(args.state)
@@ -188,14 +177,19 @@ def main():
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise RuntimeError('another appliance command is using ' + str(state) +
+            raise RuntimeError('another appliance or grant command is using ' + str(state) +
                                '; retry when it finishes') from None
         if args.action == 'start':
             return start(state, args)
         binding = load(state)
         item = inspect_owned(binding)
         if args.action == 'status':
-            print(json.dumps(health(state, binding) if item and item['State']['Running'] else {'state':'stopped'}))
+            if item and item['State']['Running'] and binding.get('policy_pending'):
+                print(json.dumps({'state': 'policy_pending', 'policy_digest': binding['policy_digest'],
+                                  'hint': 'run: appliance.py grant sync'}))
+            else:
+                print(json.dumps(health(state, binding) if item and item['State']['Running'] else
+                                 {'state': 'stopped', 'policy_pending': bool(binding.get('policy_pending'))}))
         elif args.action == 'audit':
             print(audit(state, binding) if item and item['State']['Running'] else protected(state / 'audit.jsonl').decode())
         elif args.action == 'stop':
@@ -212,7 +206,7 @@ def main():
 
 if __name__ == '__main__':
     try:
-        main()
+        sys.exit(main())
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print('agentgate-appliance-error: ' + str(error), file=sys.stderr)
         sys.exit(1)

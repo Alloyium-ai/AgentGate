@@ -66,6 +66,19 @@ def fsync_directory(path):
         os.close(fd)
 
 
+def state_directory(value, create=True):
+    """Return a caller-owned mode-0700 state directory without symlinks."""
+    path = Path(value).expanduser().absolute()
+    if path.is_symlink() or path.resolve() != path:
+        raise ValueError('state path must not contain symlinks')
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    meta = path.stat()
+    if meta.st_uid != os.getuid() or meta.st_mode & 0o077:
+        raise ValueError('state directory must be caller-owned with mode0700')
+    return path
+
+
 def preflight():
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'amd64'):
         raise ValueError('supported host required: Linux x86_64 with Docker and /dev/kvm')

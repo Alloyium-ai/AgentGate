@@ -3212,6 +3212,21 @@
       "path": "poc/ssh-diagnostic/test_mounts.py",
       "kind": "code",
       "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/grants.py",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/presets.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_grants.py",
+      "kind": "code",
+      "license": "Apache-2.0"
     }
   ]
 }

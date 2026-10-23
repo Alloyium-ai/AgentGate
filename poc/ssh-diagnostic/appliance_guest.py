@@ -72,6 +72,35 @@ def resolve_guest_images(state, binding):
 
 
 
+class GuestBusy(RuntimeError):
+    """A guarded command holds the guest's single-job lock."""
+
+
+BUSY_EXIT = 75
+
+
+def guest_locked(command):
+    """Run a guest shell command only while no guarded command is active."""
+    return 'flock -n -E ' + str(BUSY_EXIT) + ' ' + GUEST + '/single-job.lock sh -ec ' + shlex.quote(command)
+
+
+def admin_locked(state, binding, command, timeout=60):
+    try:
+        return admin(state, binding, guest_locked(command), timeout)
+    except subprocess.CalledProcessError as error:
+        if error.returncode == BUSY_EXIT:
+            raise GuestBusy('a guarded command is running in the appliance; retry when it finishes') from None
+        raise
+
+
+def install_policy(state, binding, path):
+    """Copy a validated policy to the guest and swap it in between commands."""
+    copy_guest(state, binding, path, GUEST + '/policy.pending.json')
+    pending = GUEST + '/policy.pending.json'
+    admin_locked(state, binding, 'chmod 0600 ' + pending + '; ' + GUEST + '/pilot-network-diagnostic network-info ' +
+                 pending + ' >/dev/null; sync ' + pending + '; mv ' + pending + ' ' + GUEST + '/policy.json')
+
+
 def health(state, binding):
     """Check exact source, policy and bridge state without starting a command."""
     data = json.loads(admin(state, binding, 'cat ' + GUEST + '/settings.json'))
@@ -79,7 +108,7 @@ def health(state, binding):
         raise ValueError('guest source/image binding differs')
     info = json.loads(admin(state, binding, GUEST + '/pilot-network-diagnostic network-info ' + GUEST + '/policy.json'))
     if info['digest'] != binding['policy_digest']:
-        raise ValueError('guest policy binding differs; use the policy command')
+        raise ValueError('guest policy binding differs; run: appliance.py grant sync')
     admin(state, binding, 'test "$(docker inspect ag-mvp-demo-bridge --format \'{{.State.Running}}\')" = true')
     return {'state': 'ready', 'policy_digest': info['digest'], 'ssh': ready_command(state, binding)}
 

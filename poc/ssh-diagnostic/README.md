@@ -17,6 +17,8 @@ The bridge exposes `/task` and `/auth-probe`; other paths and methods return 403
 This is a one-task read bridge. General taskboard API scope and identity remain incomplete.
 An allowed IP can serve several hostnames. The guard enforces endpoints, not HTTP host or TLS names on a shared IP.
 
+To change what the agent may reach, use the `grant` command instead of editing JSON: see [Granting access](#granting-access).
+
 ## One-command Docker appliance
 
 Use a Linux x86_64 host with Docker Engine, Docker Buildx, `/dev/kvm`, Python3, and OpenSSH client tools.
@@ -55,6 +57,7 @@ python3 poc/ssh-diagnostic/appliance.py start
 ```
 
 The `policy` command validates and atomically applies rule edits for the next SSH command. It needs no image rebuild.
+It uses the same engine as `grant` below, so the change is locked, recorded in the grant history, and can be rolled back.
 Taskboard fields stay bound to the authenticated bridge. Create a new state directory to change those fields.
 Stop refuses an active command. It preserves the disk, workspace, audit, and keys.
 Start after stop and Docker restart reuse the same pinned identities.
@@ -82,6 +85,195 @@ The cleared command environment exposes `/usr/local/bin:/usr/bin:/bin`, includin
 Alpine and arbitrary incompatible images are not supported by this Dockerfile.
 You can also build the coding stage directly with `--build-arg CODING_BASE_IMAGE=IMAGE` for the manual setup below.
 
+## Granting access
+
+`grant` edits the operator policy for you: one locked, validated, atomic, recorded change per command.
+Every result passes through the same native validator the runtime uses (`pilot-network-diagnostic network-info`).
+A policy the validator rejects is never written, and its message is shown verbatim. Each change applies to the **next SSH command**.
+
+### Quickstart
+
+```sh
+G="python3 poc/ssh-diagnostic/appliance.py grant"
+
+$G show                                    # what the agent can reach now, with the effective policy digest
+$G presets                                 # list the presets
+$G preset python-dev --upgrade-to-v2       # start from a preset (see "Version two" below)
+$G deny-web all                            # no public web
+$G allow-web https                         # HTTPS (TCP443) only
+$G dns 1.1.1.1 9.9.9.9                     # choose the DNS resolvers
+$G mount ~/src/myrepo --as myrepo          # share a project folder, read-only
+$G exec /var/lib/agentgate/mounts/myrepo   # let the agent run programs from it
+$G deny /var/lib/agentgate/workspace/keys  # hide a subtree, overriding any allowance
+$G --dry-run read /opt/reference           # preview: unified diff and validation, nothing written
+$G history                                 # recorded changes
+$G rollback                                # undo the most recent change
+$G wizard                                  # answer a few questions; prints and runs the commands
+```
+
+With the appliance, `grant` acts on the default state directory; pass `--state DIR` for another instance.
+To edit a policy file directly (for example on a manually configured VM), pass `--policy FILE`:
+
+```sh
+sudo python3 poc/ssh-diagnostic/grants.py --policy /var/lib/agentgate-poc-demo/policy.json allow-web https
+```
+
+In `--policy` mode the validator is `--validator PATH`, `$AGENTGATE_VALIDATOR`, or `pilot-network-diagnostic` in the policy's
+directory (true for an installed VM). Build one with `go build -o ./pilot-network-diagnostic ./cmd/pilot-network-diagnostic`.
+With the appliance, the instance's own validator runs in the same bounded container the `start` command uses.
+
+### Command reference
+
+| Command | Effect |
+| --- | --- |
+| `show [--json]` | Summary of network, filesystem, process, and host folder access, and the effective digest. |
+| `presets` | The presets and what each allows. |
+| `allow-web [http\|https\|quic\|all]...` / `deny-web ...` | Add or remove TCP80, TCP443, or UDP443 to public IPv4. Default `all`. |
+| `dns IP...` | Set one to three public IPv4 resolvers. |
+| `read PATH` | Readable tree (`filesystem.read_only`). |
+| `write PATH` | Writable, never executable tree (`filesystem.scratch`). The container root stays read-only, so this matters only below the workspace, `/tmp`, or a read-write host folder; `grant` says so. |
+| `exec PATH` | Readable and runnable tree (`filesystem.execute`). Refused if it overlaps any writable tree or read-write mount. |
+| `deny PATH` | Tree where every operation is refused, overriding broader allowances. |
+| `signal NAME...` | Allowed signals within the command's own tree (`TERM` or `SIGTERM`). |
+| `anon-exec` | Executable anonymous memory (JIT, libffi closures). Weakens write-xor-execute. |
+| `mount HOST_PATH [--as NAME] [--read-only\|--read-write]` | Share a host folder at `/var/lib/agentgate/mounts/NAME`; see [Host folders](#host-folders). |
+| `unmount NAME` | Remove the folder and its access entry. |
+| `revoke KIND VALUE...` | Undo a grant. `KIND` is `web`, `dns`, `read`, `write`, `exec`, `deny`, `signal`, `anon-exec`, or `mount`. |
+| `preset NAME` | Replace the web, filesystem, and process sections with a preset. |
+| `history [--json]` / `rollback [N]` | List changes; restore the policy as it was before the last `N` changes (default 1). |
+| `sync` | Appliance only: apply the local policy to the running appliance (after a stopped-time change or a failed transfer). |
+| `wizard` | Plain prompts for the common cases; prints the exact commands, then runs them on confirmation. |
+| `allow-domain NAME` | Not implemented; exits 9. See [Domain allowlist](#domain-allowlist-design-and-open-work). |
+
+Options for every command: `--state DIR` or `--policy FILE`, `--mounts FILE` (with `--policy`), `--validator PATH`,
+`--dry-run`, `--upgrade-to-v2`, `--wait SECONDS` (lock wait, default 30), and `--json` (for `show` and `history`).
+
+Grants are idempotent: granting what is already granted, including through a broader entry, prints `unchanged=true` and writes nothing.
+`revoke` of a path that stays allowed through a broader entry fails with exit 12 and names that entry.
+Paths are absolute and canonical; `..`, `.`, `//`, and `/` are refused. A path inside a `deny` tree must be revoked from `deny` first.
+
+### Version two
+
+A version one policy (`agentgate.network-poc.v1`) controls only the network. File, folder, signal, and preset grants need version two
+(`agentgate.poc.v2`). The first such grant refuses with exit 6 unless you pass `--upgrade-to-v2` or confirm at an interactive prompt.
+The upgrade keeps every network field unchanged and adds the conservative `filesystem` and `process` sections of
+[policy.full.example.json](policy.full.example.json). Version two attaches the BPF LSM filesystem and process components, which are
+**not yet exercised on a BPF LSM kernel** (see [Host controls](#host-controls-filesystem-executables-and-processes-experimental)).
+Network grants on a version one policy keep it version one, exactly as before.
+
+### Presets
+
+Presets live in [presets.json](presets.json). Each one keeps the DNS resolvers, the taskboard, and existing host folder access entries.
+
+| Preset | Web | Writable (never executable) | Read-only | Executable |
+| --- | --- | --- | --- | --- |
+| `locked-down` | none | workspace only | `/etc`, `/proc`, taskboard | `/usr`, `/bin`, `/lib`, `/lib64` |
+| `python-dev` | HTTP, HTTPS | workspace, `/tmp` | `/etc`, `/proc`, taskboard | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` |
+| `web-readonly` | HTTP, HTTPS, QUIC | workspace only (required by the schema) | `/etc`, `/proc`, taskboard | `/usr`, `/bin`, `/lib`, `/lib64` |
+| `full-example` | as the example | as the example | as the example | as the example |
+
+All presets deny `/etc/shadow` and the sensitive `/proc` entries. `full-example` is exactly the web, filesystem, and process sections
+of `policy.full.example.json`. A test validates every preset with the real validator.
+
+### Safety properties
+
+- **Locking:** one lock per state directory (the same `control.lock` that `start`, `stop`, and `policy` use) or per policy directory.
+  A second command waits up to `--wait` seconds, then exits 7.
+- **Atomic, durable writes:** a temporary file in the same directory, `fsync`, rename, and directory `fsync`. A crash leaves the old or
+  the new policy, never a partial one. The file keeps its mode (0600 or 0400).
+- **Recovery:** before each change, `grant` records an intent. If a crash interrupts a change, the next `grant` (or `start`) finishes
+  it when the new policy is in place, or discards it when the old policy is still in place, and says which. A policy changed by hand
+  after an interruption stops with exit 10.
+- **Custody:** the policy file must be a regular file owned by you with no group or other access, in a directory that is not group- or
+  world-writable, reached without a symlink. The history directory (`policy.json.grants/`, or `grants/` in a state directory) is mode
+  0700. Anything else exits 3 with the fix.
+- **History:** every change appends to `log.jsonl` and keeps a timestamped backup of the previous policy. The last 20 backups are kept.
+  `rollback N` verifies the backup's SHA-256 before it restores it, and a rollback is itself a recorded change.
+- **Appliance:** with the appliance running, the change is copied into the guest and swapped in only between commands
+  (`flock -n` on the guest's job lock); a running command makes `grant` exit 7 with nothing changed. With the appliance stopped, the
+  change is recorded as pending and applied by the next `start`. `status` reports a pending change.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success, including an unchanged no-op and a dry run that would apply. |
+| 1 | Unexpected error. |
+| 2 | Invalid command line or argument value. |
+| 3 | Unsafe policy, state, history, or host folder path (symlink, owner, mode, or protected tree). |
+| 4 | The validator rejected the result; its message is shown verbatim. Nothing was written. |
+| 5 | No validator is available, or it failed to run (for example, Docker is unavailable). |
+| 6 | The change needs a version two policy; rerun with `--upgrade-to-v2`. |
+| 7 | Busy: another grant or appliance command, or a guarded command in the appliance, holds the lock. |
+| 8 | The appliance could not apply the change; the local policy is unchanged. |
+| 9 | Not implemented (domain allowlists; read-write folders with the appliance). |
+| 10 | The policy changed outside `grant`, or an interrupted change needs manual attention. |
+| 11 | The requested history entry or backup is unavailable (pruned or damaged). |
+| 12 | The request conflicts with the current policy; the message names the entry. |
+
+### Host folders
+
+A mount alone grants nothing. The version two `filesystem` policy decides what the agent may do below
+`/var/lib/agentgate/mounts/NAME`, and `grant mount` adds the matching entry: `read_only` for a read-only folder, `scratch` (writable,
+never executable) for a read-write one. A read-write folder can never also be executable: `grant` refuses `exec` over it, and the target
+start refuses a policy that executes over a read-write mount. Mounts are refused for a version one policy, which controls no file access.
+
+**Manually configured VM (`--policy FILE`).** The folder is a live bind mount of a directory on the Docker host that runs the targets.
+`grant` writes the protected, root-owned `mounts.json` next to the policy. Before each command, `mounts.py` validates every entry again and
+derives each Docker argument from validated fields only; `start-target.sh` and `restart-target.sh` never interpret free-form text.
+Read-only is the default; `--read-write` is explicit. The agent runs as UID 65534, so the folder needs matching permissions.
+
+**Appliance.** The agent runs inside a QEMU VM that cannot see this machine's files, so the appliance supports a **read-only snapshot**:
+`grant mount` copies a normalized archive of the folder into the VM (directories and regular files only; symlinks, devices, sockets,
+FIFOs, and other file systems are skipped and counted; owners become root; modes 0755/0644; at most 256 MiB and 20000 entries).
+Run the same command again to refresh it. Changes inside the VM never reach this machine. `--read-write` exits 9: exchange files
+through the workspace instead.
+
+Rules for every folder: at most eight; canonical paths with no symlink; not `/`, `/etc`, `/root`, `/proc`, `/sys`, `/dev`, `/run`,
+`/var/run`, `/boot`, `/usr`, `/bin`, `/sbin`, `/lib*`, `/var/lib/docker`, `/var/lib/containerd`, or any tree that contains one;
+not your home directory (`$HOME`) or a directory containing it; not overlapping `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`,
+`~/.docker`, `~/.kube`, or the other credential stores `mounts.py` lists; not overlapping the state directory, the policy directory, or
+any `/var/lib/agentgate-poc-*` instance; no further mount below a live folder; sources of two folders never overlap. Share a project
+folder, not a whole home or system tree: everything inside the folder, including `.git` and any `.env` file, becomes visible. Live bind paths may use only letters, digits, and `. _ @ + - /`.
+The target binding (`target.json`) lists each approved mount; the guard (`dockerplacement`) and the gateway both refuse a target whose
+Docker mounts differ in any way, a read-only folder that the kernel mount table does not show read-only, a further mount below a folder,
+or a folder whose device and inode differ from its source. The image contract refuses a symlinked `/var/lib/agentgate/mounts`.
+
+`rollback` restores the policy only. A rollback that removes a folder's access entry leaves the folder mounted but inaccessible, and
+`show` marks it so; `unmount` removes it.
+
+## Domain allowlist: design and open work
+
+`grant allow-domain` is **not implemented** and exits 9. The network guard enforces IPv4 addresses, protocols, and ports; it never sees
+hostnames. Shipping an allowlist that only rewrote DNS answers or `/etc/hosts` would look like hostname enforcement while any process
+could still connect to any allowed address, so this POC does not pretend.
+
+A sound design within this architecture:
+
+1. **Trusted resolver.** A resolver outside the command domain, owned by the guard, answers only allowlisted names (and their CNAME
+   chains) through a pinned upstream with TLS (`internal/dnslease` already validates replies and builds leases for one job binding).
+   Every other question gets `REFUSED`. The target's resolver file points only at it.
+2. **Leases.** Each answer becomes a lease: rule ID, hostname, address, chain, and an expiry at the minimum TTL, capped by the command
+   deadline. `internal/nodedns` coordinates publishing; `internal/netrules` compiles leases into the existing policy map, and the
+   BPF map's lease revision field (`Policy.Reserved`) records each publication.
+3. **Kernel admission.** The guard denies every destination without a live lease. The resolver address needs its own narrow
+   exception, because the independent boundary in `bpf/network_policy.bpf.c` denies private and bridge addresses today.
+4. **Evidence.** Receipts record each lease and each decision's lease revision.
+
+Threat model and limits that remain even when built:
+
+- **Shared addresses.** Enforcement is by resolved address, not by TLS server name. An allowed CDN address can serve other hostnames,
+  and a command can send any SNI or `Host` header to it. Closing that needs a TLS-terminating or SNI-checking proxy.
+- **Races.** A lease must be published before the answer reaches the command, and revoked at TTL expiry; connections opened under a
+  lease outlive it.
+- **Out-of-band resolution.** DNS over HTTPS to an allowed address, or hard-coded addresses, bypass the resolver; only addresses with
+  live leases connect, so this stays address-bounded but not name-bounded.
+
+Open work: run the resolver inside the guard process with a bounded cache, add the resolver exception to the BPF boundary, publish
+leases with live map updates during the command (today the map is written once before attach), add receipts for leases, and test it all
+end to end. It is left as design because a sound version needs those new guard and kernel components and an end-to-end test on the
+appliance (Docker, the guest kernel, and real DNS), none of which this change could run.
+
 ## The editable network policy
 
 Copy [policy.example.json](policy.example.json) to `policy.json`.
@@ -106,7 +298,8 @@ This preset allows any public IPv4 web destination. It enforces protocol, addres
 An allowed public IP can serve several hostnames. A domain allowlist is outside this simple preset.
 Conventional HTTP uses TCP80. UDP443 permits HTTP/3; it does not supply an HTTP/3 client.
 
-To change the installed policy, use the separate management connection:
+To change the installed policy, prefer `grant --policy /var/lib/agentgate-poc-demo/policy.json ...` on the VM (see
+[Granting access](#granting-access)). The equivalent manual procedure, through the separate management connection:
 
 ```sh
 sudo cp /var/lib/agentgate-poc-demo/policy.json ./policy.json
@@ -158,13 +351,18 @@ unless all 23 host links are pinned, and it stops the command if one disappears.
 
 **Verification status.** The Go planning, the shell join logic, and the evidence accounting have unit tests. The BPF objects compile
 cleanly, and their kernel-named structs and fields match a current kernel's BTF. **No BPF LSM kernel was available when this was
-written, so the verifier, the hooks, and the end-to-end behavior are not yet exercised.** Expect first-boot fixes. Known limits:
+written, so the verifier, the hooks, and the end-to-end behavior are not yet exercised.** Expect first-boot fixes.
+The `grant` engine, presets, mount validation, snapshot archives, and the gateway's cleanup paths have unit tests that run the real
+validator; the Docker-host mount path and the appliance's snapshot transfer have not run against Docker or the VM here. Known limits:
 
 - The path-building hooks (`path_mknod`, `path_mkdir`, `path_unlink`, `path_rmdir`, `path_rename`, `path_symlink`) rely on `bpf_d_path`
   being allowed for those hooks. If a kernel refuses one, the object fails to load and the guard fails closed.
 - There is no syscall filter. The container keeps Docker's default seccomp profile. `setxattr`/`utimes` are not path-checked.
 - Every command loads and attaches the 23 hooks again; expect added start-up latency.
 - Policy covers a command's tree only from the moment it joins. The trusted helpers before that run unrestricted.
+- If the guard's cleanup bound expires, it still writes its receipt, marked incomplete with `"stop": "cleanup_bound_exceeded"`.
+- An orphaned network or host pin directory (a killed guard) is released by the next command or cleanup once the domain is empty,
+  the guard has exited, and the target is gone.
 
 ## Prerequisites
 
@@ -278,4 +476,5 @@ The stop command requires an idle, empty domain with no guard pins.
 It revokes the POC key and removes its containers and networks. It retains the workspace, inputs, and audit.
 Store audits privately; receipts include host and task details.
 Run Python tests in a container with `python3 -m unittest discover -s poc/ssh-diagnostic -p 'test_*.py'`.
+The `grant` tests build the native validator with `go build`; without Go they skip and say so.
 Build `ssh/Dockerfile --target test` for the existing transport and bridge tests.

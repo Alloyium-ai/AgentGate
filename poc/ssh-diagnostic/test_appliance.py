@@ -123,6 +123,13 @@ class ApplianceTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'run start --policy FILE --token-file FILE'):
             common.load(self.directory())
 
+    def test_grant_dispatches_before_host_preflight(self):
+        import io,contextlib
+        with patch('sys.argv',['appliance.py','grant','presets']),patch('appliance.preflight',side_effect=AssertionError('preflight')):
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                self.assertEqual(cli.main(),0)
+        self.assertIn('locked-down',printed.getvalue())
+
     def test_concurrent_command_gets_a_clear_busy_message(self):
         import fcntl
         root=self.directory();root.chmod(0o700)
@@ -130,10 +137,26 @@ class ApplianceTest(unittest.TestCase):
         try:
             fcntl.flock(fd,fcntl.LOCK_EX)
             with patch('sys.argv',['appliance.py','status','--state',str(root)]),patch('appliance.preflight'):
-                with self.assertRaisesRegex(RuntimeError,'another appliance command'):
+                with self.assertRaisesRegex(RuntimeError,'another appliance or grant command'):
                     cli.main()
         finally:
             os.close(fd)
+
+    def test_start_recovers_grants_before_binding_checks_and_applies_pending(self):
+        root=self.directory();root.chmod(0o700)
+        common.write(root/'binding.json',json.dumps({'policy_pending':True}).encode())
+        calls=[]
+        names=('matching','start_container','wait_guest','configure','transition','run','ssh','admin','health')
+        patches=[patch('appliance.'+name,side_effect=lambda *a,name=name,**k:calls.append(name) or ([] if name=='ssh' else {'ssh':'ssh'})) for name in names]
+        patches.append(patch('appliance.grants.start_sync',side_effect=lambda state,binding,guest=True:calls.append('sync-'+str(guest))))
+        for item in patches:
+            item.start();self.addCleanup(item.stop)
+        import io,contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.start(root,argparse.Namespace())
+        self.assertEqual(calls[:6],['sync-False','matching','start_container','wait_guest','configure','transition'])
+        self.assertEqual(calls[6],'sync-True')
+        self.assertLess(calls.index('sync-True'),calls.index('run'))
 
     def test_export_requires_named_tag_and_hashes_config_bytes(self):
         import hashlib,tarfile,io

@@ -1,7 +1,7 @@
 {
   "schema": "agentgate.community.source-preview.v1",
-  "source_id": "agentgate-community-sha256:cf2c1e3c857880931bb21d800b54f5d1200c803f7e510dd40a21c277437a801e",
-  "source_sha256": "cf2c1e3c857880931bb21d800b54f5d1200c803f7e510dd40a21c277437a801e",
+  "source_id": "agentgate-community-sha256:b04e8e735ca37e8de420bc820372903aca1fe907437182118e786301f04ff938",
+  "source_sha256": "b04e8e735ca37e8de420bc820372903aca1fe907437182118e786301f04ff938",
   "stage": "experimental-source-preview",
   "committed_bytes_verified": true,
   "qualification": "experimental; no complete workload qualification",
@@ -193,8 +193,8 @@
     },
     {
       "path": "COMPONENT-LICENSES.json",
-      "bytes": 77659,
-      "sha256": "c1f48abe042a0baca115351b806861bc37e9eb4809135f4deb78f0f6f796828f"
+      "bytes": 78004,
+      "sha256": "51d4f099dd7d8cb7d5ee7e474981244b0e0dcdaa37a00b0bd5e1bef6f24c829f"
     },
     {
       "path": "compose.yaml",
@@ -2858,18 +2858,18 @@
     },
     {
       "path": "poc/ssh-diagnostic/appliance_common.py",
-      "bytes": 5277,
-      "sha256": "942b52874dac720de23d2e889b48960f2331856f9a948851d7ac057090b0533b"
+      "bytes": 5812,
+      "sha256": "310d6fe53d0fb25235695b50842e4d23335a6418366647c7e98b9c4e5e1160e9"
     },
     {
       "path": "poc/ssh-diagnostic/appliance_guest.py",
-      "bytes": 6431,
-      "sha256": "e8584d5e20de276272281b5ab8742e60ee3bb4fc7d129fbfd1222d245bd02b76"
+      "bytes": 7584,
+      "sha256": "499cb3ccb398cf3d0a67687b1f55757fadddf57e79abfa91ec38c13418c93c26"
     },
     {
       "path": "poc/ssh-diagnostic/appliance.py",
-      "bytes": 10991,
-      "sha256": "7d16954283a62e5b8ff7fd11b5cb29d1875c6dcb70f237c000a0d4149ba7cc77"
+      "bytes": 10825,
+      "sha256": "eb55032e4ca91409733ecc26a74ee6672421db8fe75997dcca11e0dba5cafebc"
     },
     {
       "path": "poc/ssh-diagnostic/appliance/boot.py",
@@ -2895,6 +2895,11 @@
       "path": "poc/ssh-diagnostic/gateway.py",
       "bytes": 16540,
       "sha256": "38581bd0803bae8d6920fc5c4c83048023949ea4da9c4ece19a4c635839f721b"
+    },
+    {
+      "path": "poc/ssh-diagnostic/grants.py",
+      "bytes": 75164,
+      "sha256": "9b5f6622542eea6173500437765035da14a9b4eb1644c989be5e0afa3bf2103d"
     },
     {
       "path": "poc/ssh-diagnostic/image_contract.py",
@@ -2942,9 +2947,14 @@
       "sha256": "6da4cd3be5de660a78bdf51d2779ec0e706384ff9aa2cce6dcf676f5a21d7a44"
     },
     {
+      "path": "poc/ssh-diagnostic/presets.json",
+      "bytes": 3564,
+      "sha256": "cd195d711ff5d2a04724be461d9d77bca0464b5d5960a834610d54f0b86ebac2"
+    },
+    {
       "path": "poc/ssh-diagnostic/README.md",
-      "bytes": 18073,
-      "sha256": "ecc6b2b3ceaeb5ec307e194b93e200ac0c30fec486580d431a44994e17f8e803"
+      "bytes": 33995,
+      "sha256": "433a327e53384ddb9f62b0553d365b3ec8eb1ee0f397cdd4b90eadfc3041e747"
     },
     {
       "path": "poc/ssh-diagnostic/resolve.py",
@@ -2983,13 +2993,18 @@
     },
     {
       "path": "poc/ssh-diagnostic/test_appliance.py",
-      "bytes": 9341,
-      "sha256": "cf0106aa4e8542d61028dd2c7b1f3b11302ea391c1078b7cfa9e8518c084ed01"
+      "bytes": 10843,
+      "sha256": "e8b73e3611196577c835ced31da6358187a69ff95593bc9acb778a413d0dc831"
     },
     {
       "path": "poc/ssh-diagnostic/test_gateway.py",
       "bytes": 22756,
       "sha256": "fe8242e9351108459c5d2cb33f0753bc757e075cf8ff75c710885419f049a7f3"
+    },
+    {
+      "path": "poc/ssh-diagnostic/test_grants.py",
+      "bytes": 38706,
+      "sha256": "4e0627f502a1b4c47c1489d535966d74cebf75fc7db3c837eb033de1826ba28b"
     },
     {
       "path": "poc/ssh-diagnostic/test_mounts.py",
