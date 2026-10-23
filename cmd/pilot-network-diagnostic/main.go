@@ -37,6 +37,21 @@ type event struct {
 	Version, LeaseRevision                                     uint32
 }
 type counters struct{ Decisions, Lost uint64 }
+
+// networkAttachments is the complete network guard. gateway.py NETWORK_LINKS
+// must equal its length; a test binds the two.
+var networkAttachments = []struct {
+	name string
+	kind ebpf.AttachType
+}{
+	{"net_connect4", ebpf.AttachCGroupInet4Connect}, {"net_connect6", ebpf.AttachCGroupInet6Connect},
+	{"net_sendmsg4", ebpf.AttachCGroupUDP4Sendmsg}, {"net_sendmsg6", ebpf.AttachCGroupUDP6Sendmsg},
+	{"net_egress", ebpf.AttachCGroupInetEgress}, {"net_ingress", ebpf.AttachCGroupInetIngress},
+}
+
+// maxNetworkEvents bounds the network events kept in one receipt.
+const maxNetworkEvents = 10000
+
 type receipt struct {
 	Scope          string                       `json:"scope"`
 	SourceRevision string                       `json:"source_revision"`
@@ -57,7 +72,10 @@ type receipt struct {
 	Events         []event                      `json:"events"`
 	Counters       counters                     `json:"counters"`
 	Host           *hostEvidence                `json:"host,omitempty"`
-	Complete       bool                         `json:"complete"`
+	// Stop is "signal" for a normal stop. Any other value marks the receipt incomplete.
+	Stop            string `json:"stop"`
+	CollectionError string `json:"collection_error,omitempty"`
+	Complete        bool   `json:"complete"`
 }
 
 func run() (err error) {
@@ -90,11 +108,12 @@ func run() (err error) {
 		return err
 	}
 	measured := handles.Measurement
-	if measured.ImageSourceRevision != source {
-		return errors.New("target image source differs")
-	}
+	// Close the measured namespace handles on every path, including a refusal.
 	if err = handles.Close(); err != nil {
 		return err
+	}
+	if measured.ImageSourceRevision != source {
+		return errors.New("target image source differs")
 	}
 	raw, err = os.ReadFile(policyPath)
 	if err != nil {
@@ -205,16 +224,13 @@ func run() (err error) {
 		return err
 	}
 	defer collection.Close()
+	for _, name := range []string{"net_policies", "net_events", "net_stats"} {
+		if collection.Maps[name] == nil {
+			return fmt.Errorf("mandatory BPF map absent: %s", name)
+		}
+	}
 	if err = collection.Maps["net_policies"].Update(stat.Ino, compiled.Policy, ebpf.UpdateAny); err != nil {
 		return err
-	}
-	attachments := []struct {
-		name string
-		kind ebpf.AttachType
-	}{
-		{"net_connect4", ebpf.AttachCGroupInet4Connect}, {"net_connect6", ebpf.AttachCGroupInet6Connect},
-		{"net_sendmsg4", ebpf.AttachCGroupUDP4Sendmsg}, {"net_sendmsg6", ebpf.AttachCGroupUDP6Sendmsg},
-		{"net_egress", ebpf.AttachCGroupInetEgress}, {"net_ingress", ebpf.AttachCGroupInetIngress},
 	}
 	links := []link.Link{}
 	defer func() {
@@ -222,7 +238,7 @@ func run() (err error) {
 			_ = l.Close()
 		}
 	}()
-	for _, a := range attachments {
+	for _, a := range networkAttachments {
 		program := collection.Programs[a.name]
 		if program == nil {
 			return fmt.Errorf("mandatory BPF program absent: %s", a.name)
@@ -278,36 +294,24 @@ func run() (err error) {
 	// bounds diagnostic collection and is not a workload execution grant.
 	limit := time.NewTimer(time.Duration(duration)*time.Second + 5*time.Second)
 	defer limit.Stop()
+	stopReason := "signal"
 	select {
 	case <-stop:
 	case <-limit.C:
-		return errors.New("diagnostic guard stop exceeded its cleanup bound")
+		// Keep the evidence: the receipt is still written, marked incomplete.
+		stopReason = "cleanup_bound_exceeded"
 	}
 	signal.Stop(stop)
+	out.Stop = stopReason
 	out.FinishedMonoNS, _ = kernel.MonotonicNS()
 	reader.SetDeadline(time.Now().Add(200 * time.Millisecond))
-	for {
+	var collectErr error
+	out.Events, collectErr = collectNetworkEvents(func() ([]byte, error) {
 		record, readErr := reader.Read()
-		if errors.Is(readErr, os.ErrDeadlineExceeded) {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
-		if len(record.RawSample) != binary.Size(event{}) {
-			return errors.New("network event ABI differs")
-		}
-		var e event
-		if err = binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &e); err != nil {
-			return err
-		}
-		out.Events = append(out.Events, e)
-		if len(out.Events) > 10000 {
-			return errors.New("network event bound exceeded")
-		}
-	}
-	if err = collection.Maps["net_stats"].Lookup(uint32(0), &out.Counters); err != nil {
-		return err
+		return record.RawSample, readErr
+	}, maxNetworkEvents)
+	if countErr := collection.Maps["net_stats"].Lookup(uint32(0), &out.Counters); countErr != nil {
+		collectErr = errors.Join(collectErr, countErr)
 	}
 	if simpleMode {
 		out.Scope = "experimental-network-poc-only; no normal admission"
@@ -326,6 +330,13 @@ func run() (err error) {
 		out.Host = &evidence
 		out.Complete = out.Complete && evidence.Complete
 	}
+	if collectErr != nil {
+		out.Complete = false
+		out.CollectionError = collectErr.Error()
+	}
+	if stopReason != "signal" {
+		out.Complete = false
+	}
 	encoded, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
@@ -333,10 +344,42 @@ func run() (err error) {
 	if err = os.WriteFile(receiptPath, append(encoded, '\n'), 0600); err != nil {
 		return err
 	}
+	if stopReason != "signal" {
+		return errors.Join(collectErr, errors.New("diagnostic guard stop exceeded its cleanup bound"))
+	}
+	if collectErr != nil {
+		return collectErr
+	}
 	if !out.Complete {
 		return errors.New("network or host event loss, count mismatch, or malformed record")
 	}
 	return nil
+}
+
+// collectNetworkEvents reads until the reader's deadline. It returns every
+// event read before an error, so the receipt is still written, marked incomplete.
+func collectNetworkEvents(read func() ([]byte, error), limit int) ([]event, error) {
+	events := []event{}
+	for {
+		raw, err := read()
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return events, nil
+		}
+		if err != nil {
+			return events, err
+		}
+		if len(raw) != binary.Size(event{}) {
+			return events, errors.New("network event ABI differs")
+		}
+		if len(events) >= limit {
+			return events, errors.New("network event bound exceeded")
+		}
+		var e event
+		if err = binary.Read(bytes.NewReader(raw), binary.LittleEndian, &e); err != nil {
+			return events, err
+		}
+		events = append(events, e)
+	}
 }
 
 func main() {

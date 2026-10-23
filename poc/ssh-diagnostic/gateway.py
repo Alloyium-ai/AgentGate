@@ -5,6 +5,7 @@
 import hashlib
 import json
 import os
+import re
 import selectors
 import signal
 import stat
@@ -13,10 +14,16 @@ import sys
 import time
 
 MAX_PENDING_OUTPUT = 1 << 20
-# Network guard links, and the host-control links (20 filesystem LSM hooks plus
-# 3 process LSM hooks). Go tests pin the host count to the compiled program lists.
+# The only link counts. Network guard links, and the host-control links (20
+# filesystem LSM hooks plus 3 process LSM hooks). start-guard.sh and the
+# operator gateway use these values; a Go test binds them to the attached lists.
 NETWORK_LINKS = 6
 HOST_LINKS = 23
+# Fixed target mounts and the directory that may hold approved host folders.
+WORKSPACE_PATH = '/var/lib/agentgate/workspace'
+STREAMS_PATH = '/run/agentgate/streams'
+TASKBOARD_PATH = '/run/agentgate/taskboard'
+HOST_MOUNT_ROOT = '/var/lib/agentgate/mounts'
 
 
 def read_root_file(path):
@@ -66,6 +73,64 @@ def pins_live(path, count=NETWORK_LINKS):
         return False
 
 
+def remove_pin_directory(path, link_count):
+    """Remove one orphaned pin directory holding only this guard's own entries.
+
+    The caller must first prove the domain is empty and the guard has exited.
+    """
+    meta = os.lstat(path)
+    if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != os.geteuid() or meta.st_mode & 0o077:
+        raise ValueError('guard pin directory custody differs')
+    links = {f'link-{index}' for index in range(link_count)}
+    entries = os.listdir(path)
+    for name in entries:
+        item = os.lstat(os.path.join(path, name))
+        if stat.S_ISLNK(item.st_mode) or not (name in links or name.startswith('map-')):
+            raise ValueError('guard pin directory contains an unexpected entry: ' + name)
+    for name in entries:
+        os.unlink(os.path.join(path, name))
+    os.rmdir(path)
+
+
+def expected_mounts(config):
+    """Return every mount the target may hold: three fixed ones and approved host folders."""
+    expected = {WORKSPACE_PATH: ('volume', True, None), STREAMS_PATH: ('bind', True, None),
+                TASKBOARD_PATH: ('volume', False, None)}
+    for item in config['host_mounts']:
+        expected[item['path']] = ('bind', not item['read_only'], item['source'])
+    return expected
+
+
+def check_mounts(mounts, config):
+    expected = expected_mounts(config)
+    seen = set()
+    for mount in mounts:
+        if 'docker.sock' in mount['Source'] or 'docker.sock' in mount['Destination']:
+            raise ValueError('docker socket entered target')
+        want = expected.get(mount['Destination'])
+        if want is None or mount['Destination'] in seen or mount['Type'] != want[0] or \
+           bool(mount['RW']) != want[1] or (want[2] is not None and mount['Source'] != want[2]):
+            raise ValueError('target mount differs from the approved set: ' + str(mount['Destination']))
+        seen.add(mount['Destination'])
+    if seen != set(expected):
+        raise ValueError('an approved target mount is absent')
+
+
+def valid_host_mounts(value):
+    if not isinstance(value, list) or len(value) > 8:
+        return False
+    paths = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {'path', 'source', 'read_only'} or \
+           not isinstance(item['path'], str) or not isinstance(item['source'], str) or \
+           not isinstance(item['read_only'], bool) or not item['source'].startswith('/') or \
+           not item['path'].startswith(HOST_MOUNT_ROOT + '/') or item['path'] in paths or \
+           not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,31}', item['path'][len(HOST_MOUNT_ROOT) + 1:]):
+            return False
+        paths.add(item['path'])
+    return True
+
+
 def inspect_target(config):
     result = subprocess.run(['/usr/bin/docker', 'inspect', config['container']],
                             check=True, capture_output=True, timeout=5,
@@ -79,9 +144,7 @@ def inspect_target(config):
        host['IpcMode'] == 'host' or host['NetworkMode'] != config['network'] or \
        target['Config']['User'] != '65534:65534':
         raise ValueError('target rights changed')
-    for mount in target['Mounts']:
-        if 'docker.sock' in mount['Source'] or 'docker.sock' in mount['Destination']:
-            raise ValueError('docker socket entered target')
+    check_mounts(target['Mounts'], config)
     pid = target['State']['Pid']
     if not pid or '0::/' not in open(f'/proc/{pid}/cgroup', encoding='ascii').read():
         raise ValueError('target process identity changed')
@@ -170,6 +233,100 @@ def wait_empty_domain(path, timeout_ns=5_000_000_000):
         time.sleep(0.05)
 
 
+def remove_target(name):
+    subprocess.run(['/usr/bin/docker', 'rm', '-f', name],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=5, env={'PATH': '/usr/bin:/bin'})
+
+
+def stop_process(process):
+    """Stop the runner's whole process group; the domain kill follows regardless."""
+    if process.poll() is not None:
+        return
+    for number, wait in ((signal.SIGTERM, 1), (signal.SIGKILL, 2)):
+        try:
+            os.killpg(process.pid, number)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            process.wait(timeout=wait)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def cleanup_domain(config):
+    """Kill the domain and remove the target as independent steps; report each failure."""
+    errors = []
+    try:
+        with open(os.path.join(config['domain'], 'cgroup.kill'), 'w', encoding='ascii') as sink:
+            sink.write('1')
+    except OSError as error:
+        errors.append(f'cgroup.kill: {error}')
+    try:
+        remove_target(config['container'])
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(f'target removal: {type(error).__name__}')
+    try:
+        cleaned, waited = wait_empty_domain(config['domain'])
+    except (OSError, ValueError) as error:
+        errors.append(f'domain readback: {error}')
+        cleaned, waited = False, 0
+    # Any failed step leaves the command's cleanup unproven, so its exit is 1.
+    return cleaned and not errors, waited, errors
+
+
+def execute(config, command, target, guard_ok, session_alive, output_fds=(1, 2), stdin=None):
+    """Run one command in the bound target. Cleanup and the audit always run."""
+    host_controls = config['host_controls']
+    started = time.monotonic_ns()
+    hashes = {'stdout': hashlib.sha256(), 'stderr': hashlib.sha256()}
+    lengths = {'stdout': 0, 'stderr': 0}
+    state = 'launch_error'
+    exit_code = 1
+    cleaned = False
+    cleanup_wait_ns = 0
+    cleanup_errors = []
+    process = None
+    try:
+        # With host controls the runner joins the domain last, so the policy never
+        # applies to the trusted helpers that enter the target namespaces.
+        process = subprocess.Popen([config['runner_path'], str(target['State']['Pid']),
+                                    config['domain'], command] + (['late-join'] if host_controls else []),
+                                   stdin=stdin if stdin is not None else sys.stdin.buffer,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True, env={'PATH': '/usr/bin:/bin'}, close_fds=True)
+        state = 'relay_error'
+        state, hashes, lengths = relay_process(process, session_alive, guard_ok,
+                                               int(config['deadline_ns']), output_fds)
+        stop_process(process)
+        exit_code = process.returncode if state == 'completed' else 1
+    finally:
+        try:
+            if process is not None:
+                stop_process(process)
+                for stream in (process.stdout, process.stderr):
+                    stream.close()
+        finally:
+            cleaned, cleanup_wait_ns, cleanup_errors = cleanup_domain(config)
+            if not cleaned:
+                state = 'cleanup_incomplete'
+            append_audit(config['audit_path'], {
+                'scope': 'fixed-diagnostic-only; no normal admission',
+                'source_revision': config['source_revision'], 'policy_digest': config['policy_digest'],
+                'host_controls': host_controls,
+                'host_mounts': [item['path'] for item in config['host_mounts']],
+                'container_id': target['Id'], 'image_id': target['Image'],
+                'command_sha256': hashlib.sha256(command.encode()).hexdigest(),
+                'stdout_sha256': hashes['stdout'].hexdigest(), 'stderr_sha256': hashes['stderr'].hexdigest(),
+                'stdout_bytes': lengths['stdout'], 'stderr_bytes': lengths['stderr'],
+                'started_mono_ns': started, 'finished_mono_ns': time.monotonic_ns(),
+                'state': state, 'exit_code': exit_code if cleaned else 1,
+                'domain_killed': cleaned, 'cleanup_wait_ns': cleanup_wait_ns,
+                'cleanup_errors': cleanup_errors})
+    return exit_code if cleaned and 0 <= exit_code < 256 else 1
+
+
 def main():
     if len(sys.argv) != 2 or os.geteuid() != 0 or os.environ.get('SSH_TTY'):
         raise ValueError('invalid SSH diagnostic transport')
@@ -180,19 +337,21 @@ def main():
     wanted = {'container', 'container_id', 'image_id', 'network', 'domain',
               'runner_path', 'runner_sha256', 'guard_pid', 'guard_start_ticks',
               'guard_ready', 'guard_pins', 'deadline_ns', 'audit_path',
-              'source_revision', 'policy_digest', 'host_controls', 'host_pins'}
+              'source_revision', 'policy_digest', 'host_controls', 'host_pins', 'host_mounts'}
     if set(config) != wanted or not config['container'].startswith('ag-mvp-') or \
        not config['domain'].startswith('/sys/fs/cgroup/ag-mvp-') or \
        not config['runner_path'].startswith('/var/lib/agentgate-poc-') or \
        not config['guard_pins'].startswith('/sys/fs/bpf/ag-mvp-net-') or \
        not isinstance(config['host_controls'], bool) or \
        config['host_controls'] != bool(config['host_pins']) or \
-       (config['host_controls'] and not config['host_pins'].startswith('/sys/fs/bpf/ag-mvp-host-')):
+       (config['host_controls'] and not config['host_pins'].startswith('/sys/fs/bpf/ag-mvp-host-')) or \
+       not valid_host_mounts(config['host_mounts']) or \
+       (config['host_mounts'] and not config['host_controls']):
         raise ValueError('invalid SSH diagnostic binding')
     host_controls = config['host_controls']
 
     def guard_ok():
-        return alive(guard_pid, guard_ticks) and pins_live(config['guard_pins']) and \
+        return alive(guard_pid, guard_ticks) and pins_live(config['guard_pins'], NETWORK_LINKS) and \
             (not host_controls or pins_live(config['host_pins'], HOST_LINKS))
     if hashlib.sha256(read_root_file(config['runner_path'])).hexdigest() != config['runner_sha256']:
         raise ValueError('diagnostic runner changed')
@@ -205,59 +364,7 @@ def main():
     target = inspect_target(config)
     parent = os.getppid()
     parent_ticks = start_ticks(parent)
-    started = time.monotonic_ns()
-    hashes = {'stdout': hashlib.sha256(), 'stderr': hashlib.sha256()}
-    lengths = {'stdout': 0, 'stderr': 0}
-    state = 'launch_error'
-    cleaned = False
-    cleanup_wait_ns = 0
-    process = None
-    try:
-        # With host controls the runner joins the domain last, so the policy never
-        # applies to the trusted helpers that enter the target namespaces.
-        process = subprocess.Popen([config['runner_path'], str(target['State']['Pid']),
-                                    config['domain'], command] + (['late-join'] if host_controls else []),
-                                   stdin=sys.stdin.buffer,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   start_new_session=True, env={'PATH': '/usr/bin:/bin'}, close_fds=True)
-        state = 'relay_error'
-        state, hashes, lengths = relay_process(
-            process, lambda: alive(parent, parent_ticks), guard_ok,
-            int(config['deadline_ns']))
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=1)
-        exit_code = process.returncode if state == 'completed' else 1
-    finally:
-        try:
-            with open(os.path.join(config['domain'], 'cgroup.kill'), 'w', encoding='ascii') as sink:
-                sink.write('1')
-            subprocess.run(['/usr/bin/docker', 'rm', '-f', config['container']],
-                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=5, env={'PATH': '/usr/bin:/bin'})
-            cleaned, cleanup_wait_ns = wait_empty_domain(config['domain'])
-            if not cleaned:
-                state = 'cleanup_incomplete'
-        finally:
-            if not cleaned and state == 'completed':
-                state = 'cleanup_incomplete'
-            finished = time.monotonic_ns()
-            append_audit(config['audit_path'], {
-                'scope': 'fixed-diagnostic-only; no normal admission',
-                'source_revision': config['source_revision'], 'policy_digest': config['policy_digest'],
-                'host_controls': host_controls,
-                'container_id': target['Id'], 'image_id': target['Image'],
-                'command_sha256': hashlib.sha256(command.encode()).hexdigest(),
-                'stdout_sha256': hashes['stdout'].hexdigest(), 'stderr_sha256': hashes['stderr'].hexdigest(),
-                'stdout_bytes': lengths['stdout'], 'stderr_bytes': lengths['stderr'],
-                'started_mono_ns': started, 'finished_mono_ns': finished,
-                'state': state, 'exit_code': exit_code if cleaned and 'exit_code' in locals() else 1,
-                'domain_killed': cleaned, 'cleanup_wait_ns': cleanup_wait_ns})
-    return exit_code if cleaned and 0 <= exit_code < 256 else 1
+    return execute(config, command, target, guard_ok, lambda: alive(parent, parent_ticks))
 
 
 if __name__ == '__main__':

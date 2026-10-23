@@ -41,12 +41,29 @@ def protected(path):
 
 
 def write(path, raw):
-    """Atomically replace a protected state file."""
+    """Atomically and durably replace a protected state file.
+
+    Every caller holds the state lock, so an existing temporary file is the
+    remnant of an interrupted write. It must not block every later write.
+    """
     temporary = path.with_name(path.name + '.new')
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'wb') as target:
         target.write(raw); target.flush(); os.fsync(target.fileno())
     os.replace(temporary, path)
+    fsync_directory(path.parent)
+
+
+def fsync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def preflight():
@@ -62,6 +79,9 @@ def preflight():
 
 
 def load(path):
+    if not (path / 'binding.json').exists():
+        raise ValueError('no appliance instance in ' + str(path) +
+                         '; run start --policy FILE --token-file FILE first, or pass --state DIR')
     return json.loads(protected(path / 'binding.json'))
 
 

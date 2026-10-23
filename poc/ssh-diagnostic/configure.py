@@ -64,7 +64,7 @@ def main():
     root.mkdir(mode=0o700)
     names = ['gateway.py', 'operator-gateway.py', 'settings.py', 'run-in-target.sh',
              'prepare-command.sh', 'start-target.sh', 'restart-target.sh', 'start-guard.sh',
-             'install-key.py', 'stop.py', 'prepare-policy.py', 'prepare-resolver.py']
+             'install-key.py', 'stop.py', 'prepare-policy.py', 'prepare-resolver.py', 'mounts.py']
     for name in names:
         shutil.copyfile(source / name, root / name)
         (root / name).chmod(0o500)

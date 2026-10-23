@@ -46,6 +46,8 @@ type Target struct {
 	BridgeImageReference string `json:"bridge_image_reference,omitempty"`
 	BridgeNetworkName    string `json:"bridge_network_name,omitempty"`
 	BridgeUpstreamURL    string `json:"bridge_upstream_url,omitempty"`
+	// HostMounts lists the only approved host folder binds. Absent means none.
+	HostMounts []HostMount `json:"host_mounts,omitempty"`
 }
 
 // RegistryReady is required for normal pilot admission. An empty reference
@@ -78,23 +80,24 @@ func registryReference(reference string) bool {
 }
 
 type Measurement struct {
-	ContainerID               string            `json:"container_id"`
-	ImageDigest               string            `json:"image_digest"`
-	ImageSourceRevision       string            `json:"image_source_revision"`
-	HostPID                   int               `json:"host_pid"`
-	StartTimeTicks            string            `json:"start_time_ticks"`
-	Namespaces                map[string]string `json:"namespaces"`
-	WorkspaceDevice           uint64            `json:"workspace_device"`
-	WorkspaceInode            uint64            `json:"workspace_inode"`
-	ArtifactDevice            uint64            `json:"artifact_device,omitempty"`
-	ArtifactInode             uint64            `json:"artifact_inode,omitempty"`
-	BridgeDevice              uint64            `json:"bridge_device,omitempty"`
-	BridgeInode               uint64            `json:"bridge_inode,omitempty"`
-	BridgeTaskID              int               `json:"bridge_task_id,omitempty"`
-	BridgeContainerID         string            `json:"bridge_container_id,omitempty"`
-	BridgeImageDigest         string            `json:"bridge_image_digest,omitempty"`
-	BridgeImageSourceRevision string            `json:"bridge_image_source_revision,omitempty"`
-	BridgeTokenIsolated       bool              `json:"bridge_token_isolated,omitempty"`
+	ContainerID               string                 `json:"container_id"`
+	ImageDigest               string                 `json:"image_digest"`
+	ImageSourceRevision       string                 `json:"image_source_revision"`
+	HostPID                   int                    `json:"host_pid"`
+	StartTimeTicks            string                 `json:"start_time_ticks"`
+	Namespaces                map[string]string      `json:"namespaces"`
+	WorkspaceDevice           uint64                 `json:"workspace_device"`
+	WorkspaceInode            uint64                 `json:"workspace_inode"`
+	ArtifactDevice            uint64                 `json:"artifact_device,omitempty"`
+	ArtifactInode             uint64                 `json:"artifact_inode,omitempty"`
+	BridgeDevice              uint64                 `json:"bridge_device,omitempty"`
+	BridgeInode               uint64                 `json:"bridge_inode,omitempty"`
+	BridgeTaskID              int                    `json:"bridge_task_id,omitempty"`
+	BridgeContainerID         string                 `json:"bridge_container_id,omitempty"`
+	BridgeImageDigest         string                 `json:"bridge_image_digest,omitempty"`
+	BridgeImageSourceRevision string                 `json:"bridge_image_source_revision,omitempty"`
+	BridgeTokenIsolated       bool                   `json:"bridge_token_isolated,omitempty"`
+	HostMounts                []HostMountMeasurement `json:"host_mounts,omitempty"`
 }
 
 type mount struct {
@@ -210,7 +213,7 @@ func (t Target) Validate() error {
 			strings.HasPrefix(t.Workspace, t.BridgePath+"/"))) {
 		return errors.New("the Docker target taskboard bridge mount differs")
 	}
-	return nil
+	return validateHostMounts(t)
 }
 
 func absolute(path string) bool {
@@ -309,11 +312,16 @@ func validateInspect(t Target, d inspect) error {
 	if t.BridgePath != "" {
 		wantMounts++
 	}
+	wantMounts += len(t.HostMounts)
 	if len(d.Mounts) != wantMounts {
 		return errors.New("the Docker target workspace mount differs")
 	}
 	workspace, artifacts, bridge := false, t.ArtifactPath == "", t.BridgePath == ""
+	hostMounts := make([]bool, len(t.HostMounts))
 	for _, mounted := range d.Mounts {
+		if matchHostMount(t, mounted, hostMounts) {
+			continue
+		}
 		switch {
 		case mounted.Destination == t.Workspace && mounted.Source == t.WorkspaceSource &&
 			mounted.Name == t.WorkspaceVolume && mounted.RW && mounted.Type == "volume":
@@ -330,6 +338,11 @@ func validateInspect(t Target, d inspect) error {
 	}
 	if !workspace || !artifacts || !bridge {
 		return errors.New("the Docker target stream or workspace mount is absent")
+	}
+	for _, used := range hostMounts {
+		if !used {
+			return errors.New("an approved host folder mount is absent")
+		}
 	}
 	return nil
 }
@@ -599,6 +612,9 @@ func Measure(ctx context.Context, t Target) (Measurement, error) {
 			return Measurement{}, bridgeErr
 		}
 		out.BridgeTaskID = t.BridgeTaskID
+	}
+	if out.HostMounts, err = measureHostMounts(t, d.State.PID); err != nil {
+		return Measurement{}, err
 	}
 	again, err = startTime(d.State.PID)
 	if err != nil || again != start {

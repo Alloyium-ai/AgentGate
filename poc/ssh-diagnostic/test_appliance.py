@@ -112,6 +112,29 @@ class ApplianceTest(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(AssertionError,'owned target remains'):exec(code,{})
 
+    def test_interrupted_write_does_not_block_later_writes(self):
+        root=self.directory();(root/'binding.json.new').write_bytes(b'partial')
+        common.write(root/'binding.json',b'{}')
+        self.assertEqual((root/'binding.json').read_bytes(),b'{}')
+        self.assertFalse((root/'binding.json.new').exists())
+        self.assertEqual((root/'binding.json').stat().st_mode & 0o777,0o600)
+
+    def test_missing_instance_explains_how_to_start(self):
+        with self.assertRaisesRegex(ValueError,'run start --policy FILE --token-file FILE'):
+            common.load(self.directory())
+
+    def test_concurrent_command_gets_a_clear_busy_message(self):
+        import fcntl
+        root=self.directory();root.chmod(0o700)
+        fd=os.open(root/'control.lock',os.O_RDWR|os.O_CREAT,0o600)
+        try:
+            fcntl.flock(fd,fcntl.LOCK_EX)
+            with patch('sys.argv',['appliance.py','status','--state',str(root)]),patch('appliance.preflight'):
+                with self.assertRaisesRegex(RuntimeError,'another appliance command'):
+                    cli.main()
+        finally:
+            os.close(fd)
+
     def test_export_requires_named_tag_and_hashes_config_bytes(self):
         import hashlib,tarfile,io
         from appliance_build import archive_digests

@@ -11,6 +11,9 @@ for name in ('/bin/sh','/usr/bin/setpriv','/usr/bin/python3','/usr/bin/curl'):
  assert os.access(name, os.X_OK), name
 for name in ('/var/lib/agentgate/workspace','/run/agentgate/streams'):
  assert Path(name).is_dir(), name
+# Host folder mounts land below this directory. A symlink here would redirect them.
+for name in ('/var/lib/agentgate','/var/lib/agentgate/mounts'):
+ assert not Path(name).is_symlink() and (not Path(name).exists() or Path(name).is_dir()), name
 print('coding_image_contract=passed')
 """
 

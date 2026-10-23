@@ -8,16 +8,20 @@ test -d "$domain"
 grep -q 'populated 0' "$domain/cgroup.events"
 test ! -e "$root/guard-ready" && test ! -e "$root/guard-receipt.json" && test ! -e "$root/config.json"
 start_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
-host_objects=
-if test "$host_controls" = 1; then
+# The positional list carries the optional host objects as separate, quoted words.
+set --
+case "$host_controls" in
+1)
   # Filesystem and process enforcement attach with the network guard, or not at all.
   test ! -e "$host_pins"
-  host_objects="$component/fs_access.bpf.o $component/process_guard.bpf.o"
-fi
+  set -- "$component/fs_access.bpf.o" "$component/process_guard.bpf.o" ;;
+0) ;;
+*) echo invalid_host_controls >&2; exit 2 ;;
+esac
 nohup "$poc/pilot-network-diagnostic" \
   "$diag/target.json" "$diag/policy-active.json" \
   "$component/network_policy.bpf.o" --network-policy - \
-  "$root/guard-ready" "$root/guard-receipt.json" "$source" "$domain" $host_objects \
+  "$root/guard-ready" "$root/guard-receipt.json" "$source" "$domain" "$@" \
   </dev/null >"$root/guard.log" 2>&1 &
 pid=$!
 trap 'kill "$pid" 2>/dev/null || true' EXIT
@@ -28,17 +32,18 @@ for attempt in $(seq 1 40); do
   sleep 0.1
 done
 if test "$ready" -ne 1; then tail -n 20 "$root/guard.log" >&2; exit 1; fi
-test -d "$pins"
-for index in 0 1 2 3 4 5; do test -e "$pins/link-$index"; done
-if test "$host_controls" = 1; then
-  test -d "$host_pins"
-  for index in $(seq 0 22); do test -e "$host_pins/link-$index"; done
-fi
-python3 - "$poc" "$pid" "$name" "$network" "$domain" "$source" "$policy" "$start_ns" "$diag/policy-active.json" "$host_controls" "$host_pins" <<'PY'
+python3 - "$poc" "$pid" "$name" "$network" "$domain" "$source" "$policy" "$start_ns" "$diag/policy-active.json" "$host_controls" "$host_pins" "$pins" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys,time
 root=pathlib.Path(sys.argv[1]); pid=int(sys.argv[2]); name,network,domain,source,policy=sys.argv[3:8]
 start_ns=int(sys.argv[8]); policy_path=pathlib.Path(sys.argv[9])
 host_controls=sys.argv[10]=='1'; host_pins=sys.argv[11] if host_controls else ''
+sys.path.insert(0,str(root))
+# gateway.py holds the only link counts and the same check the gateway repeats.
+from gateway import HOST_LINKS,NETWORK_LINKS,pins_live,valid_host_mounts
+assert pins_live(sys.argv[12],NETWORK_LINKS),'network guard pins incomplete'
+assert not host_controls or pins_live(host_pins,HOST_LINKS),'host control pins incomplete'
+host_mounts=json.loads((root/'target.json').read_text()).get('host_mounts',[])
+assert valid_host_mounts(host_mounts) and (host_controls or not host_mounts),'host folder mounts require host controls'
 duration=int(json.loads(policy_path.read_text())['duration_seconds'])
 assert 1 <= duration <= 60
 raw=pathlib.Path(f'/proc/{pid}/stat').read_text()
@@ -54,7 +59,7 @@ config={'container':name,'container_id':target['Id'],'image_id':target['Image'],
                 'deadline_ns':min(time.monotonic_ns()+25_000_000_000,start_ns+duration*1_000_000_000),
         'audit_path':str(root/'audit.jsonl'),
         'source_revision':source,'policy_digest':policy,
-        'host_controls':host_controls,'host_pins':host_pins}
+        'host_controls':host_controls,'host_pins':host_pins,'host_mounts':host_mounts}
 path=root/'config.json'
 assert config['deadline_ns'] > time.monotonic_ns()+1_000_000_000
 fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)

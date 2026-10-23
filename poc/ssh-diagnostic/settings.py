@@ -75,6 +75,16 @@ def effective_policy(root, data):
     return info
 
 
+def shell_assignments(values):
+    """Render values for the trusted scripts' eval: fixed key names, every value quoted."""
+    lines = []
+    for key, value in values.items():
+        if not re.fullmatch(r'[a-z][a-z0-9_]*', key):
+            raise ValueError('invalid settings key')
+        lines.append(f'{key}={shlex.quote(str(value))}')
+    return '\n'.join(lines)
+
+
 if __name__ == '__main__':
     path = Path(sys.argv[1])
     values = load_settings(path)
@@ -82,5 +92,4 @@ if __name__ == '__main__':
     values['policy'] = info['digest']
     # The active policy, not the install-time format, decides the host controls.
     values['host_controls'] = '1' if info['document'].get('filesystem') is not None else '0'
-    for key, value in values.items():
-        print(f'{key}={shlex.quote(str(value))}')
+    print(shell_assignments(values))

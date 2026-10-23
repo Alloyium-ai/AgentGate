@@ -10,7 +10,11 @@ domain=$2
 command=$3
 mode=${4:-early-join}
 case "$target_pid" in *[!0-9]*|'') exit 2;; esac
+# One owned root-level domain: no further path component and no dot segment.
 case "$domain" in /sys/fs/cgroup/ag-mvp-*) ;; *) exit 2;; esac
+case "${domain#/sys/fs/cgroup/ag-mvp-}" in *[!a-z0-9-]*|'') exit 2;; esac
+# An empty command would run nothing and still report success.
+test -n "$command" || exit 2
 test -d "$domain"
 test -r "/proc/$target_pid/ns/net"
 test -r "/proc/$target_pid/root/bin/sh"
@@ -21,19 +25,20 @@ early-join)
   exec env -i PATH=/usr/local/bin:/usr/bin:/bin nsenter --target "$target_pid" \
     --mount --net --pid --uts --ipc --root="/proc/$target_pid/root" \
     --wdns=/var/lib/agentgate/workspace --setuid=65534 --setgid=65534 -- \
-    /usr/bin/setpriv --no-new-privs -- /bin/sh -c "$command" ;;
+    /usr/bin/setpriv --no-new-privs -- /bin/sh -c -- "$command" ;;
 late-join)
   # Filesystem and process policy would also bind env, nsenter and setpriv, and
   # namespace files have no absolute path. Open the domain's cgroup.procs here,
   # as root, and let the unprivileged shell join as its first action. The kernel
   # checks the opener's credentials, and the shell closes the descriptor before
-  # it runs the command. A failed join or a wrong membership exits unrun.
+  # it runs the command. A failed join or a wrong membership exits unrun. Each
+  # "sh -c --" keeps a command that starts with "-" or "+" from becoming options.
   exec 3>"$domain/cgroup.procs"
   exec env -i PATH=/usr/local/bin:/usr/bin:/bin nsenter --target "$target_pid" \
     --mount --net --pid --uts --ipc --root="/proc/$target_pid/root" \
     --wdns=/var/lib/agentgate/workspace --setuid=65534 --setgid=65534 -- \
-    /usr/bin/setpriv --no-new-privs -- /bin/sh -c \
-    'set -eu; echo "$$" >&3; exec 3>&-; joined=0; while read -r line; do case "$line" in 0::*) if test "$line" = "0::/$2"; then joined=1; fi;; esac; done < /proc/self/cgroup; test "$joined" = 1 || exit 125; exec /bin/sh -c "$1"' \
+    /usr/bin/setpriv --no-new-privs -- /bin/sh -c -- \
+    'set -eu; echo "$$" >&3; exec 3>&-; joined=0; while read -r line; do case "$line" in 0::*) if test "$line" = "0::/$2"; then joined=1; fi;; esac; done < /proc/self/cgroup; test "$joined" = 1 || exit 125; exec /bin/sh -c -- "$1"' \
     agentgate-join "$command" "${domain##*/}" ;;
 *) exit 2 ;;
 esac

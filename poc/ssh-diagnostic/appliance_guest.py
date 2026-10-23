@@ -86,8 +86,8 @@ def health(state, binding):
 
 def audit(state, binding):
     result = admin(state, binding, 'cat ' + GUEST + '/audit.jsonl ' + GUEST + '/operator-events.jsonl', timeout=15)
-    (state / 'audit.jsonl').write_text(result + '\n')
-    (state / 'audit.jsonl').chmod(0o600)
+    # The private copy is created at mode 0600 and replaced atomically.
+    write(state / 'audit.jsonl', (result + '\n').encode())
     return result
 
 
@@ -97,8 +97,9 @@ def transition(state, binding, stopping):
 root=Path('/var/lib/agentgate-poc-demo')
 domain=Path('/sys/fs/cgroup/ag-mvp-demo-domain')
 pins=Path('/sys/fs/bpf/ag-mvp-net-ag-mvp-demo-domain')
+host_pins=Path('/sys/fs/bpf/ag-mvp-host-ag-mvp-demo-domain')
 assert not domain.exists() or 'populated 0' in (domain/'cgroup.events').read_text().splitlines(), 'command is active'
-assert not pins.exists(), 'guard pins remain'
+assert not pins.exists() and not host_pins.exists(), 'guard pins remain'
 import subprocess
 item=subprocess.run(['docker','inspect','ag-mvp-demo-target'],capture_output=True)
 assert item.returncode != 0 and b'no such object' in item.stderr.lower(), 'owned target remains; inspect audit; state retained'

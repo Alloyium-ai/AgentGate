@@ -185,7 +185,11 @@ def main():
     state = state_directory(args.state)
     fd = os.open(state / 'control.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('another appliance command is using ' + str(state) +
+                               '; retry when it finishes') from None
         if args.action == 'start':
             return start(state, args)
         binding = load(state)

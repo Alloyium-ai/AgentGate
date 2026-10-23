@@ -22,7 +22,10 @@ ROOT = Path(__file__).resolve().parent
 SETTINGS = load_settings(ROOT / 'settings.json')
 DOMAIN = Path(SETTINGS['domain'])
 PINS = Path(SETTINGS['pins'])
+HOST_PINS = Path(SETTINGS['host_pins'])
 TARGET = SETTINGS['name']
+# The guard writes its receipt after SIGTERM. Its own cleanup bound is shorter.
+GUARD_EXIT_WAIT_S = 5
 SOURCE = SETTINGS['source']
 POLICY = None
 
@@ -34,7 +37,8 @@ def empty_domain():
 def archive_previous():
     history = ROOT / 'history'
     history.mkdir(mode=0o700, exist_ok=True)
-    files = ('guard-ready', 'guard-receipt.json', 'guard.log', 'config.json', 'policy-active.json')
+    files = ('guard-ready', 'guard-receipt.json', 'guard.log', 'config.json', 'policy-active.json',
+             'mounts-active.json')
     if any((ROOT / name).exists() for name in files):
         directory = history / str(time.time_ns())
         directory.mkdir(mode=0o700)
@@ -62,9 +66,20 @@ def guard_alive():
         return False
 
 
+def load_gateway():
+    spec = importlib.util.spec_from_file_location('poc_gateway', ROOT / 'gateway.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def pins_remain():
+    return PINS.exists() or HOST_PINS.exists()
+
+
 def release_orphaned_pins():
     """Release only owned pins after the measured domain and target are empty."""
-    if not PINS.exists():
+    if not pins_remain():
         return
     if not empty_domain() or guard_alive():
         raise RuntimeError('guard pins retained while domain or guard is active')
@@ -72,13 +87,14 @@ def release_orphaned_pins():
                             timeout=5, env={'PATH': '/usr/bin:/bin'})
     if target.returncode == 0 or b'no such object' not in target.stderr.lower():
         raise RuntimeError('target absence is not verified')
-    entries = list(PINS.iterdir())
-    if any(entry.is_symlink() or not (entry.name in {f'link-{n}' for n in range(6)}
-                                     or entry.name.startswith('map-')) for entry in entries):
-        raise RuntimeError('guard pin directory contains an unexpected entry')
-    for entry in entries:
-        entry.unlink()
-    PINS.rmdir()
+    gateway = load_gateway()
+    # A killed guard leaves both directories; the host one must not wedge the next command.
+    for path, links in ((PINS, gateway.NETWORK_LINKS), (HOST_PINS, gateway.HOST_LINKS)):
+        if path.exists() or path.is_symlink():
+            try:
+                gateway.remove_pin_directory(path, links)
+            except ValueError as error:
+                raise RuntimeError(str(error)) from error
 
 
 def cleanup(pid):
@@ -95,20 +111,21 @@ def cleanup(pid):
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    for _ in range(10):
-        if empty_domain() and not PINS.exists():
+    deadline = time.monotonic() + GUARD_EXIT_WAIT_S
+    while time.monotonic() < deadline:
+        if empty_domain() and not pins_remain() and not guard_alive():
             break
         time.sleep(0.1)
-    if PINS.exists():
+    if pins_remain():
         try:
             release_orphaned_pins()
         except (OSError, RuntimeError) as error:
             errors.append(f'orphaned pins: {error}')
-    if not empty_domain() or PINS.exists():
+    if not empty_domain() or pins_remain():
         errors.append('owned domain or guard pins remain')
     record = {'scope': 'fixed-diagnostic-only; no normal admission',
               'source_revision': SOURCE, 'policy_digest': POLICY,
-              'domain_empty': empty_domain(), 'pins_absent': not PINS.exists(),
+              'domain_empty': empty_domain(), 'pins_absent': not pins_remain(),
               'cleanup_errors': errors, 'finished_mono_ns': time.monotonic_ns()}
     append_event(record)
     if errors:
@@ -116,16 +133,11 @@ def cleanup(pid):
 
 
 def append_event(record):
-    spec = importlib.util.spec_from_file_location('poc_gateway', ROOT / 'gateway.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.append_audit(str(ROOT / 'operator-events.jsonl'), record)
+    load_gateway().append_audit(str(ROOT / 'operator-events.jsonl'), record)
 
 
 def run_gateway():
-    spec = importlib.util.spec_from_file_location('poc_gateway', ROOT / 'gateway.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load_gateway()
     original = sys.argv
     try:
         sys.argv = [str(ROOT / 'gateway.py'), str(ROOT / 'config.json')]
@@ -152,7 +164,10 @@ def main():
     pid = None
     result = 1
     try:
-        if not empty_domain() or PINS.exists():
+        if not empty_domain() or pins_remain():
+            # A guard killed earlier leaves pins; release them once nothing is live.
+            release_orphaned_pins()
+        if not empty_domain() or pins_remain():
             raise RuntimeError('previous command domain or pins remain')
         archive_previous()
         subprocess.run([str(ROOT / 'prepare-command.sh')], check=True, timeout=25,

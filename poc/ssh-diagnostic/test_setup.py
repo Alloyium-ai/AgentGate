@@ -60,5 +60,23 @@ class SettingsTest(unittest.TestCase):
             self.check(data)
 
 
+class ShellAssignmentTest(unittest.TestCase):
+    def test_eval_restores_exact_values_and_runs_nothing(self):
+        import subprocess
+        import tempfile
+        from settings import shell_assignments
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'ran'
+            hostile = "x'; touch %s; echo '$(touch %s)`touch %s`\nnext" % (marker, marker, marker)
+            text = shell_assignments({'value': hostile, 'digest': 'a' * 64, 'flag': '1'})
+            done = subprocess.run(['/bin/sh', '-c', 'eval "$1"; printf %s "$value"', 'sh', text],
+                                  capture_output=True, timeout=10)
+            self.assertEqual(done.stdout.decode(), hostile)
+            self.assertFalse(marker.exists())
+        for key in ('Bad', 'a-b', 'x;y', '', '1a'):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                shell_assignments({key: 'v'})
+
+
 if __name__ == '__main__':
     unittest.main()

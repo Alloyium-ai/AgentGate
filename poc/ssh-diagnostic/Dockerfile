@@ -9,7 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/pilot-network-diagnostic cmd/pilot-network-diagnostic
 COPY internal internal
-COPY poc/ssh-diagnostic/policy.example.json poc/ssh-diagnostic/policy.full.example.json poc/ssh-diagnostic/
+COPY poc/ssh-diagnostic/policy.example.json poc/ssh-diagnostic/policy.full.example.json poc/ssh-diagnostic/gateway.py poc/ssh-diagnostic/
 RUN printf '%s\n' "$SOURCE_REVISION" | grep -Eq '^[a-f0-9]{40}$' \
  && go test -p 2 ./cmd/pilot-network-diagnostic ./internal/dockerplacement ./internal/netrules ./internal/pocpolicy ./internal/fsrules ./internal/processrules \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-X alloyium.local/kernel-poc/internal/buildinfo.SourceRevision=$SOURCE_REVISION" -o /out/pilot-network-diagnostic ./cmd/pilot-network-diagnostic

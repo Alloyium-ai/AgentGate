@@ -139,8 +139,14 @@ type hostGuard struct {
 	counters    []*ebpf.Map
 	done        sync.WaitGroup
 	stopping    chan struct{}
+	stopOnce    sync.Once
+	closeOnce   sync.Once
 	pins        *guardPins
 }
+
+// drainBound limits how long a reader keeps draining after stop while records
+// still arrive. Unread records then fail the counter reconciliation.
+const drainBound = 500 * time.Millisecond
 
 func loadHostObject(path string, enlarge string) ([32]byte, *ebpf.Collection, error) {
 	var digest [32]byte
@@ -276,7 +282,17 @@ func attachHost(document pocpolicy.Document, cgroup string, inode, deadline uint
 // drain keeps reading until stop is requested and the ring is idle.
 func (h *hostGuard) drain(reader *ringbuf.Reader, evidence *ringTracker) {
 	defer h.done.Done()
+	var cutoff time.Time
 	for {
+		select {
+		case <-h.stopping:
+			if cutoff.IsZero() {
+				cutoff = time.Now().Add(drainBound)
+			} else if time.Now().After(cutoff) {
+				return
+			}
+		default:
+		}
 		reader.SetDeadline(time.Now().Add(50 * time.Millisecond))
 		record, err := reader.Read()
 		if err == nil {
@@ -338,7 +354,7 @@ func (h *hostGuard) release() error {
 
 // finish stops the readers once their rings are idle and reconciles counters.
 func (h *hostGuard) finish() hostEvidence {
-	close(h.stopping)
+	h.stop()
 	h.done.Wait()
 	out := hostEvidence{Complete: true}
 	for index, evidence := range []*ringTracker{h.fs, h.process} {
@@ -361,17 +377,28 @@ func (e *ringTracker) snapshot() ringEvidence {
 	return e.ringEvidence
 }
 
+// stop asks every reader to finish; it is safe to call more than once.
+func (h *hostGuard) stop() {
+	h.stopOnce.Do(func() { close(h.stopping) })
+}
+
+// close stops and joins the readers before it releases the links and maps, on
+// success and on every early error path. It is safe to call more than once.
 func (h *hostGuard) close() {
 	if h == nil {
 		return
 	}
-	for _, reader := range h.readers {
-		_ = reader.Close()
-	}
-	for _, item := range h.links {
-		_ = item.Close()
-	}
-	for _, collection := range h.collections {
-		collection.Close()
-	}
+	h.closeOnce.Do(func() {
+		h.stop()
+		for _, reader := range h.readers {
+			_ = reader.Close()
+		}
+		h.done.Wait()
+		for _, item := range h.links {
+			_ = item.Close()
+		}
+		for _, collection := range h.collections {
+			collection.Close()
+		}
+	})
 }

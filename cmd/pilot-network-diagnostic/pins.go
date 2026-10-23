@@ -22,7 +22,7 @@ type guardPins struct {
 }
 
 func pinGuard(domain string, collection *ebpf.Collection, links []link.Link) (*guardPins, error) {
-	if !ownedDiagnosticDomain(domain) || collection == nil || len(links) != 6 {
+	if !ownedDiagnosticDomain(domain) || collection == nil || len(links) != len(networkAttachments) {
 		return nil, errors.New("diagnostic pin binding differs")
 	}
 	pins := &guardPins{dir: filepath.Join("/sys/fs/bpf", "ag-mvp-net-"+filepath.Base(domain))}
