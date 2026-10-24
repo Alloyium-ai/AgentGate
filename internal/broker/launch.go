@@ -19,9 +19,9 @@ type LaunchSecret struct {
 	Env        string
 	Upstreams  []string // "host" or "host:port", exact names
 	Header     string
-	Scheme     string // "", "Bearer" or "Basic"; empty means the default below
+	Scheme     string // "", "Bearer" or "Basic"; empty means Bearer for authorization
 	Username   string // Basic only
-	Rules      []Rule // empty means the default below
+	Rules      []Rule // required: a secret without rules is refused (deny by default)
 	SecretFile string
 	Extra      map[string]string
 }
@@ -38,9 +38,9 @@ type LaunchInput struct {
 	Secrets   []LaunchSecret
 }
 
-// DefaultRules is the interim rule set when a launch job carries no path
-// rules: every allowed method on every path of the one origin. It is the
-// widest setting; the contract asks for explicit rules per secret.
+// DefaultRules is every allowed method on every path of one origin: the
+// widest setting. BuildLaunchConfig never applies it on its own; the service
+// expands an operator's explicit wildcard rule into it and flags the plan.
 func DefaultRules() []Rule {
 	return []Rule{{Methods: []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}, Path: "/", Match: "prefix"}}
 }
@@ -77,9 +77,11 @@ func BuildLaunchConfig(in LaunchInput, now time.Time) ([]byte, *Config, map[stri
 		if scheme == "" && strings.EqualFold(s.Header, "authorization") {
 			scheme = "Bearer"
 		}
+		// Deny by default: a secret reaches no path of its origin unless its
+		// metadata lists the rules. The interim widest default is gone.
 		rules := s.Rules
 		if len(rules) == 0 {
-			rules = DefaultRules()
+			return nil, nil, nil, fmt.Errorf("broker launch: secret %s has no rules; deny by default", s.Ref)
 		}
 		for i, up := range s.Upstreams {
 			host, port := up, 443

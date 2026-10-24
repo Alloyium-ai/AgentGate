@@ -14,7 +14,7 @@ func launchInput() LaunchInput {
 		StatsPath: "/var/lib/agentgate/broker/stats.json", RunAs: Identity{UID: 10002, GID: 10002},
 		Secrets: []LaunchSecret{
 			{Ref: "anthropic", Env: "ANTHROPIC_BASE_URL", Upstreams: []string{"api.example.test"}, Header: "x-api-key",
-				SecretFile: "/run/agentgate/secrets/anthropic"},
+				SecretFile: "/run/agentgate/secrets/anthropic", Rules: DefaultRules()},
 			{Ref: "github", Env: "GITHUB_API_URL", Upstreams: []string{"api.github.example", "uploads.github.example:8443"},
 				Header: "Authorization", SecretFile: "/run/agentgate/secrets/github",
 				Rules: []Rule{{Methods: []string{"GET"}, Path: "/repos", Match: "prefix"}}},
@@ -43,6 +43,11 @@ func TestBuildLaunchConfigBindsOneSecretPerOrigin(t *testing.T) {
 		t.Fatal("config mentions a value")
 	}
 	bad := launchInput()
+	bad.Secrets[0].Rules = nil
+	if _, _, _, err := BuildLaunchConfig(bad, testNow); err == nil || !strings.Contains(err.Error(), "no rules") {
+		t.Fatalf("a secret without rules was configured: %v", err)
+	}
+	bad = launchInput()
 	bad.Secrets[0].Upstreams = []string{"169.254.169.254"}
 	if _, _, _, err := BuildLaunchConfig(bad, testNow); err == nil {
 		t.Fatal("address literal upstream accepted")

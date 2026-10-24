@@ -42,6 +42,9 @@ type secretMeta struct {
 	Nonce       string `json:"nonce"`
 	Fingerprint string `json:"fingerprint"`
 	UpdatedAt   string `json:"updated_at"`
+	// Deleted marks a tombstone: the value is gone, the version stays, so an
+	// earlier envelope relayed again is still refused as a replay.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 func checkDir(dir string) error {
@@ -143,6 +146,113 @@ func (s *Store) Accept(key *HostKey, env *Envelope, now time.Time) (*Receipt, er
 		return nil, err
 	}
 	return opened.Receipt(fp), nil
+}
+
+// lock takes the store's exclusive lock; the caller runs unlock.
+func (s *Store) lock() (func(), error) {
+	if err := checkDir(s.dir); err != nil {
+		return nil, err
+	}
+	fd, err := unix.Open(filepath.Join(s.dir, ".lock"), unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return nil, ErrStore
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+		unix.Close(fd)
+		return nil, ErrStore
+	}
+	return func() { unix.Flock(fd, unix.LOCK_UN); unix.Close(fd) }, nil
+}
+
+func (s *Store) meta(name string) (*secretMeta, error) {
+	raw, err := readPrivate(filepath.Join(s.dir, name+".meta.json"), 4096)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, ErrStore
+	}
+	var m secretMeta
+	if strictDecode(raw, &m) != nil || m.Name != name {
+		return nil, ErrStore
+	}
+	return &m, nil
+}
+
+// Stored reports the accepted version and fingerprint of name. ok is false
+// when no value is held (never set, or deleted). It never reads the value.
+func (s *Store) Stored(name string) (version uint64, fingerprint string, ok bool, err error) {
+	if !namePattern.MatchString(name) {
+		return 0, "", false, ErrContext
+	}
+	unlock, err := s.lock()
+	if err != nil {
+		return 0, "", false, err
+	}
+	defer unlock()
+	m, err := s.meta(name)
+	if err != nil || m == nil || m.Deleted {
+		return 0, "", false, err
+	}
+	var st unix.Stat_t
+	if unix.Lstat(filepath.Join(s.dir, name), &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0o077 != 0 ||
+		int(st.Uid) != os.Geteuid() || st.Nlink != 1 {
+		return 0, "", false, ErrStore
+	}
+	return m.Version, m.Fingerprint, true, nil
+}
+
+// Delete overwrites the value of name with zeros, removes it, and keeps a
+// tombstone with the last accepted version under the store lock. Without the
+// tombstone a relayed copy of an earlier envelope (still inside MaxAge) would
+// set the deleted value again. Deleting a name never set, or already deleted,
+// succeeds.
+func (s *Store) Delete(name string, now time.Time) error {
+	if !namePattern.MatchString(name) {
+		return ErrContext
+	}
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	m, err := s.meta(name)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(s.dir, name)
+	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	switch {
+	case errors.Is(err, unix.ENOENT):
+	case err != nil:
+		return ErrStore
+	default:
+		var st unix.Stat_t
+		if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != os.Geteuid() || st.Size > MaxValueBytes+1 {
+			unix.Close(fd)
+			return ErrStore
+		}
+		zeros := make([]byte, st.Size)
+		_, werr := unix.Pwrite(fd, zeros, 0)
+		serr := unix.Fsync(fd)
+		unix.Close(fd)
+		if werr != nil || serr != nil || unix.Unlink(path) != nil {
+			return ErrStore
+		}
+	}
+	if m == nil {
+		return nil
+	}
+	m.Deleted, m.Fingerprint, m.UpdatedAt = true, "", now.UTC().Format(time.RFC3339)
+	raw, _ := json.Marshal(m)
+	if err := writePrivate(filepath.Join(s.dir, name+".meta.json"), raw, false); err != nil {
+		return err
+	}
+	if d, err := os.Open(s.dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // readPrivate reads a regular, unlinked-elsewhere 0600 file owned by this user.
