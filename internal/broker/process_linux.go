@@ -35,11 +35,14 @@ func HardenProcess() Hardening {
 	}
 	// no_new_privs is per thread; AllThreadsSyscall applies it to every
 	// runtime thread when cgo is disabled, as in the release build.
-	if _, _, errno := syscall.AllThreadsSyscall(syscall.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); errno != 0 {
+	// With cgo (for example a -race build) AllThreadsSyscall is unavailable;
+	// the flag is then set on this thread only and not reported as achieved.
+	if _, _, errno := syscall.AllThreadsSyscall(syscall.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); errno == 0 {
+		if v, err := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0); err == nil && v == 1 {
+			h.NoNewPrivs = true
+		}
+	} else {
 		_ = unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-	}
-	if v, err := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0); err == nil && v == 1 {
-		h.NoNewPrivs = true
 	}
 	h.UID, h.GID = os.Geteuid(), os.Getegid()
 	h.NoCapabilities = effectiveCapabilitiesZero()

@@ -421,14 +421,25 @@ func (s *Server) stream(ctx context.Context, cancel context.CancelFunc, w http.R
 		if n > 0 {
 			emit(red.process(buf[:n], false))
 		}
+		if err != nil && ctx.Err() != nil {
+			// Once the broker has cancelled (idle bound, total timeout, launch
+			// deadline or a departed client), even a clean-looking end is not
+			// trusted: closing the upstream TLS connection can race with the
+			// upstream's own final chunk and surface as io.EOF.
+			switch {
+			case idleFired.Load():
+				abort(errKindStreamIdle)
+			case errors.Is(ctx.Err(), context.DeadlineExceeded):
+				abort(errKindTimeout)
+			default:
+				abort(errKindAborted)
+			}
+		}
 		if err == io.EOF {
 			emit(red.process(nil, true))
 			return
 		}
 		if err != nil {
-			if ctx.Err() != nil && !idleFired.Load() && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				abort(errKindTimeout)
-			}
 			abort(classify(err, idleFired.Load()))
 		}
 	}

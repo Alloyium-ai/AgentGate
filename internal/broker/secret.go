@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -104,6 +105,11 @@ func fileSource(path string) secretSource {
 func fdSource(fd int) secretSource {
 	return func(dst []byte) (int, error) {
 		defer unix.Close(fd)
+		// Non-blocking, so a writer that never closes the pipe hits the poll
+		// bound in readFull instead of stalling startup.
+		if unix.SetNonblock(fd, true) != nil {
+			return 0, errSecretCustody
+		}
 		var st unix.Stat_t
 		if unix.Fstat(fd, &st) != nil {
 			return 0, errSecretCustody
@@ -137,6 +143,9 @@ func openNoSymlinks(path string) (int, error) {
 	return fd, err
 }
 
+// pipeWait bounds each wait for more data on a non-blocking descriptor.
+var pipeWait = 5 * time.Second
+
 // readFull reads until EOF; it fails if dst fills before EOF.
 func readFull(fd int, dst []byte) (int, error) {
 	n := 0
@@ -151,7 +160,7 @@ func readFull(fd int, dst []byte) (int, error) {
 		if errors.Is(err, unix.EAGAIN) {
 			// A pipe opened non-blocking by its writer: wait for data.
 			var fds = []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-			if _, perr := unix.Poll(fds, 5000); perr != nil && !errors.Is(perr, unix.EINTR) {
+			if _, perr := unix.Poll(fds, int(pipeWait.Milliseconds())); perr != nil && !errors.Is(perr, unix.EINTR) {
 				return 0, errSecretCustody
 			}
 			if fds[0].Revents == 0 {

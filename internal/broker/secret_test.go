@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func load(t *testing.T, c Credential, src secretSource) (*credential, error) {
@@ -102,6 +103,19 @@ func TestSecretFromDescriptor(t *testing.T) {
 	}
 	if cred.value != "Bearer "+testSecret {
 		t.Fatal("pipe value")
+	}
+	// A writer that never closes the pipe cannot stall startup.
+	saved := pipeWait
+	pipeWait = 200 * time.Millisecond
+	defer func() { pipeWait = saved }()
+	r2, w2, _ := os.Pipe()
+	defer w2.Close()
+	w2.WriteString(testSecret)
+	fd2, _ := dupFD(r2)
+	r2.Close()
+	start := time.Now()
+	if _, err := load(t, Credential{Header: "x-api-key"}, fdSource(fd2)); err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("open pipe: %v after %v", err, time.Since(start))
 	}
 	f, err := os.CreateTemp(t.TempDir(), "fd")
 	if err != nil {
