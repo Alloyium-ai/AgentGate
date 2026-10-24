@@ -287,19 +287,48 @@ identities keep the existing `Alloyium-Proof` scheme.
 
 ## CLI (`agentgate`)
 
+The full reference, quickstart and exit codes are in [CLI.md](CLI.md). The surface, with the API it calls:
+
 ```
-agentgate up [--target local]            bring up the service and enroll this machine
-agentgate login URL                      store an API token (mode 0600)
-agentgate target ls | add NAME | status NAME | retire NAME
-agentgate profile ls | show NAME | new NAME [--preset python-dev]
-agentgate grant NAME read|write|exec|deny PATH | web https | dns IP | signal TERM | mount SRC --as N
-agentgate launch -f spec.json | --name N --target T --mode session --profile P --image I -- CMD...
-agentgate ps | logs ID [-f] | stop ID | approve ID | audit [--launch ID]
-agentgate secret set NAME --upstream HOST [--header x-api-key]   # reads the value from stdin
+agentgate up [--target local] [--service-url URL] [--compose-file F] [--approve]   bring this machine online
+agentgate login URL [--token-stdin] | logout [--revoke] | whoami | context ls|use|rm   API token in a 0600 config
+agentgate target ls | add NAME | enroll NAME | status NAME | approve-key NAME --host-key-id ID
+agentgate target pin NAME --host-key-id ID | rename NAME NEW | retire NAME
+agentgate profile ls | show NAME | new NAME [--preset P | --file DOC] | versions NAME | approval NAME required|auto
+agentgate preset ls
+agentgate grant PROFILE read|write|exec|deny PATH | web [allow|deny] PROTO... | dns IP... | signal SIG...
+                        | anon-exec | mount NAME [--mode read-only|read-write] | unmount NAME | preset NAME
+                        | revoke KIND VALUE...        [--dry-run] [--upgrade]
+agentgate launch -f spec.json | --name N --target T --mode oneshot|session --lifetime D --profile P[@V]
+                 --image I --mount SRC:NAME[:ro|snapshot|rw] --secret REF[:ENV] --env K=V -- CMD...
+                 [--dry-run] [--wait [--until running|done]]
+agentgate ps | show ID | logs ID [-f] | events ID [-f] | stop ID [--wait] | approve ID | reject ID
+agentgate audit [--launch ID] [--since T] | audit catalog
+agentgate secret set NAME --upstream HOST --allow-profile P [--header H] [--scheme Bearer] | ls | rm NAME
+agentgate token create [--save] | ls | revoke ID      (password sign-in: a token cannot manage tokens)
+agentgate schema launch-spec | completion bash|zsh|fish | version
 ```
 
-Every command supports `--json` and has documented exit codes. `launch --dry-run` prints the resolved plan and policy
-digest without creating anything.
+- Every command takes `--json` (the API's field names), `--quiet` and `--no-color`, and returns the exit codes in
+  [CLI.md](CLI.md#exit-codes): 0 ok, 2 usage, 3 auth, 4 forbidden, 5 not found, 6 conflict, 7 rejected, 8 approval
+  pending, 9 timeout, 10 server, 11 network, 12 launch ended, 13 trust, 130 interrupted.
+- `launch --dry-run` posts to `/launch-plans` and prints the resolved plan: digests, effective permissions, mounts,
+  brokered secrets by name, lifetime and expiry, and every approval reason. `launch --wait` follows the event stream
+  (resuming with `Last-Event-ID`) through `approval_pending` to `running`; interrupting it never stops the launch.
+- `grant` sends one typed edit to `/profiles/{id}/versions/{n}/grants` and prints the diff of the version the service
+  stored. The service has no grant preview endpoint, so `grant --dry-run` applies the same engine (`internal/access`)
+  locally to the latest version and sends nothing; a `dry_run` flag on the grants endpoint would replace that.
+- `secret set` reads the value from a hidden prompt or stdin, never argv or the environment. It requires a client-side
+  pin of the target's approved `host_key_id` (`~/.config/agentgate/known-targets.json`, written by `target approve-key`,
+  `target pin` or `up`), fetches `GET /targets/{id}/seal-key` (the pending control plane request in
+  [BROKER.md](BROKER.md#integration-requests)), checks `hostproto.KeyID(host_public_key)` against the pin and the
+  record's signature with `secretseal.VerifyKeyRecord`, and uploads `Envelope.Encode()` as `ciphertext`. Until the
+  service publishes the seal key it refuses, unless `--allow-unsigned-key` seals with `hostproto.SealSecret` to the
+  encryption key pinned at approval. It does not verify the host's `secretseal.Receipt` yet: the service does not
+  relay it.
+- `up` delegates every host-side action to `docker compose` (`control job-key`, `init`, `first-admin` with the
+  password on stdin, `up -d`) and `agentgate-hostd` (`status`, `install --token-file`, `provision`) through argument
+  vectors; each step checks the current state first, and the steps that need root refuse without it.
 
 ## Credentials
 
@@ -484,6 +513,6 @@ curl -sS -X POST "$U/api/v1/targets/local/enrollment" -H "Authorization: Bearer 
 | Control plane: store, API, roles, job queue, audit | `internal/control`, `internal/access`, `internal/hostproto`, `cmd/community` | implemented and tested in the build sandbox (no BPF LSM kernel, no real host); see the cookbook |
 | Host agent and long-running launch runtime | `cmd/agentgate-hostd`, `internal/hostd`, `poc/ssh-diagnostic` | implemented and unit-tested with fakes; Docker, systemd and the BPF LSM kernel were not exercised. The launch runtime (`launch.py`) runs a verified job in the guarded-target path; the daemon enrolls, polls, verifies and runs jobs at most once, retries uploads from a durable outbox, enforces the lifetime and the lost-service grace, and reconciles after a crash. `agentgate-hostd provision` and the `provision` job wrap `appliance.py start`. `verify-kernel.sh` is the kernel verification kit |
 | Credential broker | `cmd/agentgate-broker`, `internal/broker`, `internal/secretseal` | broker, sealed relay and helpers implemented and tested in the build sandbox with fakes (no Docker, systemd, BPF LSM kernel, real DNS or real upstream); end-to-end use needs the guard, host agent and protocol changes listed in [BROKER.md](BROKER.md#integration-requests) |
-| CLI | `cmd/agentgate` | not started |
+| CLI | `cmd/agentgate`, `internal/cli`, `docs/CLI.md` | implemented; tested against a fake service built from the OpenAPI document and end to end against the real service in process (with a fake host agent on the real host protocol). `up` was tested only with a fake command runner: Docker, systemd and a real `agentgate-hostd` were not exercised |
 | UI pages | `web/src` | not started |
 | Kernel verification on a BPF LSM host | `docs/QUALIFICATION.md` | not possible in the build sandbox |
