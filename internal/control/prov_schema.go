@@ -3,7 +3,7 @@
 package control
 
 // SchemaVersion is the database user_version this build writes.
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // provisioningSchema adds targets, profiles, launches, jobs, secrets metadata
 // and API tokens. Every statement is idempotent. Bindings that the contract
@@ -76,4 +76,25 @@ CREATE TABLE IF NOT EXISTS api_tokens(id TEXT PRIMARY KEY,token_hash TEXT NOT NU
 CREATE INDEX IF NOT EXISTS api_tokens_subject ON api_tokens(subject,created);
 CREATE TRIGGER IF NOT EXISTS api_token_binding_immutable BEFORE UPDATE OF id,token_hash,subject,actor,login_authority,name,roles,created,expires ON api_tokens BEGIN SELECT RAISE(ABORT,'immutable API token'); END;
 CREATE TRIGGER IF NOT EXISTS api_token_revocation_final BEFORE UPDATE OF revoked ON api_tokens WHEN OLD.revoked<>'' BEGIN SELECT RAISE(ABORT,'revoked API token'); END;
+`
+
+// brokerColumns are the version 6 additions: the host-signed seal key record a
+// target publishes, a secret's injection rules and envelope context, and the
+// host's receipt for it. None of them holds a secret value. addColumn makes
+// each step idempotent, so a migration can be repeated safely.
+var brokerColumns = []struct{ table, column, decl string }{
+	{"targets", "seal_key", "TEXT NOT NULL DEFAULT ''"},
+	{"secrets", "injection", "TEXT NOT NULL DEFAULT ''"},
+	{"secrets", "envelope", "TEXT NOT NULL DEFAULT ''"},
+	{"secrets", "receipt", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// brokerTriggers keep the version 6 columns as immutable as the rest of the
+// secret binding: injection rules and the envelope context never change, a
+// receipt is recorded once, and a seal key record is JSON.
+const brokerTriggers = `
+DROP TRIGGER IF EXISTS secret_binding_immutable;
+CREATE TRIGGER secret_binding_immutable BEFORE UPDATE OF id,name,target_id,upstreams,header,fingerprint,allowed_profiles,allowed_launchers,created,created_by,injection,envelope ON secrets BEGIN SELECT RAISE(ABORT,'immutable secret metadata'); END;
+CREATE TRIGGER IF NOT EXISTS secret_receipt_once BEFORE UPDATE OF receipt ON secrets WHEN OLD.receipt<>'' AND NEW.receipt<>OLD.receipt BEGIN SELECT RAISE(ABORT,'immutable secret receipt'); END;
+CREATE TRIGGER IF NOT EXISTS target_seal_key_json BEFORE UPDATE OF seal_key ON targets WHEN NEW.seal_key<>'' AND json_valid(NEW.seal_key)=0 BEGIN SELECT RAISE(ABORT,'invalid seal key record'); END;
 `

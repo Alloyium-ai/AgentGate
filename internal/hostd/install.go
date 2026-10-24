@@ -44,6 +44,9 @@ type InstallOptions struct {
 	Executable     string // the running binary, copied to BinaryPath
 	Hostname       string
 	NoStart        bool
+	// SecretRoot and Broker configure brokered secrets (see Config).
+	SecretRoot string
+	Broker     *BrokerConfig
 }
 
 // Installer performs an idempotent install. Its file roots and commands are
@@ -143,7 +146,7 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 		return err
 	}
 	cfg := Config{ServiceURL: o.ServiceURL, AllowLoopbackHTTP: o.AllowLoopbackHTTP, CAFile: o.CAFile, Runtime: o.Runtime,
-		Launcher: launcher, Provisioner: provisioner, Instance: o.Instance}
+		Launcher: launcher, Provisioner: provisioner, Instance: o.Instance, SecretRoot: o.SecretRoot, Broker: o.Broker}
 	if err = cfg.Validate(); err != nil {
 		return err
 	}

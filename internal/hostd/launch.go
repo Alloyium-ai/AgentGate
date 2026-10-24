@@ -49,6 +49,31 @@ type launcherJob struct {
 	LifetimeSeconds     int             `json:"lifetime_seconds"`
 	ExpiresAtMS         int64           `json:"expires_at_ms"`
 	Mounts              []launcherMount `json:"mounts"`
+	// Broker is the launch's broker network and the base URLs the agent
+	// receives; null for a launch without secrets. It holds no path or value.
+	Broker *launcherBroker `json:"broker"`
+}
+
+// preparedLaunch is a launch checked on this host and ready to run.
+type preparedLaunch struct {
+	raw    []byte
+	modes  map[string]string
+	broker *launcherBroker
+	config []byte
+}
+
+// sameSecrets requires the spec's secret references and the job's resolved
+// secrets to name the same refs and variables, in the same order.
+func sameSecrets(spec []hostproto.SpecSecret, job []hostproto.LaunchSecret) error {
+	if len(spec) != len(job) {
+		return errors.New("the launch job's secrets differ from its spec")
+	}
+	for i := range spec {
+		if spec[i].Ref != job[i].Ref || spec[i].Expose.Env != job[i].Env {
+			return errors.New("the launch job's secrets differ from its spec")
+		}
+	}
+	return nil
 }
 
 // secretLike is the contract's rule for environment names that must never
@@ -69,27 +94,28 @@ func secretLike(name string) bool {
 }
 
 // prepareLaunch checks a verified launch job on this host and builds the
-// launcher job. Every refusal happens before anything runs.
-func prepareLaunch(job hostproto.Job, p hostproto.LaunchPayload, caps []string, now time.Time) ([]byte, map[string]string, string, error) {
+// launcher job and, for a launch with secrets, the broker configuration.
+// Every refusal happens before anything runs.
+func prepareLaunch(job hostproto.Job, p hostproto.LaunchPayload, caps []string, now time.Time, targetID string, brokerCfg *BrokerConfig) (*preparedLaunch, string, error) {
 	var spec hostproto.LaunchSpec
 	if err := hostproto.DecodeStrict(p.Spec, &spec); err != nil {
-		return nil, nil, "invalid_spec", err
+		return nil, "invalid_spec", err
 	}
 	if spec.Version != hostproto.LaunchSpecVersion || !hostproto.NamePattern.MatchString(spec.Name) {
-		return nil, nil, "invalid_spec", errors.New("launch spec version or name invalid")
+		return nil, "invalid_spec", errors.New("launch spec version or name invalid")
 	}
-	if len(p.Secrets) > 0 || len(spec.Secrets) > 0 {
-		return nil, nil, "broker_unavailable", errors.New("this host has no credential broker; a launch that needs secrets does not start")
+	if err := sameSecrets(spec.Secrets, p.Secrets); err != nil {
+		return nil, "secret_binding_differs", err
 	}
 	if err := pocpolicy.ValidateLifetime(spec.Mode, spec.LifetimeSeconds); err != nil {
-		return nil, nil, "invalid_lifetime", err
+		return nil, "invalid_lifetime", err
 	}
 	if !hostproto.ImagePattern.MatchString(spec.Agent.Image) && !strings.HasPrefix(spec.Agent.Image, "sha256:") {
-		return nil, nil, "invalid_image", errors.New("agent image must be an immutable digest reference")
+		return nil, "invalid_image", errors.New("agent image must be an immutable digest reference")
 	}
 	for name := range spec.Agent.Env {
 		if secretLike(name) {
-			return nil, nil, "secret_in_env", fmt.Errorf("environment name %s looks like a secret; secrets arrive only through the broker", name)
+			return nil, "secret_in_env", fmt.Errorf("environment name %s looks like a secret; secrets arrive only through the broker", name)
 		}
 	}
 	// The effective lifetime never runs past the signed expiry. The host kills
@@ -101,15 +127,22 @@ func prepareLaunch(job hostproto.Job, p hostproto.LaunchPayload, caps []string, 
 		lifetime = limit
 	}
 	if err := pocpolicy.ValidateLifetime(spec.Mode, lifetime); err != nil {
-		return nil, nil, "expired_before_start", fmt.Errorf("the launch expires before a %s lifetime can start: %v", spec.Mode, err)
+		return nil, "expired_before_start", fmt.Errorf("the launch expires before a %s lifetime can start: %v", spec.Mode, err)
 	}
 	profile, err := pocpolicy.Parse(p.Policy)
 	if err != nil {
-		return nil, nil, "policy_invalid", err
+		return nil, "policy_invalid", err
 	}
-	effective, err := profile.ForLaunch(spec.Mode, lifetime)
+	// The service signs a launch document that already names the mode and
+	// the full lifetime; the host may only shorten it to the signed expiry.
+	var effective pocpolicy.Document
+	if profile.Mode != "" {
+		effective, err = profile.Shorten(spec.Mode, lifetime)
+	} else {
+		effective, err = profile.ForLaunch(spec.Mode, lifetime)
+	}
 	if err != nil {
-		return nil, nil, "policy_invalid", err
+		return nil, "policy_invalid", err
 	}
 	modes := map[string]string{}
 	mounts := make([]launcherMount, 0, len(p.Mounts))
@@ -123,36 +156,74 @@ func prepareLaunch(job hostproto.Job, p hostproto.LaunchPayload, caps []string, 
 	}
 	for _, m := range p.Mounts {
 		if m.Path != path.Join(hostproto.MountRoot, m.Name) {
-			return nil, nil, "invalid_mount", errors.New("mount path differs from its name")
+			return nil, "invalid_mount", errors.New("mount path differs from its name")
 		}
 		switch m.Mode {
 		case "snapshot":
 			if !has(hostproto.CapabilitySnapshots) {
-				return nil, nil, "unsupported_capability", errors.New("this target does not take snapshot mounts")
+				return nil, "unsupported_capability", errors.New("this target does not take snapshot mounts")
 			}
 		default:
 			if !has(hostproto.CapabilityLiveMounts) {
-				return nil, nil, "unsupported_capability", fmt.Errorf("mount %s needs live-mounts, which this target does not advertise", m.Name)
+				return nil, "unsupported_capability", fmt.Errorf("mount %s needs live-mounts, which this target does not advertise", m.Name)
 			}
 		}
 		modes[m.Name] = m.Mode
 		mounts = append(mounts, launcherMount{Name: m.Name, Source: m.Source, Mode: m.Mode})
 	}
+	out := &preparedLaunch{modes: modes}
+	switch {
+	case len(p.Secrets) > 0:
+		if !has(hostproto.CapabilityBrokeredSecrets) || brokerCfg == nil {
+			return nil, "broker_unavailable", errors.New("this host has no credential broker; a launch that needs secrets does not start")
+		}
+		if out.broker, out.config, err = planBroker(job, p, effective, targetID, brokerCfg, now); err != nil {
+			return nil, "broker_config_refused", err
+		}
+		for name := range out.broker.Env {
+			if _, clash := spec.Agent.Env[name]; clash {
+				return nil, "secret_binding_differs", fmt.Errorf("environment name %s is set by the spec and by a broker route", name)
+			}
+		}
+	case effective.Broker != nil:
+		return nil, "policy_invalid", errors.New("the policy names a broker endpoint but the launch has no secrets")
+	}
 	policy, err := json.Marshal(effective)
 	if err != nil {
-		return nil, nil, "policy_invalid", err
+		return nil, "policy_invalid", err
 	}
 	raw, err := json.Marshal(launcherJob{Version: launcherJobVersion, LaunchID: job.LaunchID, JobID: job.ID, Spec: p.Spec,
 		SpecDigest: job.SpecDigest, Policy: policy, PolicyDigest: effective.Digest(), ProfilePolicyDigest: job.PolicyDigest,
 		StopGraceSeconds: launchStopGrace, LogLimitBytes: launchLogLimit, UploadLimitBytes: launchUploadLimit,
-		LifetimeSeconds: lifetime, ExpiresAtMS: p.ExpiresAtMS, Mounts: mounts})
+		LifetimeSeconds: lifetime, ExpiresAtMS: p.ExpiresAtMS, Mounts: mounts, Broker: out.broker})
 	if err != nil {
-		return nil, nil, "invalid_spec", err
+		return nil, "invalid_spec", err
 	}
 	if len(raw) > maxLaunchJobBytes {
-		return nil, nil, "invalid_spec", errors.New("launch job exceeds its bound")
+		return nil, "invalid_spec", errors.New("launch job exceeds its bound")
 	}
-	return raw, modes, "", nil
+	out.raw = raw
+	return out, "", nil
+}
+
+// checkMountSources refuses a mount that overlaps this host agent's own state
+// (its keys, outbox and broker configurations) or the secret store, whatever
+// path either is configured at. The protocol already refuses the default
+// locations (hostproto.ProtectedMountTrees); this covers configured ones.
+func (d *Daemon) checkMountSources(mounts []hostproto.LaunchMount) error {
+	for _, m := range mounts {
+		source := path.Clean(m.Source)
+		for _, private := range []string{d.StateDir, d.Config.secretRoot()} {
+			if private == "" {
+				continue
+			}
+			private = path.Clean(private)
+			if source == private || strings.HasPrefix(source, private+"/") || strings.HasPrefix(private, source+"/") || source == "/" {
+				return fmt.Errorf("mount %s overlaps this host agent's state or secret store", m.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func (d *Daemon) startLaunch(ctx context.Context, job hostproto.Job, p hostproto.LaunchPayload) {
@@ -160,7 +231,11 @@ func (d *Daemon) startLaunch(ctx context.Context, job hostproto.Job, p hostproto
 		d.finish(job.ID, hostproto.ResultRejected, "host_degraded", "this host could not reconcile an earlier launch: "+reason, nil, "not_started")
 		return
 	}
-	raw, modes, code, err := prepareLaunch(job, p, d.capabilities(ctx), d.Now())
+	if err := d.checkMountSources(p.Mounts); err != nil {
+		d.finish(job.ID, hostproto.ResultRejected, "invalid_mount", err.Error(), nil, "not_started")
+		return
+	}
+	prepared, code, err := prepareLaunch(job, p, d.capabilities(ctx), d.Now(), d.Identity.TargetID, d.Config.Broker)
 	if err != nil {
 		d.finish(job.ID, hostproto.ResultRejected, code, err.Error(), nil, "not_started")
 		return
@@ -171,17 +246,35 @@ func (d *Daemon) startLaunch(ctx context.Context, job hostproto.Job, p hostproto
 	}
 	launchCtx, cancel := context.WithCancel(ctx)
 	active := &activeLaunch{jobID: job.ID, launchID: job.LaunchID, heartbeat: heartbeat, started: d.Now(), cancel: cancel, done: make(chan struct{})}
+	// The secret store is checked and the launch registered under secretMu,
+	// so no secret-put or secret-delete changes a value between the check
+	// and the broker reading it.
+	d.secretMu.Lock()
+	var brokerLaunch *BrokerLaunch
+	if prepared.broker != nil {
+		if brokerLaunch, err = d.newBrokerLaunch(job, p, prepared.broker, prepared.config); err != nil {
+			d.secretMu.Unlock()
+			cancel()
+			d.finish(job.ID, hostproto.ResultRejected, "secret_unavailable", err.Error(), nil, "not_started")
+			return
+		}
+		for _, s := range p.Secrets {
+			active.secrets = append(active.secrets, s.Ref)
+		}
+	}
 	d.mu.Lock()
 	// One active launch per target: the runtime's instance lock enforces it
 	// too, but refusing here never even starts a second runtime.
 	if len(d.active) > 0 {
 		d.mu.Unlock()
+		d.secretMu.Unlock()
 		cancel()
 		d.finish(job.ID, hostproto.ResultRejected, "target_busy", "another launch is running on this target", nil, "not_started")
 		return
 	}
 	d.active[job.LaunchID] = active
 	d.mu.Unlock()
+	d.secretMu.Unlock()
 	d.background(func() {
 		defer func() {
 			cancel()
@@ -190,7 +283,7 @@ func (d *Daemon) startLaunch(ctx context.Context, job hostproto.Job, p hostproto
 			d.mu.Unlock()
 			close(active.done)
 		}()
-		d.superviseLaunch(launchCtx, job, raw, modes)
+		d.superviseLaunch(launchCtx, job, prepared.raw, prepared.modes, brokerLaunch)
 	})
 }
 
@@ -213,7 +306,23 @@ func logMessages(raw []byte) []string {
 	return out
 }
 
-func (d *Daemon) superviseLaunch(ctx context.Context, job hostproto.Job, raw []byte, modes map[string]string) {
+func (d *Daemon) superviseLaunch(ctx context.Context, job hostproto.Job, raw []byte, modes map[string]string, b *BrokerLaunch) {
+	// The broker starts before the target and must be serving this exact
+	// configuration first; otherwise the launch fails closed and nothing runs.
+	var brokerStarted time.Time
+	if b != nil {
+		d.progress(job.ID, fmt.Sprintf("starting the credential broker at %s:%d on its own launch network", b.Address, b.Port))
+		brokerStarted = d.Now()
+		if code, err := d.startBroker(ctx, b); err != nil {
+			d.finish(job.ID, hostproto.ResultFailed, code, "the credential broker did not start, so the launch did not run: "+err.Error(), nil, "not_started")
+			return
+		}
+		if ctx.Err() != nil {
+			d.teardownBroker(b, brokerStarted)
+			d.finish(job.ID, hostproto.ResultFailed, "stopped_before_start", "the launch was stopped before the agent started", nil, "not_started")
+			return
+		}
+	}
 	var receipt json.RawMessage
 	var rejected *LauncherEvent
 	emit := func(event LauncherEvent) {
@@ -248,6 +357,9 @@ func (d *Daemon) superviseLaunch(ctx context.Context, job hostproto.Job, raw []b
 	}
 	runErr := d.Runtime.Run(ctx, raw, emit)
 	if receipt == nil && rejected != nil {
+		if b != nil {
+			d.teardownBroker(b, brokerStarted)
+		}
 		code := map[string]string{"busy": "target_busy", "duplicate_launch": "duplicate_launch"}[rejected.Reason]
 		if code == "" {
 			code = "invalid_job"
@@ -268,6 +380,13 @@ func (d *Daemon) superviseLaunch(ctx context.Context, job hostproto.Job, raw []b
 			d.progress(job.ID, "launch runtime failed: "+runErr.Error())
 		}
 	}
+	// The agent is gone: stop the broker, verify its stats, remove its
+	// container and network, then report one receipt that covers both.
+	if b != nil {
+		outcome := d.teardownBroker(b, brokerStarted)
+		d.progress(job.ID, fmt.Sprintf("broker stopped: %d requests forwarded, %d refused; cleanup errors %d",
+			outcome.Evidence.Requests.Forwarded, outcome.Evidence.Requests.Denied, len(outcome.CleanupErrors)))
+	}
 	d.finishWithReceipt(job, receipt, modes, "receipt_absent")
 }
 
@@ -277,12 +396,21 @@ func (d *Daemon) finishWithReceipt(job hostproto.Job, raw json.RawMessage, modes
 		d.finish(job.ID, hostproto.ResultFailed, "evidence_missing", "no receipt is available for this launch", nil, missing)
 		return
 	}
-	receipt, status, reason, err := convertReceipt(job, d.Identity.TargetID, raw, modes)
+	receipt, status, reason, err := convertReceipt(job, d.Identity.TargetID, raw, modes, d.brokerOutcome(job.LaunchID))
 	if err != nil {
 		d.finish(job.ID, hostproto.ResultFailed, "evidence_invalid", err.Error(), nil, "receipt_invalid")
 		return
 	}
 	d.finish(job.ID, status, reason, "", receipt, "")
+}
+
+// brokerOutcome is the recorded outcome of the launch's broker, or nil for a
+// launch without one.
+func (d *Daemon) brokerOutcome(launchID string) *brokerOutcome {
+	if outcome, ok := d.brokerOutcomeFor(launchID); ok {
+		return &outcome
+	}
+	return nil
 }
 
 // launcherReceipt is the part of launch.py's receipt the protocol carries.
@@ -322,6 +450,8 @@ type launcherReceipt struct {
 	SetupError      *string `json:"setup_error"`
 	Reconciled      bool    `json:"reconciled"`
 	KernelVerified  bool    `json:"kernel_verified"`
+	// Broker is how the target joined its broker network (launch.py).
+	Broker json.RawMessage `json:"broker"`
 }
 
 var receiptReasons = map[string]string{"exited": "exited", "stop_requested": "stopped", "lifetime_expired": "expired"}
@@ -336,8 +466,9 @@ func parseTime(value string) int64 {
 }
 
 // convertReceipt binds the launcher's receipt to the job and fits it into the
-// protocol receipt. It refuses a receipt for another launch.
-func convertReceipt(job hostproto.Job, targetID string, raw json.RawMessage, modes map[string]string) (*hostproto.Receipt, string, string, error) {
+// protocol receipt, with the broker's verified evidence for a launch that had
+// one. It refuses a receipt for another launch.
+func convertReceipt(job hostproto.Job, targetID string, raw json.RawMessage, modes map[string]string, broker *brokerOutcome) (*hostproto.Receipt, string, string, error) {
 	var in launcherReceipt
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, "", "", fmt.Errorf("launch receipt: %w", err)
@@ -396,15 +527,27 @@ func convertReceipt(job hostproto.Job, targetID string, raw json.RawMessage, mod
 		reason = reasonCode(in.Reason)
 	}
 	out.Reason = reason
-	status := hostproto.ResultFailed
-	if (in.State == "stopped" || in.State == "expired") && in.Cleanup.DomainEmpty && in.Cleanup.EnforcementReleased {
-		status = hostproto.ResultSucceeded
-	}
 	network := map[string]any{"effective_policy_digest": in.PolicyDigest, "mode": in.Mode,
 		"lifetime_seconds": in.LifetimeSeconds, "image_id": in.ImageID, "state": in.State, "launcher_reason": in.Reason,
 		"evidence_complete": in.EvidenceComplete, "evidence_missing": in.EvidenceMissing, "guard_receipt_sha256": in.GuardSHA256,
 		"logs": in.Logs, "output": in.Output, "cleanup_errors": in.Cleanup.Errors, "setup_error": in.SetupError,
 		"reconciled": in.Reconciled, "mount_identity_errors": mountErrors, "kernel_verified": false}
+	if len(in.Broker) > 0 && string(in.Broker) != "null" && len(in.Broker) <= 4096 && json.Valid(in.Broker) {
+		network["broker_network"] = in.Broker
+	}
+	if broker != nil {
+		out.BrokerEvidence, out.BrokerCounts = broker.Evidence, broker.Counts
+		if len(broker.CleanupErrors) > 0 {
+			// A broker container or network that may remain is enforcement
+			// that was not released: the service queues another stop.
+			out.EnforcementReleased = false
+			network["broker_cleanup_errors"] = broker.CleanupErrors
+		}
+	}
+	status := hostproto.ResultFailed
+	if (in.State == "stopped" || in.State == "expired") && out.DomainEmpty && out.EnforcementReleased {
+		status = hostproto.ResultSucceeded
+	}
 	guard := map[string]json.RawMessage{}
 	for key, value := range in.Evidence {
 		if key != "host" {
@@ -545,6 +688,8 @@ func (d *Daemon) stopJob(ctx context.Context, job hostproto.Job, p hostproto.Sto
 		d.waitLaunch(job.LaunchID, stopWaitMargin)
 	}
 	_ = status
+	// A supervisor that did not return in time leaves its broker: stop it here.
+	d.stopLeftoverBroker(job.LaunchID)
 	raw, receiptErr := d.Runtime.Receipt(ctx, job.LaunchID)
 	if receiptErr != nil && !errors.Is(receiptErr, ErrUnknownLaunch) {
 		d.logf("launch %s: receipt read failed: %v", job.LaunchID, receiptErr)
@@ -646,6 +791,9 @@ func (d *Daemon) Recover(ctx context.Context) {
 	} else {
 		d.setDegraded("")
 	}
+	// Brokers a crash left behind are stopped and removed; their outcome
+	// goes into the receipts reported below.
+	d.recoverBrokers()
 	entries, err := d.Ledger.Unfinished()
 	if err != nil {
 		d.setDegraded("ledger unreadable: " + err.Error())
@@ -665,7 +813,7 @@ func (d *Daemon) Recover(ctx context.Context) {
 			d.finish(entry.JobID, hostproto.ResultFailed, "host_restarted", message, nil, "receipt_absent")
 			continue
 		}
-		receipt, status, reason, convertErr := convertReceipt(job, d.Identity.TargetID, raw, map[string]string{})
+		receipt, status, reason, convertErr := convertReceipt(job, d.Identity.TargetID, raw, map[string]string{}, d.brokerOutcome(entry.LaunchID))
 		if convertErr != nil {
 			d.finish(entry.JobID, hostproto.ResultFailed, "host_restarted", message+": "+convertErr.Error(), nil, "receipt_invalid")
 			continue

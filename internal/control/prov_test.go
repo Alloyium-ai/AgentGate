@@ -3,6 +3,7 @@
 package control
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"alloyium.local/kernel-poc/internal/access"
 	"alloyium.local/kernel-poc/internal/hostproto"
 	"alloyium.local/kernel-poc/internal/pocpolicy"
+	"alloyium.local/kernel-poc/internal/secretseal"
 )
 
 func TestLaunchEndToEndWithReceipt(t *testing.T) {
@@ -547,39 +549,108 @@ func TestConcurrentStateChangesStayConsistent(t *testing.T) {
 	}
 }
 
+// sealFor is what a client does: fetch the published seal key, verify it
+// against the host key fingerprint pinned out of band, and seal.
+func (f *provFixture) sealFor(h *fakeHost, name, value string) *secretseal.Sealed {
+	f.t.Helper()
+	published := must(f.s.TargetSealKey("local"))
+	rec, err := secretseal.ParseSignedKeyRecord(published["record"].(json.RawMessage))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	hostPub := h.key.Public().(ed25519.PublicKey)
+	known, err := secretseal.LoadKnownTargets(filepath.Join(f.t.TempDir(), "known.json"))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err = known.Pin(h.id, secretseal.HostKeyFingerprint(hostPub)); err != nil {
+		f.t.Fatal(err)
+	}
+	sealed, _, err := secretseal.SealForTarget(known, false, rec, hostPub, h.id, name, []byte(value), f.now())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return sealed
+}
+
+func secretInput(name string, sealed *secretseal.Sealed, profile string) SecretInput {
+	return SecretInput{Name: name, Target: "local", Upstreams: []string{"api.model.example"}, Header: "x-api-key", Ciphertext: sealed.Envelope.Encode(),
+		Rules:           []SecretRuleInput{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}, {Methods: []string{"GET"}, Path: "/v1/models", Match: "prefix"}},
+		AllowedProfiles: []string{profile}, AllowedLaunchers: []string{"oidc:lin"}, Reason: "Store the model API key"}
+}
+
+// hostStore opens a host-side secretseal store for the fake host.
+func (h *fakeHost) hostStore() *secretseal.Store {
+	h.f.t.Helper()
+	dir := filepath.Join(h.f.t.TempDir(), "secrets")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		h.f.t.Fatal(err)
+	}
+	store, err := secretseal.OpenStore(dir)
+	if err != nil {
+		h.f.t.Fatal(err)
+	}
+	return store
+}
+
 func TestSecretsKeepOnlyMetadataAndAreScoped(t *testing.T) {
 	f := newProv(t)
-	h, target := f.enrolledTarget()
+	h, _ := f.enrolledTarget()
 	p := f.profile("dev", false)
-	pub, _ := hostproto.DecodeKey(target.EncryptionKey)
-	value := "synthetic-credential-value-0123456789"
-	sealed, err := hostproto.SealSecret(pub, []byte(value), hostproto.SecretAAD(target.ID, "model-api"), nil)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := f.s.TargetSealKey("local"); errCode(err) != "seal_key_unavailable" {
+		t.Fatalf("a seal key was served before the host published one: %v", err)
 	}
-	in := SecretInput{Name: "model-api", Target: "local", Upstreams: []string{"api.model.example"}, Header: "x-api-key", Ciphertext: hostproto.EncodeSealed(sealed), AllowedProfiles: []string{p.Name}, AllowedLaunchers: []string{"oidc:lin"}, Reason: "Store the model API key"}
-	if _, err = f.s.CreateSecret(f.editor(), in); errCode(err) != "forbidden" {
+	h.poll() // the heartbeat publishes the signed seal key
+	value := "synthetic-credential-value-0123456789"
+	sealed := f.sealFor(h, "model-api", value)
+	in := secretInput("model-api", sealed, p.Name)
+	if _, err := f.s.CreateSecret(f.editor(), in); errCode(err) != "forbidden" {
 		t.Fatal("a non-admin stored a secret")
 	}
 	sec := must(f.s.CreateSecret(f.admin(), in)).(Secret)
+	if sec.Envelope == nil || sec.Envelope.Version != sealed.Envelope.Version || sec.Envelope.KeyID != sealed.Envelope.KeyID || len(sec.Rules) != 2 || sec.Wildcard {
+		t.Fatalf("secret metadata %+v", sec)
+	}
 	put := h.poll()[0]
 	var payload hostproto.SecretPutPayload
 	json.Unmarshal(put.Payload, &payload)
-	raw, _ := hostproto.DecodeSealed(payload.Ciphertext)
-	opened, err := hostproto.OpenSecret(h.enc, raw, hostproto.SecretAAD(target.ID, "model-api"))
-	if err != nil || string(opened) != value {
-		t.Fatal("the host could not open its sealed secret")
+	if payload.Ciphertext != in.Ciphertext {
+		t.Fatal("the relayed envelope differs from the client's")
+	}
+	env, err := secretseal.DecodeEnvelope(payload.Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := h.hostStore()
+	receipt, err := store.Accept(h.sealKey, env, f.now())
+	if err != nil {
+		t.Fatalf("the host could not open its sealed secret: %v", err)
+	}
+	if _, _, ok, _ := store.Stored("model-api"); !ok {
+		t.Fatal("the value was not stored")
+	}
+	if _, err := f.s.SecretReceipt(sec.ID); errCode(err) != "receipt_unavailable" {
+		t.Fatal("a receipt was served before the host returned one")
 	}
 	r := ev(1, f, hostproto.EventResult)
-	r.Result = &hostproto.JobResult{Status: hostproto.ResultSucceeded, Reason: "stored"}
+	hr := hostproto.SecretReceipt(*receipt)
+	r.Result = &hostproto.JobResult{Status: hostproto.ResultSucceeded, Reason: "stored", SecretReceipt: &hr}
 	must(h.events(put.ID, r))
+	relayed := must(f.s.SecretReceipt(sec.ID))
+	got, err := secretseal.ParseReceipt(relayed["receipt"].(json.RawMessage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp, err := sealed.VerifyReceipt(got); err != nil || fp != relayed["value_fingerprint"] {
+		t.Fatalf("the client could not verify the relayed receipt: %v", err)
+	}
 	var envelope string
 	f.s.DB.QueryRow("SELECT envelope FROM jobs WHERE id=?", put.ID).Scan(&envelope)
 	if envelope != "" {
 		t.Fatal("the ciphertext outlived its delivery")
 	}
 	dump := ""
-	for _, table := range []string{"audit", "jobs", "secrets", "idempotency", "job_events"} {
+	for _, table := range []string{"audit", "jobs", "secrets", "idempotency", "job_events", "targets"} {
 		rows, _ := f.s.DB.Query("SELECT * FROM " + table)
 		cols, _ := rows.Columns()
 		for rows.Next() {
@@ -593,14 +664,18 @@ func TestSecretsKeepOnlyMetadataAndAreScoped(t *testing.T) {
 		}
 		rows.Close()
 	}
-	if strings.Contains(dump, value) || strings.Contains(dump, payload.Ciphertext) {
+	if strings.Contains(dump, value) || strings.Contains(dump, payload.Ciphertext) || strings.Contains(dump, sealed.Envelope.Sealed) {
 		t.Fatal("a secret value or its ciphertext persisted")
 	}
 	m := specMap("dev")
 	m["secrets"] = []any{map[string]any{"ref": "model-api", "expose": map[string]any{"env": "MODEL_API_BASE_URL"}}}
 	l, plan := f.launch(f.launcher(), m)
-	if l.State != StateApprovalPending || len(plan.Secrets) != 1 || plan.Secrets[0].SecretID != sec.ID {
-		t.Fatal("a brokered secret launched without approval or lost its binding")
+	if l.State != StateApprovalPending || len(plan.Secrets) != 1 || plan.Secrets[0].SecretID != sec.ID || plan.Broker == nil ||
+		plan.Secrets[0].BaseURL != "http://"+plan.Broker.Address+":8443/model-api" || len(plan.Secrets[0].Rules) != 2 {
+		t.Fatalf("a brokered secret launched without approval or lost its binding: %+v", plan)
+	}
+	if plan.Permissions.Broker != plan.Broker.Address+":8443" || plan.Permissions.Taskboard != "" {
+		t.Fatalf("permissions %+v", plan.Permissions)
 	}
 	if _, err = f.s.CreateLaunch(f.human("oidc:other", "launchers"), specBytes(t, m)); errCode(err) != "secret_scope" {
 		t.Fatalf("a launcher outside the secret scope referenced it: %v", err)

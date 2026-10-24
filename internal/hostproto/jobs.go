@@ -72,13 +72,39 @@ type LaunchMount struct {
 
 // LaunchSecret is one brokered secret. The value never appears here: the host
 // already holds it from a secret-put job and exposes only the broker address.
+// Scheme, Username, Rules and ExtraHeaders say how the broker injects it and
+// which requests it forwards: every route needs explicit rules (deny by
+// default); the service expands an operator's wildcard into the full rule.
 type LaunchSecret struct {
-	Ref       string   `json:"ref"`
-	SecretID  string   `json:"secret_id"`
-	Env       string   `json:"env"`
-	Upstreams []string `json:"upstreams"`
-	Header    string   `json:"header"`
+	Ref          string            `json:"ref"`
+	SecretID     string            `json:"secret_id"`
+	Env          string            `json:"env"`
+	Upstreams    []string          `json:"upstreams"`
+	Header       string            `json:"header"`
+	Scheme       string            `json:"scheme,omitempty"`
+	Username     string            `json:"username,omitempty"`
+	Rules        []BrokerRule      `json:"rules"`
+	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
 }
+
+// BrokerRule allows a set of methods on one route-relative path
+// (agentgate.broker.v1 rules). Match is "exact" or "prefix" (on a segment
+// boundary).
+type BrokerRule struct {
+	Methods []string `json:"methods"`
+	Path    string   `json:"path"`
+	Match   string   `json:"match"`
+}
+
+// BrokerMethods are the methods a rule may name; CONNECT and TRACE never.
+var BrokerMethods = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+
+// Bounds of the injection metadata.
+const (
+	MaxBrokerRules        = 64
+	MaxBrokerExtraHeaders = 8
+	maxRulePathBytes      = 512
+)
 
 // LaunchPayload starts one agent. Spec is the exact canonical spec bytes whose
 // SHA-256 is Job.SpecDigest; Policy is the exact policy bytes whose SHA-256 is
@@ -107,9 +133,11 @@ type CollectPayload struct {
 	Reason string `json:"reason"`
 }
 
-// SecretPutPayload stores one sealed secret on the host. Ciphertext is a
-// SealSecret output for this host's X25519 key with AAD SecretAAD(target id,
-// name). The service cannot decrypt it.
+// SecretPutPayload stores one sealed secret on the host. Ciphertext is
+// secretseal.Envelope.Encode() of an envelope sealed to this host's published,
+// host-signed seal key for this target and name; CiphertextSHA256 is the
+// SHA-256 of the decoded envelope bytes. The service cannot decrypt it. The
+// host answers with a SecretReceipt in the job result.
 type SecretPutPayload struct {
 	SecretID         string   `json:"secret_id"`
 	Name             string   `json:"name"`
@@ -288,9 +316,13 @@ func (j Job) decode() (any, error) {
 		if !validID(p.SecretID) || !NamePattern.MatchString(p.Name) || !HeaderPattern.MatchString(p.Header) || checkUpstreams(p.Upstreams) != nil {
 			return nil, errors.New("hostproto: secret-put metadata invalid")
 		}
-		raw, err := b64.DecodeString(p.Ciphertext)
-		if err != nil || len(raw) < sealOverhead || len(raw) > MaxSecretBytes+sealOverhead || SHA256Hex(raw) != p.CiphertextSHA256 {
-			return nil, errors.New("hostproto: secret-put ciphertext invalid or differs from its fingerprint")
+		raw, err := DecodeSealed(p.Ciphertext)
+		if err != nil || SHA256Hex(raw) != p.CiphertextSHA256 {
+			return nil, errors.New("hostproto: secret-put ciphertext is not a secretseal envelope or differs from its fingerprint")
+		}
+		sealed, _ := ParseSealed(raw)
+		if sealed.TargetID != j.TargetID || sealed.Name != p.Name {
+			return nil, errors.New("hostproto: secret-put envelope is sealed for another target or name")
 		}
 		return p, nil
 	case JobSecretDelete:
@@ -336,14 +368,126 @@ func checkSecrets(secrets []LaunchSecret) error {
 	if secrets == nil || len(secrets) > MaxSecrets {
 		return errors.New("hostproto: secrets must be an explicit bounded array")
 	}
-	seen := map[string]bool{}
+	seen, envs := map[string]bool{}, map[string]bool{}
 	for _, s := range secrets {
-		if !NamePattern.MatchString(s.Ref) || seen[s.Ref] || !validID(s.SecretID) || !envPattern.MatchString(s.Env) || !HeaderPattern.MatchString(s.Header) || checkUpstreams(s.Upstreams) != nil {
+		if !NamePattern.MatchString(s.Ref) || seen[s.Ref] || !validID(s.SecretID) || !envPattern.MatchString(s.Env) || envs[s.Env] || !HeaderPattern.MatchString(s.Header) || checkUpstreams(s.Upstreams) != nil {
 			return errors.New("hostproto: secret binding invalid or repeated")
 		}
-		seen[s.Ref] = true
+		if err := CheckInjection(s.Header, s.Scheme, s.Username, s.Rules, s.ExtraHeaders); err != nil {
+			return fmt.Errorf("hostproto: secret %s: %w", s.Ref, err)
+		}
+		seen[s.Ref], envs[s.Env] = true, true
 	}
 	return nil
+}
+
+// CheckInjection is the structural check of a secret's injection metadata.
+// The broker's own configuration validator (internal/broker) is stricter and
+// runs again on the host before anything starts.
+func CheckInjection(header, scheme, username string, rules []BrokerRule, extra map[string]string) error {
+	authorization := strings.EqualFold(header, "authorization")
+	switch scheme {
+	case "":
+		if username != "" {
+			return errors.New("a username is only valid with the Basic scheme")
+		}
+	case "Bearer":
+		if !authorization || username != "" {
+			return errors.New("Bearer requires the Authorization header and no username")
+		}
+	case "Basic":
+		if !authorization || username == "" || len(username) > 64 || strings.Contains(username, ":") || !visible(username) {
+			return errors.New("Basic requires the Authorization header and a visible ASCII username without a colon")
+		}
+	default:
+		return errors.New(`scheme must be "", Bearer or Basic`)
+	}
+	if len(rules) < 1 || len(rules) > MaxBrokerRules {
+		return errors.New("1 to 64 explicit rules are required (deny by default)")
+	}
+	for _, r := range rules {
+		if err := checkRule(r); err != nil {
+			return err
+		}
+	}
+	if len(extra) > MaxBrokerExtraHeaders {
+		return errors.New("at most 8 extra headers")
+	}
+	for name, value := range extra {
+		lower := strings.ToLower(name)
+		if !HeaderPattern.MatchString(name) || strings.EqualFold(name, header) || lower == "authorization" || lower == "x-api-key" ||
+			lower == "host" || lower == "cookie" || strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "x-forwarded-") {
+			return errors.New("an extra header names a header the broker never injects")
+		}
+		if value == "" || len(value) > 256 || strings.TrimSpace(value) != value || !printable(value, 256) || !asciiOnly(value) {
+			return errors.New("extra header values are 1 to 256 printable ASCII characters")
+		}
+	}
+	return nil
+}
+
+func checkRule(r BrokerRule) error {
+	if len(r.Methods) < 1 || len(r.Methods) > len(BrokerMethods) {
+		return errors.New("a rule lists 1 to 7 methods")
+	}
+	seen := map[string]bool{}
+	for _, m := range r.Methods {
+		known := false
+		for _, allowed := range BrokerMethods {
+			known = known || m == allowed
+		}
+		if !known || seen[m] {
+			return errors.New("rule methods are unique and among GET HEAD POST PUT PATCH DELETE OPTIONS")
+		}
+		seen[m] = true
+	}
+	if r.Match != "exact" && r.Match != "prefix" {
+		return errors.New(`a rule match is "exact" or "prefix"`)
+	}
+	if !CanonicalRulePath(r.Path) {
+		return errors.New("a rule path is a canonical absolute path without percent-encoding or dot segments")
+	}
+	return nil
+}
+
+// CanonicalRulePath accepts an absolute path of RFC 3986 path characters
+// without percent-encoding, dot segments or empty segments (one trailing
+// slash is allowed), at most 512 bytes: the broker's rule path form.
+func CanonicalRulePath(p string) bool {
+	if p == "" || p[0] != '/' || len(p) > maxRulePathBytes {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("-._~!$&'()*+,;=:@/", c) >= 0) {
+			return false
+		}
+	}
+	segments := strings.Split(p[1:], "/")
+	for i, seg := range segments {
+		if seg == "." || seg == ".." || seg == "" && i != len(segments)-1 {
+			return false
+		}
+	}
+	return true
+}
+
+func visible(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiOnly(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func checkUpstreams(values []string) error {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"alloyium.local/kernel-poc/internal/hostproto"
+	"alloyium.local/kernel-poc/internal/secretseal"
 )
 
 type provFixture struct {
@@ -108,13 +109,16 @@ type fakeHost struct {
 	seq    uint64
 	jobKey ed25519.PublicKey
 	caps   []string
+	// sealKey is the host's signed seal key (HostKeyFromECDH of enc), sent
+	// in every heartbeat like agentgate-hostd does.
+	sealKey *secretseal.HostKey
 }
 
 func newHost(f *provFixture, caps ...string) *fakeHost {
 	_, key, _ := ed25519.GenerateKey(rand.Reader)
 	enc, _ := ecdh.X25519().GenerateKey(rand.Reader)
 	if caps == nil {
-		caps = []string{hostproto.CapabilityDocker, hostproto.CapabilityLiveMounts, hostproto.CapabilitySnapshots, hostproto.CapabilityBroker, hostproto.CapabilityPOCPolicyV2}
+		caps = []string{hostproto.CapabilityDocker, hostproto.CapabilityLiveMounts, hostproto.CapabilitySnapshots, hostproto.CapabilityBrokeredSecrets, hostproto.CapabilityPOCPolicyV2}
 	}
 	return &fakeHost{f: f, key: key, enc: enc, caps: caps}
 }
@@ -143,8 +147,19 @@ func (h *fakeHost) enroll(token string) (hostproto.EnrollResponse, error) {
 		}
 		key, _ := hostproto.DecodeKey(resp.JobKey)
 		h.jobKey, h.id = key, resp.TargetID
+		if h.sealKey, err = secretseal.HostKeyFromECDH(resp.TargetID, h.enc, h.key, h.f.now(), 30*24*time.Hour); err != nil {
+			h.f.t.Fatal(err)
+		}
 	}
 	return resp, err
+}
+
+func (h *fakeHost) sealRecord() json.RawMessage {
+	if h.sealKey == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(h.sealKey.Published())
+	return raw
 }
 
 func (h *fakeHost) header() hostproto.Header {
@@ -156,7 +171,7 @@ func (h *fakeHost) pollRaw(running ...string) []byte {
 	if running == nil {
 		running = []string{}
 	}
-	return h.seal(hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: h.caps, RunningLaunches: running, AgentVersion: "0.1.0"}, MaxJobs: 16})
+	return h.seal(hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: h.caps, RunningLaunches: running, AgentVersion: "0.1.0", SealKey: h.sealRecord()}, MaxJobs: 16})
 }
 
 // poll returns the verified, checked jobs.

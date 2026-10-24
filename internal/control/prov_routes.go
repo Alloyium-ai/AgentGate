@@ -105,6 +105,8 @@ func (s *Server) provisioningRead(w http.ResponseWriter, r *http.Request, a Acto
 		return map[string]any{"items": v}, err
 	case area == "targets" && n == 2:
 		return s.Store.TargetDetail(tail[1])
+	case area == "targets" && n == 3 && tail[2] == "seal-key":
+		return s.Store.TargetSealKey(tail[1])
 	case area == "profiles" && n == 1:
 		v, err := s.Store.Profiles()
 		return map[string]any{"items": v}, err
@@ -141,6 +143,8 @@ func (s *Server) provisioningRead(w http.ResponseWriter, r *http.Request, a Acto
 	case area == "secrets" && n == 1:
 		v, err := s.Store.Secrets()
 		return map[string]any{"items": v}, err
+	case area == "secrets" && n == 3 && tail[2] == "receipt":
+		return s.Store.SecretReceipt(tail[1])
 	case area == "api-tokens" && n == 1:
 		if a.Kind != "human" {
 			return nil, fail(403, "forbidden", "API tokens belong to humans.")

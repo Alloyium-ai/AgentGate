@@ -406,6 +406,28 @@ class Host:
     def start_guard(self):
         self._script(['start-guard.sh'], 60)
 
+    def connect_broker(self, broker):
+        """Attach the target to its launch's broker network, after the guard is attached.
+
+        The target keeps its own network and gains exactly one more: the
+        internal /29 that holds only the broker. The guard allows the broker's
+        one exact address and port and denies every other private address.
+        """
+        target = self.settings['name']
+        env = {'PATH': '/usr/bin:/bin'}
+        done = self.run(['/usr/bin/docker', 'network', 'connect', '--ip', broker['target_address'], broker['network'], target],
+                        capture_output=True, timeout=20, env=env)
+        if done.returncode != 0:
+            raise LaunchError('the target could not join its broker network: ' +
+                              done.stderr.decode(errors='replace')[-500:].strip())
+        done = self.run(['/usr/bin/docker', 'inspect', target], capture_output=True, timeout=10, env=env)
+        if done.returncode != 0:
+            raise LaunchError('the target could not be inspected after joining its broker network')
+        networks = (json.loads(done.stdout)[0].get('NetworkSettings') or {}).get('Networks') or {}
+        joined = networks.get(broker['network']) or {}
+        if set(networks) != {self.settings['network'], broker['network']} or joined.get('IPAddress') != broker['target_address']:
+            raise LaunchError('the target is not on exactly its own network and its broker network')
+
     def _script(self, args, timeout):
         done = self.run([str(self.root / args[0])] + args[1:], capture_output=True, timeout=timeout,
                         env={'PATH': '/usr/bin:/bin'})
@@ -510,7 +532,10 @@ def evidence_block(guard):
     block['network_denials'] = [item for item in events if not item.get('Allowed')][:UPLOAD_DENIALS]
     host = guard.get('host')
     if isinstance(host, dict):
-        trimmed = {'complete': host.get('complete')}
+        # The socket mode and whether a socket LSM guard is attached are
+        # part of what was (and was not) enforced: always kept.
+        trimmed = {'complete': host.get('complete'), 'sockets': host.get('sockets'),
+                   'socket_lsm_guard': host.get('socket_lsm_guard')}
         for name in ('filesystem', 'process'):
             part = dict(host.get(name) or {})
             denials = part.get('denials') or []
@@ -562,8 +587,16 @@ def read_stop_request(directory):
     return data
 
 
+def broker_summary(broker, joined):
+    """How the target joined its broker network; counts come from the broker's own stats on the host."""
+    if not broker:
+        return None
+    return {'network': broker['network'], 'address': broker['address'], 'port': broker['port'],
+            'target_address': broker['target_address'], 'env': sorted(broker['env']), 'target_joined': joined}
+
+
 def build_receipt(launch, host, state, reason, result, guard, cleanup_errors, logs, started_at, mounts_identity,
-                  setup_error=None, evidence_missing=None, emitter=None):
+                  setup_error=None, evidence_missing=None, emitter=None, broker_joined=False):
     receipt = {
         'version': RECEIPT_VERSION, 'launch_id': launch['launch_id'], 'job_id': launch['job_id'],
         'spec_digest': launch['spec_digest'], 'policy_digest': launch['policy_digest'],
@@ -581,7 +614,7 @@ def build_receipt(launch, host, state, reason, result, guard, cleanup_errors, lo
         'guard_receipt_sha256': hashlib.sha256(dump(guard)).hexdigest() if guard else None,
         'cleanup': {'domain_empty': not cleanup_errors, 'enforcement_released': not cleanup_errors,
                     'errors': cleanup_errors},
-        'broker': {'requests': {}},
+        'broker': broker_summary(launch.get('broker'), broker_joined),
         'kernel_verified': False,
         'evidence_missing': evidence_missing or (None if guard else 'guard_receipt_absent'),
     }
@@ -611,6 +644,7 @@ def run_launch(raw, host, launches, emitter, supervisor_alive, signalled=lambda:
     identity = None
     last_beat = [clock()]
     stop_request = [None]
+    broker_joined = [False]
 
     def should_stop():
         now = clock()
@@ -653,6 +687,11 @@ def run_launch(raw, host, launches, emitter, supervisor_alive, signalled=lambda:
         host.start_guard()
         pid = host.guard_pid()
         checkpoint()
+        if launch['broker'] is not None:
+            # Only after the guard is attached: the policy allows exactly the
+            # broker's endpoint from the first packet on.
+            host.connect_broker(launch['broker'])
+            broker_joined[0] = True
         identity = host.command_identity()
         config, guard_ok, target = host.bind()
         # The signed expiry is a hard cap too: the host deadline is the earlier
@@ -693,7 +732,7 @@ def run_launch(raw, host, launches, emitter, supervisor_alive, signalled=lambda:
                                  stopped_in_setup)
         receipt = build_receipt(launch, host, state, reason, result, guard, cleanup_errors,
                                 {name: item.summary() for name, item in logs.items()}, started_at,
-                                mounts_identity, setup_error, emitter=emitter)
+                                mounts_identity, setup_error, emitter=emitter, broker_joined=broker_joined[0])
         write_private(directory / 'receipt.json', dump(receipt))
         record.update(state, reason=reason, ended_at=receipt['ended_at'])
         emitter.emit({'event': 'receipt', 'launch_id': launch['launch_id'], 'receipt': receipt})
@@ -725,7 +764,7 @@ def reconcile_launch(directory, host, reason):
     launch = {'launch_id': job['launch_id'], 'job_id': job['job_id'], 'spec_digest': job['spec_digest'],
               'policy_digest': job['policy_digest'], 'profile_policy_digest': job['profile_policy_digest'],
               'mode': job['spec'].get('mode'), 'lifetime_seconds': job['spec'].get('lifetime_seconds'),
-              'image': (job['spec'].get('agent') or {}).get('image')}
+              'image': (job['spec'].get('agent') or {}).get('image'), 'broker': job.get('broker')}
     logs = {}
     for name in ('stdout', 'stderr'):
         path = Path(directory) / (name + '.log')

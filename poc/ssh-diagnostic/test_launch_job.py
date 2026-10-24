@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launch_job  # noqa: E402
 from launch_job import JobError, check_job  # noqa: E402
-from test_launch import job, raw  # noqa: E402
+from test_launch import BROKER_ADDRESS, broker_job, job, raw  # noqa: E402
 
 CAPS = ['snapshots', 'live-mounts']
 
@@ -140,9 +140,55 @@ class InputTest(unittest.TestCase):
     def test_secrets_fail_closed_without_a_broker(self):
         value = job()
         value['spec']['secrets'] = [{'ref': 'anthropic', 'expose': {'env': 'ANTHROPIC_BASE_URL'}}]
-        self.refuse(value, 'credential broker')
+        self.refuse(value, 'broker block')
         value['spec']['secrets'] = 'anthropic'
         self.refuse(value)
+
+    def test_a_broker_block_gives_the_agent_only_base_urls(self):
+        launch = check_job(raw(broker_job()), CAPS)
+        self.assertEqual(launch['env']['ANTHROPIC_BASE_URL'], 'http://172.30.7.2:8443/anthropic')
+        self.assertEqual(launch['env']['EDITOR'], 'vi')
+        self.assertEqual(launch['broker']['network'], 'agentgate-launch-1-broker')
+        self.assertNotIn('secret_refs', launch)
+        script = launch_job.shell_command(launch)
+        self.assertIn("export ANTHROPIC_BASE_URL=http://172.30.7.2:8443/anthropic", script)
+
+    def test_broker_blocks_that_do_not_match_the_policy_or_spec_are_refused(self):
+        def mutate(change):
+            value = broker_job()
+            change(value)
+            return value
+        cases = {
+            'network': lambda v: v['broker'].update(network='agentgate-other-broker'),
+            'subnet size': lambda v: v['broker'].update(subnet='172.30.7.0/28'),
+            'subnet host bits': lambda v: v['broker'].update(subnet='172.30.7.1/29'),
+            'public subnet': lambda v: v['broker'].update(subnet='8.8.8.0/29', address='8.8.8.2', target_address='8.8.8.3'),
+            'broker not .2': lambda v: v['broker'].update(address='172.30.7.4'),
+            'target not .3': lambda v: v['broker'].update(target_address='172.30.7.5'),
+            'port': lambda v: v['broker'].update(port=80),
+            'policy address': lambda v: v['policy']['broker'].update(address='172.30.7.10'),
+            'policy port': lambda v: v['policy']['broker'].update(port=8444),
+            'policy taskboard too': lambda v: v['policy'].update(taskboard={'address': '10.0.0.2', 'protocol': 'tcp', 'port': 8080, 'task_id': 1}),
+            'url host': lambda v: v['broker']['env'].update(ANTHROPIC_BASE_URL='http://evil.example:8443/anthropic'),
+            'url route': lambda v: v['broker']['env'].update(ANTHROPIC_BASE_URL='http://172.30.7.2:8443/other'),
+            'url carries a value': lambda v: v['broker']['env'].update(ANTHROPIC_BASE_URL='sk-ant-FAKE'),
+            'extra env': lambda v: v['broker']['env'].update(OTHER_URL='http://172.30.7.2:8443/anthropic'),
+            'missing env': lambda v: v['broker'].update(env={}),
+            'reserved env': lambda v: (v['spec']['secrets'][0]['expose'].update(env='LD_PRELOAD'),
+                                       v['broker'].update(env={'LD_PRELOAD': 'http://172.30.7.2:8443/anthropic'})),
+            'env clash': lambda v: v['spec']['agent']['env'].update(ANTHROPIC_BASE_URL='x'),
+            'extra key': lambda v: v['broker'].update(secret_file='/run/agentgate/secrets/anthropic'),
+            'secret value': lambda v: v['spec']['secrets'][0].update(value='sk-ant-FAKE'),
+            'no secrets': lambda v: v['spec'].update(secrets=[]),
+            'duplicate ref': lambda v: v['spec']['secrets'].append({'ref': 'anthropic', 'expose': {'env': 'OTHER_URL'}}),
+        }
+        for name, change in cases.items():
+            with self.subTest(case=name):
+                self.refuse(mutate(change))
+        value = job()
+        value['policy'].pop('taskboard')
+        value['policy']['broker'] = {'address': BROKER_ADDRESS, 'protocol': 'tcp', 'port': 8443}
+        self.refuse(value, 'no broker')
 
     def test_mounts_need_the_matching_capability(self):
         live = {'name': 'repo', 'source': '/srv/repos/app', 'mode': 'read-only'}

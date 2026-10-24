@@ -66,6 +66,10 @@ type Store struct {
 	Provisioning ProvisioningConfig
 	// Now is the clock; tests replace it.
 	Now func() time.Time
+	// rejectedSealKeys remembers the digest of the last seal key record each
+	// host sent that did not verify, so it is audited once, not every poll.
+	// Guarded by mu (host requests hold it).
+	rejectedSealKeys map[string]string
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -159,13 +163,50 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	if _, err = tx.Exec(provisioningSchema + ` PRAGMA user_version=5;`); err != nil {
+	if version < 5 {
+		if _, err = tx.Exec(provisioningSchema + ` PRAGMA user_version=5;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 5", RequestID: "migration-5"}, "committed"); err != nil {
+			return err
+		}
+	}
+	for _, c := range brokerColumns {
+		if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(brokerTriggers + ` PRAGMA user_version=6;`); err != nil {
 		return err
 	}
-	if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 5", RequestID: "migration-5"}, "committed"); err != nil {
+	if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 6", RequestID: "migration-6"}, "committed"); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// addColumn adds one column unless the table already has it, so a migration
+// step can run again (for example after a restore) without failing.
+func addColumn(tx *sql.Tx, table, column, decl string) error {
+	rows, err := tx.Query("SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return err
+	}
+	exists := false
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		exists = exists || name == column
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil || exists {
+		return err
+	}
+	_, err = tx.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl)
+	return err
 }
 func newID() string {
 	b := make([]byte, 16)

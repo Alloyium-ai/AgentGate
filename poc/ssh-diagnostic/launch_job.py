@@ -9,6 +9,7 @@ that later reaches a shell, a Docker argument, a path or a cgroup name passes
 through here first. Nothing here touches the system.
 """
 import hashlib
+import ipaddress
 import json
 import re
 import shlex
@@ -39,6 +40,9 @@ MAX_LOG_BYTES = 64 << 20
 MAX_UPLOAD_BYTES = 4 << 20
 RESERVED_ENV = ('PATH', 'IFS', 'ENV', 'BASH_ENV', 'SHELLOPTS', 'PS4')
 RESERVED_PREFIXES = ('LD_', 'AGENTGATE_', 'DYLD_')
+MAX_SECRETS = 8
+BROKER_KEYS = {'network', 'subnet', 'address', 'port', 'target_address', 'env'}
+ROUTE = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
 
 
 class JobError(ValueError):
@@ -190,11 +194,17 @@ def check_spec(spec, capabilities, mounts):
     if not isinstance(optional(spec.get('mounts'), []), list):
         raise JobError('spec mounts must be a list')
     secrets = optional(spec.get('secrets'), [])
-    if not isinstance(secrets, list):
-        raise JobError('secrets must be a list')
-    if secrets:
-        # Fail closed until the credential broker exists: never start without them.
-        raise JobError('this target has no credential broker; a launch that needs secrets cannot run here')
+    if not isinstance(secrets, list) or len(secrets) > MAX_SECRETS:
+        raise JobError('secrets must be a list of at most %d references' % MAX_SECRETS)
+    refs = []
+    for item in secrets:
+        # A reference names a secret only; a value or path is never accepted.
+        if not isinstance(item, dict) or set(item) != {'ref', 'expose'} or not isinstance(item['expose'], dict) or \
+           set(item['expose']) != {'env'}:
+            raise JobError('each secret reference needs exactly ref and expose.env')
+        refs.append((text(item['ref'], 'secret ref', NAME, 40), text(item['expose']['env'], 'secret env', ENV_NAME, 64)))
+    if len({ref for ref, _ in refs}) != len(refs) or len({env for _, env in refs}) != len(refs):
+        raise JobError('secret refs and their environment names are unique')
     agent = spec['agent']
     if not isinstance(agent, dict) or not {'image', 'command'} <= set(agent) or \
        set(agent) - {'image', 'command', 'env', 'workdir'}:
@@ -214,7 +224,54 @@ def check_spec(spec, capabilities, mounts):
             MAX_COMMAND_BYTES:
         raise JobError('agent command and environment exceed %d bytes' % MAX_COMMAND_BYTES)
     return {'name': spec['name'], 'mode': mode, 'lifetime_seconds': spec['lifetime_seconds'], 'image': image,
-            'command': list(command), 'env': env, 'workdir': workdir, 'spec_lifetime_seconds': spec['lifetime_seconds']}
+            'command': list(command), 'env': env, 'workdir': workdir, 'spec_lifetime_seconds': spec['lifetime_seconds'],
+            'secret_refs': refs}
+
+
+def check_broker(broker, launch_id, policy, refs, env):
+    """Validate the broker block: the launch network the target joins and the base URLs the agent receives.
+
+    The block names no path and no value: the broker container, its
+    configuration and the secret files stay on the host side. It must match
+    the signed policy's single exact endpoint, and each secret reference must
+    receive exactly its route's base URL.
+    """
+    if broker is None:
+        if refs:
+            raise JobError('a launch with secrets needs its broker block')
+        if policy.get('broker') is not None:
+            raise JobError('the policy names a broker endpoint but the launch has no broker')
+        return None
+    if not refs:
+        raise JobError('a broker block needs at least one secret reference')
+    if not isinstance(broker, dict) or set(broker) != BROKER_KEYS:
+        raise JobError('the broker block needs exactly ' + ', '.join(sorted(BROKER_KEYS)))
+    if broker['network'] != 'agentgate-%s-broker' % launch_id:
+        raise JobError('the broker network must be the launch network agentgate-LAUNCH-broker')
+    try:
+        subnet = ipaddress.IPv4Network(text(broker['subnet'], 'broker subnet', None, 18), strict=True)
+        address = ipaddress.IPv4Address(text(broker['address'], 'broker address', None, 15))
+        target = ipaddress.IPv4Address(text(broker['target_address'], 'broker target address', None, 15))
+    except ValueError:
+        raise JobError('the broker network addresses are invalid') from None
+    if subnet.prefixlen != 29 or not subnet.is_private or str(subnet) != broker['subnet'] or \
+       address != subnet.network_address + 2 or target != subnet.network_address + 3 or \
+       str(address) != broker['address'] or str(target) != broker['target_address']:
+        raise JobError('the broker network is a private /29 with the broker at .2 and the target at .3')
+    port = integer(broker['port'], 'broker port', 1024, 65535)
+    if policy.get('broker') != {'address': broker['address'], 'protocol': 'tcp', 'port': port} or 'taskboard' in policy:
+        raise JobError("the policy's single exact endpoint must be exactly this broker")
+    urls = broker['env']
+    if not isinstance(urls, dict) or len(urls) != len(refs):
+        raise JobError('the broker gives each secret reference exactly one base URL')
+    for ref, name in refs:
+        if name not in urls:
+            raise JobError('secret %s has no base URL in the broker block' % ref)
+        if name.upper() in RESERVED_ENV or name.upper().startswith(RESERVED_PREFIXES) or name in env:
+            raise JobError('broker environment name is reserved or set twice: ' + name)
+        if urls[name] != 'http://%s:%d/%s' % (broker['address'], port, ref) or not ROUTE.fullmatch(ref):
+            raise JobError('broker base URL for %s must be http://ADDRESS:PORT/%s' % (name, ref))
+    return {key: broker[key] for key in sorted(BROKER_KEYS - {'env'})} | {'port': port, 'env': dict(urls)}
 
 
 def check_job(raw, capabilities):
@@ -229,7 +286,7 @@ def check_job(raw, capabilities):
     job = parse_json(raw)
     wanted = {'version', 'launch_id', 'job_id', 'spec', 'spec_digest', 'policy', 'policy_digest',
               'profile_policy_digest', 'stop_grace_seconds', 'log_limit_bytes', 'upload_limit_bytes',
-              'lifetime_seconds', 'mounts', 'expires_at_ms'}
+              'lifetime_seconds', 'mounts', 'expires_at_ms', 'broker'}
     if not isinstance(job, dict) or set(job) != wanted or job['version'] != JOB_VERSION:
         raise JobError('launcher job fields differ from ' + JOB_VERSION)
     text(job['launch_id'], 'launch id', LAUNCH_ID, 64)
@@ -252,6 +309,11 @@ def check_job(raw, capabilities):
         raise JobError('the effective policy must be a version two launch document with the launch mode and lifetime')
     if not isinstance(policy.get('filesystem'), dict):
         raise JobError('a launch policy needs its filesystem section')
+    broker = check_broker(job['broker'], job['launch_id'], policy, spec.pop('secret_refs'), spec['env'])
+    if broker is not None:
+        # The agent receives only the broker's base URLs, never a value.
+        spec['env'] = dict(spec['env'], **broker['env'])
+    spec['broker'] = broker
     return {'launch_id': job['launch_id'], 'job_id': job['job_id'], 'spec_digest': job['spec_digest'],
             'policy': policy, 'policy_digest': job['policy_digest'],
             'profile_policy_digest': job['profile_policy_digest'],

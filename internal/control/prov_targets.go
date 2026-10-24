@@ -10,28 +10,42 @@ import (
 	"time"
 
 	"alloyium.local/kernel-poc/internal/hostproto"
+	"alloyium.local/kernel-poc/internal/secretseal"
 )
 
 // Target is a host that runs agentgate-hostd.
 type Target struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	State            string   `json:"state"`
-	Capabilities     []string `json:"capabilities"`
-	Hostname         string   `json:"hostname"`
-	AgentVersion     string   `json:"agent_version"`
-	HostKeyID        string   `json:"host_key_id"`
-	EncryptionKey    string   `json:"encryption_key"`
-	JobKeyID         string   `json:"job_key_id"`
-	LastSeen         string   `json:"last_seen_at,omitempty"`
-	Online           bool     `json:"online"`
-	HeartbeatSeconds int      `json:"heartbeat_seconds"`
-	Created          string   `json:"created_at"`
-	CreatedBy        string   `json:"created_by"`
-	Updated          string   `json:"updated_at"`
-	Revision         int      `json:"revision"`
-	KernelVerified   bool     `json:"kernel_verified"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	State        string   `json:"state"`
+	Capabilities []string `json:"capabilities"`
+	Hostname     string   `json:"hostname"`
+	AgentVersion string   `json:"agent_version"`
+	HostKeyID    string   `json:"host_key_id"`
+	// HostPublicKey is the enrolled Ed25519 host key (base64url). A client
+	// checks hostproto.KeyID of it against the fingerprint it pinned, then the
+	// seal key signature against it.
+	HostPublicKey string `json:"host_public_key,omitempty"`
+	// EncryptionKey is the X25519 key the host enrolled with. Clients seal
+	// to SealKey (signed by the host key), never to this unsigned value.
+	EncryptionKey string `json:"encryption_key"`
+	// SealKey is the host's secretseal.SignedKeyRecord, served verbatim; the
+	// service stores it only after checking the host signature and cannot
+	// produce one. SealKeyID and SealKeyNotAfter repeat its record fields.
+	SealKey          json.RawMessage `json:"seal_key,omitempty"`
+	SealKeyID        string          `json:"seal_key_id,omitempty"`
+	SealKeyNotAfter  string          `json:"seal_key_not_after,omitempty"`
+	JobKeyID         string          `json:"job_key_id"`
+	LastSeen         string          `json:"last_seen_at,omitempty"`
+	Online           bool            `json:"online"`
+	HeartbeatSeconds int             `json:"heartbeat_seconds"`
+	Created          string          `json:"created_at"`
+	CreatedBy        string          `json:"created_by"`
+	Updated          string          `json:"updated_at"`
+	Revision         int             `json:"revision"`
+	KernelVerified   bool            `json:"kernel_verified"`
 	hostKey          string
+	sealKey          string
 	lastSequence     uint64
 	lastSeenMS       int64
 }
@@ -42,14 +56,21 @@ type TargetInput struct {
 	Reason string `json:"reason"`
 }
 
-const targetColumns = "id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision"
+const targetColumns = "id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision,seal_key"
 
 func (s *Store) scanTarget(row rowScanner) (Target, error) {
 	var t Target
 	var caps string
-	err := row.Scan(&t.ID, &t.Name, &t.State, &caps, &t.Hostname, &t.AgentVersion, &t.hostKey, &t.HostKeyID, &t.EncryptionKey, &t.JobKeyID, &t.lastSequence, &t.lastSeenMS, &t.HeartbeatSeconds, &t.Created, &t.CreatedBy, &t.Updated, &t.Revision)
+	err := row.Scan(&t.ID, &t.Name, &t.State, &caps, &t.Hostname, &t.AgentVersion, &t.hostKey, &t.HostKeyID, &t.EncryptionKey, &t.JobKeyID, &t.lastSequence, &t.lastSeenMS, &t.HeartbeatSeconds, &t.Created, &t.CreatedBy, &t.Updated, &t.Revision, &t.sealKey)
 	if err != nil {
 		return t, err
+	}
+	t.HostPublicKey = t.hostKey
+	if t.sealKey != "" {
+		t.SealKey = json.RawMessage(t.sealKey)
+		if rec, err := secretseal.ParseSignedKeyRecord([]byte(t.sealKey)); err == nil {
+			t.SealKeyID, t.SealKeyNotAfter = rec.Record.KeyID, rec.Record.NotAfter
+		}
 	}
 	if err = json.Unmarshal([]byte(caps), &t.Capabilities); err != nil {
 		return t, err
@@ -126,7 +147,7 @@ func (s *Store) CreateTarget(op Operation, in TargetInput) (any, error) {
 			return nil, fail(409, "target_limit", "Retire a target before adding another.")
 		}
 		id, now := newID(), stamp()
-		if _, err := tx.Exec("INSERT INTO targets VALUES(?,?,'pending','[]','','','','','','',0,0,?,?,?,?,1)", id, in.Name, int(s.Provisioning.pollInterval()/time.Second), now, operation.Actor.Subject, now); err != nil {
+		if _, err := tx.Exec("INSERT INTO targets VALUES(?,?,'pending','[]','','','','','','',0,0,?,?,?,?,1,'')", id, in.Name, int(s.Provisioning.pollInterval()/time.Second), now, operation.Actor.Subject, now); err != nil {
 			return nil, fail(409, "target_exists", "A live target already uses this name.")
 		}
 		enrollment, err := s.issueEnrollment(tx, id, operation.Actor)
@@ -262,4 +283,28 @@ func (s *Store) ApproveTargetKey(op Operation, ref string, in KeyApprovalInput) 
 		}
 		return s.targetBy(tx, t.ID)
 	})
+}
+
+// TargetSealKey is GET /targets/{id}/seal-key: the host's signed seal key
+// record, exactly as the host sent it, with the host key it must verify
+// against. host_key_fingerprint is the service's claim and a convenience: a
+// client recomputes it from host_public_key and compares it with its own pin.
+func (s *Store) TargetSealKey(ref string) (map[string]any, error) {
+	t, err := s.targetBy(s.DB, ref)
+	if err != nil {
+		return nil, err
+	}
+	if t.State != "active" {
+		return nil, fail(409, "target_unavailable", "The target is not enrolled and active.")
+	}
+	if t.sealKey == "" {
+		return nil, fail(404, "seal_key_unavailable", "The target's host has not published a host-signed seal key yet. Start a current agentgate-hostd on it and wait for its next poll.")
+	}
+	pub, err := hostproto.DecodeKey(t.hostKey)
+	if err != nil {
+		return nil, fail(503, "seal_key_unavailable", "The target's host key is unusable.")
+	}
+	return map[string]any{"target_id": t.ID, "host_key_id": t.HostKeyID, "host_public_key": t.hostKey,
+		"host_key_fingerprint": secretseal.HostKeyFingerprint(pub), "seal_key_id": t.SealKeyID, "not_after": t.SealKeyNotAfter,
+		"record": json.RawMessage(t.sealKey)}, nil
 }

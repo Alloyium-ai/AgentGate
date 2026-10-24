@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"time"
@@ -39,9 +40,18 @@ const (
 	CapabilityBroker      = "broker"
 	CapabilityAppliance   = "appliance"
 	CapabilityPOCPolicyV2 = "pocpolicy-v2"
+	// CapabilityBrokeredSecrets means the host stores sealed secrets and runs
+	// a per-launch credential broker: the broker image or binary, its run_as
+	// identity, the secret store and the broker network pool are present. A
+	// launch that references secrets needs it. CapabilityBroker is the older
+	// name; no host reports it and the service no longer accepts it instead.
+	CapabilityBrokeredSecrets = "brokered-secrets"
 )
 
-var knownCapabilities = map[string]bool{CapabilityDocker: true, CapabilityBPFLSM: true, CapabilityLiveMounts: true, CapabilitySnapshots: true, CapabilityBroker: true, CapabilityAppliance: true, CapabilityPOCPolicyV2: true}
+var knownCapabilities = map[string]bool{CapabilityDocker: true, CapabilityBPFLSM: true, CapabilityLiveMounts: true, CapabilitySnapshots: true, CapabilityBroker: true, CapabilityAppliance: true, CapabilityPOCPolicyV2: true, CapabilityBrokeredSecrets: true}
+
+// MaxSealKeyRecordBytes bounds the signed seal key record in a heartbeat.
+const MaxSealKeyRecordBytes = 4 << 10
 
 // TokenPattern is the enrollment token format: "agtenr_" and 43 base64url characters.
 var TokenPattern = regexp.MustCompile(`^agtenr_[A-Za-z0-9_-]{43}$`)
@@ -189,6 +199,11 @@ type Heartbeat struct {
 	// KernelVerified is false until a verification report for this kernel is
 	// attached. The service rejects true in protocol v1.
 	KernelVerified bool `json:"kernel_verified"`
+	// SealKey is the host's secretseal.SignedKeyRecord: the X25519 key clients
+	// seal secrets to, signed by the enrolled host key. The service stores it
+	// verbatim and serves it at GET /targets/{id}/seal-key; it cannot forge
+	// one, because clients verify the signature against a pinned fingerprint.
+	SealKey json.RawMessage `json:"seal_key,omitempty"`
 }
 
 // MaxRunningLaunches bounds one heartbeat.
@@ -226,6 +241,12 @@ func (p PollRequest) Check(now time.Time) error {
 	}
 	if p.Heartbeat.KernelVerified {
 		return errors.New("hostproto: kernel_verified requires an attached verification report, which protocol v1 does not carry")
+	}
+	if len(p.Heartbeat.SealKey) > 0 {
+		var object map[string]json.RawMessage
+		if len(p.Heartbeat.SealKey) > MaxSealKeyRecordBytes || json.Unmarshal(p.Heartbeat.SealKey, &object) != nil {
+			return errors.New("hostproto: seal_key must be one bounded JSON object")
+		}
 	}
 	return nil
 }

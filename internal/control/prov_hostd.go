@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"alloyium.local/kernel-poc/internal/hostproto"
+	"alloyium.local/kernel-poc/internal/secretseal"
 )
 
 // hostFailure carries the last accepted sequence for a sequence rejection, so
@@ -116,7 +117,8 @@ func (s *Store) enrollHost(raw []byte, op *Operation) (hostproto.EnrollResponse,
 	}
 	// The binding waits for an administrator to compare and approve the key
 	// fingerprint: a token intercepted in transit cannot activate a foreign key.
-	if _, err = tx.Exec("UPDATE targets SET state='awaiting_key_approval',capabilities=?,hostname=?,agent_version=?,host_key=?,host_key_id=?,encryption_key=?,job_key_id=?,last_sequence=0,last_seen=?,updated=?,revision=revision+1 WHERE id=?",
+	// A new host key invalidates the seal key record the old key signed.
+	if _, err = tx.Exec("UPDATE targets SET state='awaiting_key_approval',capabilities=?,hostname=?,agent_version=?,host_key=?,host_key_id=?,encryption_key=?,job_key_id=?,last_sequence=0,last_seen=?,updated=?,revision=revision+1,seal_key='' WHERE id=?",
 		jsonText(req.Capabilities), req.Hostname, req.AgentVersion, req.PublicKey, keyID, req.EncryptionKey, s.JobKeyID(), now.UnixMilli(), stamped, targetID); err != nil {
 		return resp, err
 	}
@@ -349,7 +351,12 @@ func (s *Store) HostPoll(raw []byte, requestID string) (hostproto.PollResponse, 
 
 func (s *Store) pollWork(tx *sql.Tx, t Target, req hostproto.PollRequest) (hostproto.PollResponse, error) {
 	now := s.now()
-	if _, err := tx.Exec("INSERT INTO host_heartbeats(target_id,time,sequence,heartbeat) VALUES(?,?,?,?)", t.ID, now.UnixMilli(), req.Sequence, jsonText(req.Heartbeat)); err != nil {
+	if err := s.publishSealKey(tx, t, req.Heartbeat.SealKey); err != nil {
+		return hostproto.PollResponse{}, err
+	}
+	beat := req.Heartbeat
+	beat.SealKey = nil // stored on the target, not in every heartbeat row
+	if _, err := tx.Exec("INSERT INTO host_heartbeats(target_id,time,sequence,heartbeat) VALUES(?,?,?,?)", t.ID, now.UnixMilli(), req.Sequence, jsonText(beat)); err != nil {
 		return hostproto.PollResponse{}, err
 	}
 	if _, err := tx.Exec("DELETE FROM host_heartbeats WHERE target_id=? AND id<=(SELECT id FROM host_heartbeats WHERE target_id=? ORDER BY id DESC LIMIT 1 OFFSET 50)", t.ID, t.ID); err != nil {
@@ -438,6 +445,48 @@ func (s *Store) HostEvents(jobID string, raw []byte, requestID string) (hostprot
 		return hostproto.EventsResponse{}, err
 	}
 	return value.(hostproto.EventsResponse), nil
+}
+
+// publishSealKey stores the host's signed seal key record verbatim when it is
+// new and verifies: signed by this target's enrolled host key, for this
+// target, inside its validity window. The service never signs or edits one,
+// so it cannot hand clients a key of its own. A record that does not verify is
+// not stored and is audited once per distinct record; the poll still counts
+// as a heartbeat, so a bad record never makes the host look lost.
+func (s *Store) publishSealKey(tx *sql.Tx, t Target, raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == t.sealKey {
+		return nil
+	}
+	reject := func(code string) error {
+		sum := digest(raw)
+		if s.rejectedSealKeys == nil {
+			s.rejectedSealKeys = map[string]string{}
+		}
+		if s.rejectedSealKeys[t.ID] == sum {
+			return nil
+		}
+		s.rejectedSealKeys[t.ID] = sum
+		_, err := appendAudit(tx, Operation{Actor: hostActor(t.ID), Action: "target.seal_key.rejected", Resource: "target:" + t.ID, Reason: "The host sent a seal key record that does not verify", RequestID: "hostd-" + newID(), After: map[string]string{"error_code": code, "record_sha256": sum}}, "denied")
+		return err
+	}
+	rec, err := secretseal.ParseSignedKeyRecord(raw)
+	if err != nil {
+		return reject("seal_key_malformed")
+	}
+	pub, err := hostproto.DecodeKey(t.hostKey)
+	if err != nil {
+		return reject("host_key_unusable")
+	}
+	if _, err = secretseal.VerifyKeyRecord(rec, ed25519.PublicKey(pub), secretseal.HostKeyFingerprint(pub), t.ID, s.now()); err != nil {
+		return reject("seal_key_unverified")
+	}
+	if _, err = tx.Exec("UPDATE targets SET seal_key=?,updated=?,revision=revision+1 WHERE id=?", string(raw), stamp(), t.ID); err != nil {
+		return err
+	}
+	delete(s.rejectedSealKeys, t.ID)
+	_, err = appendAudit(tx, Operation{Actor: hostActor(t.ID), Action: "target.seal_key.published", Resource: "target:" + t.ID, Reason: "The host published a seal key signed by its enrolled key", RequestID: "hostd-" + newID(),
+		After: map[string]string{"seal_key_id": rec.Record.KeyID, "not_before": rec.Record.NotBefore, "not_after": rec.Record.NotAfter, "host_key": rec.Record.HostKey, "record_sha256": digest(raw)}}, "committed")
+	return err
 }
 
 func eventDigest(ev hostproto.Event) string {
@@ -574,6 +623,9 @@ func (s *Store) applyLaunchState(tx *sql.Tx, l *launchRow, state string, actor A
 
 func (s *Store) applyResult(tx *sql.Tx, t Target, job *JobRecord, l *launchRow, r hostproto.JobResult, actor Actor) error {
 	var receipt string
+	if r.SecretReceipt != nil && job.Type != hostproto.JobSecretPut {
+		return fail(422, "invalid_result", "Only a secret-put result carries a secret receipt.")
+	}
 	if r.Receipt != nil {
 		if l == nil {
 			return fail(422, "invalid_receipt", "Only launch, stop and collect jobs carry receipts.")
@@ -581,6 +633,9 @@ func (s *Store) applyResult(tx *sql.Tx, t Target, job *JobRecord, l *launchRow, 
 		bound := hostproto.Job{LaunchID: job.LaunchID, TargetID: job.TargetID, SpecDigest: job.SpecDigest, PolicyDigest: job.PolicyDigest}
 		if err := r.Receipt.Check(bound); err != nil {
 			return fail(422, "invalid_receipt", strings.TrimPrefix(err.Error(), "hostproto: "))
+		}
+		if err := receiptMatchesPlan(l, r.Receipt); err != nil {
+			return err
 		}
 		raw, _ := json.Marshal(r.Receipt)
 		receipt = string(raw)
@@ -598,12 +653,7 @@ func (s *Store) applyResult(tx *sql.Tx, t Target, job *JobRecord, l *launchRow, 
 	}
 	switch job.Type {
 	case hostproto.JobSecretPut:
-		next := "failed"
-		if r.Status == hostproto.ResultSucceeded {
-			next = "stored"
-		}
-		_, err := tx.Exec("UPDATE secrets SET state=?,updated=?,revision=revision+1 WHERE id=? AND state='pending'", next, stamp(), job.SecretID)
-		return err
+		return s.finishSecretPut(tx, t, job, r, actor)
 	case hostproto.JobSecretDelete:
 		next := "stored"
 		if r.Status == hostproto.ResultSucceeded {
@@ -615,6 +665,95 @@ func (s *Store) applyResult(tx *sql.Tx, t Target, job *JobRecord, l *launchRow, 
 		return s.finishLaunch(tx, l, job, r, receipt, actor)
 	}
 	return nil
+}
+
+// receiptMatchesPlan checks the broker evidence against the launch it
+// answers: broker counts only for the plan's upstreams, the stats bound to
+// the plan's broker endpoint, and no broker evidence for a launch without
+// secrets. The host is trusted for its own target (docs/PROVISIONING.md); this
+// catches a confused or buggy host, not a malicious one.
+func receiptMatchesPlan(l *launchRow, r *hostproto.Receipt) error {
+	var plan LaunchPlan
+	if err := json.Unmarshal([]byte(l.plan), &plan); err != nil {
+		return err
+	}
+	if len(plan.Secrets) == 0 || plan.Broker == nil {
+		if r.BrokerEvidence != nil || len(r.BrokerCounts) > 0 {
+			return fail(422, "invalid_receipt", "The receipt carries broker evidence for a launch without brokered secrets.")
+		}
+		return nil
+	}
+	allowed := map[string]bool{}
+	for _, sec := range plan.Secrets {
+		for _, up := range sec.Upstreams {
+			allowed[strings.TrimSuffix(up, ":443")] = true
+		}
+	}
+	for upstream := range r.BrokerCounts {
+		if !allowed[upstream] {
+			return fail(422, "invalid_receipt", "The receipt counts broker requests to an upstream outside the plan.")
+		}
+	}
+	if e := r.BrokerEvidence; e != nil && e.Missing == "" {
+		if e.Listen != "tcp:"+plan.Broker.Address+":"+itoa(plan.Broker.Port) {
+			return fail(422, "invalid_receipt", "The broker evidence is bound to another endpoint than the plan's broker.")
+		}
+		for _, route := range e.Routes {
+			host, port, _ := strings.Cut(route.Upstream, ":")
+			if !allowed[route.Upstream] && !(port == "443" && allowed[host]) {
+				return fail(422, "invalid_receipt", "The broker evidence names an upstream outside the plan.")
+			}
+		}
+	}
+	return nil
+}
+
+// finishSecretPut records the host's answer to a secret-put. A success
+// needs a receipt for exactly the relayed envelope (target, name, version,
+// key and nonce); the service cannot verify its tag (only the sealing client
+// can) and relays it verbatim. Anything else ends the secret failed.
+func (s *Store) finishSecretPut(tx *sql.Tx, t Target, job *JobRecord, r hostproto.JobResult, actor Actor) error {
+	sec, err := scanSecret(tx.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE id=?", job.SecretID))
+	if err != nil {
+		return err
+	}
+	if sec.State != "pending" {
+		return nil
+	}
+	next, reason := "failed", r.Reason
+	var receipt string
+	if r.Status == hostproto.ResultSucceeded {
+		rec := r.SecretReceipt
+		switch {
+		case rec == nil:
+			reason = "receipt_missing"
+		case sec.Envelope == nil || rec.TargetID != t.ID || rec.Name != sec.Name || rec.Format != hostproto.SecretReceiptFormat ||
+			rec.Version != sec.Envelope.Version || rec.KeyID != sec.Envelope.KeyID || rec.Nonce != sec.Envelope.Nonce:
+			reason = "receipt_mismatch"
+		default:
+			raw, _ := json.Marshal(rec)
+			next, receipt = "stored", string(raw)
+		}
+	}
+	if _, err = tx.Exec("UPDATE secrets SET state=?,receipt=?,updated=?,revision=revision+1 WHERE id=? AND state='pending'", next, receipt, stamp(), sec.ID); err != nil {
+		return err
+	}
+	after := map[string]string{"state": next, "reason": reasonCodeText(reason), "ciphertext_sha256": sec.Fingerprint}
+	action := "secret.store.failed"
+	if next == "stored" {
+		action = "secret.stored"
+		after["value_fingerprint"] = r.SecretReceipt.Fingerprint
+		after["seal_key_id"] = r.SecretReceipt.KeyID
+	}
+	_, err = appendAudit(tx, Operation{Actor: actor, Action: action, Resource: "secret:" + sec.ID, Reason: "The host answered a secret-put", RequestID: "hostd-" + newID(), Before: map[string]string{"state": "pending"}, After: after}, "committed")
+	return err
+}
+
+func reasonCodeText(reason string) string {
+	if len(reason) > 64 {
+		return reason[:64]
+	}
+	return reason
 }
 
 // finishLaunch applies a launch, stop or collect result. A receipt that

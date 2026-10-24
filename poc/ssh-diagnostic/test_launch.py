@@ -56,7 +56,21 @@ def job(launch_id='launch-1', grace=1, log_limit=1 << 20, upload=4096, mounts=No
             'spec': launch_spec, 'spec_digest': 'c' * 64, 'policy': policy, 'policy_digest': 'd' * 64,
             'profile_policy_digest': 'e' * 64, 'stop_grace_seconds': grace, 'log_limit_bytes': log_limit,
             'upload_limit_bytes': upload, 'lifetime_seconds': lifetime, 'mounts': mounts or [],
-            'expires_at_ms': int(time.time() * 1000) + 3_600_000}
+            'expires_at_ms': int(time.time() * 1000) + 3_600_000, 'broker': None}
+
+
+BROKER_ADDRESS = '172.30.7.2'
+
+
+def broker_job(launch_id='launch-1', **changes):
+    """A launch with one brokered secret: the policy holds the broker endpoint instead of the taskboard."""
+    value = job(launch_id=launch_id, secrets=[{'ref': 'anthropic', 'expose': {'env': 'ANTHROPIC_BASE_URL'}}], **changes)
+    del value['policy']['taskboard']
+    value['policy']['broker'] = {'address': BROKER_ADDRESS, 'protocol': 'tcp', 'port': 8443}
+    value['broker'] = {'network': 'agentgate-%s-broker' % launch_id, 'subnet': '172.30.7.0/29', 'address': BROKER_ADDRESS,
+                       'port': 8443, 'target_address': '172.30.7.3',
+                       'env': {'ANTHROPIC_BASE_URL': 'http://%s:8443/anthropic' % BROKER_ADDRESS}}
+    return value
 
 
 def raw(value):
@@ -141,6 +155,9 @@ class FakeHost:
 
     def start_guard(self):
         self.step('start_guard')
+
+    def connect_broker(self, broker):
+        self.step('connect_broker', broker['network'], broker['target_address'])
 
     def guard_pid(self):
         return 4321
@@ -230,6 +247,39 @@ class LaunchRunTest(LaunchTestCase):
         self.assertEqual((directory / 'stdout.log').read_bytes(), b'12\n')
         self.assertEqual(oct((directory / 'receipt.json').stat().st_mode & 0o777), '0o600')
         self.assertEqual(host.audits[0]['launch_id'], 'launch-1')
+
+    def test_a_broker_launch_joins_its_network_after_the_guard_and_gets_only_base_urls(self):
+        value = broker_job()
+        value['spec']['agent']['command'] = ['sh', '-c', 'printf "%s|" "$ANTHROPIC_BASE_URL"; env']
+        receipt, host, _ = self.run_job(value)
+        names = [step[0] for step in host.steps]
+        self.assertEqual(names, ['precheck', 'stage_policy', 'resolve_image', 'check_image', 'stage_mounts',
+                                 'start_target', 'start_guard', 'connect_broker', 'bind', 'teardown', 'collect'])
+        self.assertEqual(host.steps[7], ('connect_broker', 'agentgate-launch-1-broker', '172.30.7.3'))
+        out = (self.launches / 'launch-1' / 'stdout.log').read_bytes().decode()
+        self.assertTrue(out.startswith('http://172.30.7.2:8443/anthropic|'), out)
+        self.assertNotIn('/run/agentgate/secrets', out)
+        self.assertEqual(receipt['broker'], {'network': 'agentgate-launch-1-broker', 'address': BROKER_ADDRESS, 'port': 8443,
+                                             'target_address': '172.30.7.3', 'env': ['ANTHROPIC_BASE_URL'],
+                                             'target_joined': True})
+        self.assertEqual((receipt['state'], receipt['reason']), ('stopped', 'exited'))
+
+    def test_a_failed_broker_join_fails_closed_and_tears_down(self):
+        host = self.host(fail={'connect_broker': launch.LaunchError('network connect refused')})
+        receipt, host, _ = self.run_job(broker_job(), host=host)
+        names = [step[0] for step in host.steps]
+        self.assertNotIn('bind', names)
+        self.assertIn('teardown', names)
+        self.assertEqual((receipt['state'], receipt['reason']), ('failed', 'setup_failed'))
+        self.assertFalse(receipt['broker']['target_joined'])
+
+    def test_upload_evidence_keeps_the_socket_guard_state(self):
+        host = self.host()
+        host.guard_receipt_value['host'].update(sockets='connect-only', socket_lsm_guard=False)
+        receipt, _, _ = self.run_job(job(), host=host)
+        self.assertEqual(receipt['evidence']['host']['sockets'], 'connect-only')
+        self.assertIs(receipt['evidence']['host']['socket_lsm_guard'], False)
+        self.assertIsNone(receipt['broker'])
 
     def test_upload_evidence_is_bounded(self):
         receipt, _, _ = self.run_job(job())
@@ -399,7 +449,7 @@ class LaunchRunTest(LaunchTestCase):
         host = self.host()
         bad = job()
         bad['spec']['secrets'] = [{'ref': 'anthropic', 'expose': {'env': 'ANTHROPIC_BASE_URL'}}]
-        with self.assertRaisesRegex(JobError, 'credential broker'):
+        with self.assertRaisesRegex(JobError, 'broker block'):
             self.run_job(bad, host)
         self.assertEqual(host.steps, [])
         self.assertFalse((self.launches / 'launch-1').exists())

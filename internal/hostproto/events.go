@@ -48,12 +48,14 @@ const (
 )
 
 // JobResult is the outcome of one job. A launch, stop or collect result
-// carries the Receipt, or names why evidence is missing.
+// carries the Receipt, or names why evidence is missing. A successful
+// secret-put carries the host's SecretReceipt for the sealing client.
 type JobResult struct {
-	Status          string   `json:"status"`
-	Reason          string   `json:"reason"`
-	Receipt         *Receipt `json:"receipt,omitempty"`
-	EvidenceMissing string   `json:"evidence_missing,omitempty"`
+	Status          string         `json:"status"`
+	Reason          string         `json:"reason"`
+	Receipt         *Receipt       `json:"receipt,omitempty"`
+	EvidenceMissing string         `json:"evidence_missing,omitempty"`
+	SecretReceipt   *SecretReceipt `json:"secret_receipt,omitempty"`
 }
 
 // EventsRequest is sealed under DomainEvents with the enrolled host key and
@@ -138,6 +140,14 @@ func (r JobResult) check() error {
 	}
 	if r.Receipt != nil && r.EvidenceMissing != "" {
 		return errors.New("hostproto: a result has a receipt or names missing evidence, not both")
+	}
+	if r.SecretReceipt != nil {
+		if r.Receipt != nil || r.EvidenceMissing != "" || r.Status != ResultSucceeded {
+			return errors.New("hostproto: a secret receipt belongs only to a successful secret-put result")
+		}
+		if err := r.SecretReceipt.Check(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

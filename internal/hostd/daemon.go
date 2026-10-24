@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"alloyium.local/kernel-poc/internal/hostproto"
+	"alloyium.local/kernel-poc/internal/secretseal"
 )
 
 // Version is reported in enrollment and every heartbeat.
@@ -49,10 +50,19 @@ type Daemon struct {
 	Now      func() time.Time
 	Random   io.Reader
 	Log      *log.Logger
+	// Broker runs each launch's credential broker. Open sets a DockerBroker
+	// when the configuration has a broker section; tests replace it.
+	Broker BrokerRuntime
 
 	jobKey ed25519.PublicKey
 
 	signMu sync.Mutex
+
+	sealMu  sync.Mutex
+	sealKey *secretseal.HostKey
+	// secretMu serializes secret-put, secret-delete and the secret checks of
+	// a launch, so a launch never binds a value being replaced or removed.
+	secretMu sync.Mutex
 
 	mu           sync.Mutex
 	active       map[string]*activeLaunch
@@ -71,6 +81,8 @@ type activeLaunch struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	stopSent        bool
+	// secrets are the refs the launch's broker uses.
+	secrets []string
 }
 
 // Open loads a daemon from an enrolled state directory.
@@ -118,9 +130,13 @@ func newDaemon(cfg Config, stateDir string, id Identity, keys Keys, service Serv
 		logger = log.New(io.Discard, "", 0)
 	}
 	interval := time.Duration(id.PollSeconds) * time.Second
-	return &Daemon{Config: cfg, StateDir: stateDir, Identity: id, Keys: keys, Service: service, Runtime: runtime,
+	d := &Daemon{Config: cfg, StateDir: stateDir, Identity: id, Keys: keys, Service: service, Runtime: runtime,
 		Ledger: ledger, Outbox: outbox, Sequence: newSequence(stateDir), Now: now, Random: random, Log: logger,
-		jobKey: jobKey, active: map[string]*activeLaunch{}, pollInterval: clampInterval(interval)}, nil
+		jobKey: jobKey, active: map[string]*activeLaunch{}, pollInterval: clampInterval(interval)}
+	if cfg.Broker != nil {
+		d.Broker = &DockerBroker{}
+	}
+	return d, nil
 }
 
 func clampInterval(d time.Duration) time.Duration {
@@ -190,6 +206,12 @@ func (d *Daemon) capabilities(ctx context.Context) []string {
 		d.logf("capability detection failed: %v", err)
 	} else {
 		caps = mapCapabilities(info, d.Config.Runtime)
+		// Brokered secrets need the broker image and network, the secret
+		// store, and a Docker host: the appliance guest has no broker yet.
+		if d.Config.Runtime != RuntimeAppliance && info.Runtime != RuntimeAppliance && d.brokerAvailable(ctx) {
+			caps = append(caps, hostproto.CapabilityBrokeredSecrets)
+			sort.Strings(caps)
+		}
 	}
 	d.mu.Lock()
 	d.caps, d.capsAt = caps, d.Now()
@@ -257,7 +279,7 @@ func (d *Daemon) PollOnce(ctx context.Context) error {
 		return err
 	}
 	request := hostproto.PollRequest{Header: header, MaxJobs: maxJobsPerPoll, Heartbeat: hostproto.Heartbeat{
-		Capabilities: d.capabilities(ctx), RunningLaunches: d.runningLaunches(), AgentVersion: Version}}
+		Capabilities: d.capabilities(ctx), RunningLaunches: d.runningLaunches(), AgentVersion: Version, SealKey: d.sealKeyRecord()}}
 	env, err := hostproto.Seal(hostproto.DomainPoll, d.Keys.Signing, request)
 	if err != nil {
 		d.signMu.Unlock()
@@ -356,12 +378,17 @@ func (d *Daemon) progress(jobID, message string) {
 
 // finish records the result durably, then queues it for upload.
 func (d *Daemon) finish(jobID, status, reason, message string, receipt *hostproto.Receipt, missing string) {
-	if message != "" {
-		d.progress(jobID, message)
-	}
 	result := hostproto.JobResult{Status: status, Reason: reasonCode(reason), Receipt: receipt}
 	if receipt == nil && missing != "" {
 		result.EvidenceMissing = reasonCode(missing)
+	}
+	d.finishResult(jobID, result, message)
+}
+
+// finishResult records a complete result durably, then queues it.
+func (d *Daemon) finishResult(jobID string, result hostproto.JobResult, message string) {
+	if message != "" {
+		d.progress(jobID, message)
 	}
 	if _, err := d.Ledger.Update(jobID, JobDone, &result); err != nil {
 		d.logf("job %s: ledger update failed: %v", jobID, err)
@@ -409,10 +436,10 @@ func (d *Daemon) dispatch(ctx context.Context, job hostproto.Job, payload any) {
 		d.background(func() { d.applyProfileJob(ctx, job, p) })
 	case hostproto.SnapshotMountPayload:
 		d.background(func() { d.snapshotJob(ctx, job, p) })
-	case hostproto.SecretPutPayload, hostproto.SecretDeletePayload:
-		// Fail closed until the credential broker exists: nothing is stored.
-		d.finish(job.ID, hostproto.ResultFailed, "broker_unavailable",
-			"this host has no credential broker yet; the secret was not stored and no ciphertext was kept", nil, "")
+	case hostproto.SecretPutPayload:
+		d.background(func() { d.secretPutJob(job, p) })
+	case hostproto.SecretDeletePayload:
+		d.background(func() { d.secretDeleteJob(job, p) })
 	default:
 		d.finish(job.ID, hostproto.ResultRejected, "unsupported_job", "this host does not run job type "+job.Type, nil, "")
 	}

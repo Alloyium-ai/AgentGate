@@ -3,7 +3,8 @@
 
 // Command agentgate-hostd is the AgentGate host agent.
 //
-//	agentgate-hostd install --service-url URL (--token T | --token-file F) [--runtime docker-host|appliance] ...
+//	agentgate-hostd install --service-url URL (--token T | --token-file F) [--runtime docker-host|appliance]
+//	                        [--broker-image NAME@sha256:HEX --broker-egress-network NET ...] ...
 //	agentgate-hostd run [--state-dir DIR]
 //	agentgate-hostd provision (--appliance-state DIR --source DIR [--policy F --token-file F] | --state-dir DIR)
 //	agentgate-hostd status [--state-dir DIR]
@@ -108,8 +109,18 @@ func install(args []string, stdout io.Writer) error {
 	flags.StringVar(&o.StateDir, "state-dir", hostd.DefaultStateDir, "host agent state directory")
 	flags.StringVar(&o.Hostname, "hostname", "", "name reported at enrollment")
 	flags.BoolVar(&o.NoStart, "no-start", false, "write everything but do not start the service")
+	flags.StringVar(&o.SecretRoot, "secret-root", "", "secret store root (default "+hostd.DefaultSecretRoot+")")
+	broker := hostd.BrokerConfig{}
+	flags.StringVar(&broker.Image, "broker-image", "", "digest-pinned agentgate-broker image; enables brokered secrets")
+	flags.IntVar(&broker.UID, "broker-uid", 10002, "unprivileged uid the broker serves as")
+	flags.IntVar(&broker.GID, "broker-gid", 10002, "unprivileged gid the broker serves as")
+	flags.StringVar(&broker.EgressNetwork, "broker-egress-network", "agentgate-egress", "Docker network the broker reaches upstreams on")
+	flags.StringVar(&broker.Pool, "broker-pool", "", "private range of per-launch broker networks (default "+hostd.DefaultBrokerPool+")")
 	if err := flags.Parse(args); err != nil {
 		return &exitCode{2, err}
+	}
+	if broker.Image != "" {
+		o.Broker = &broker
 	}
 	var err error
 	if o.Token, err = readToken(o.Token, tokenFile); err != nil {

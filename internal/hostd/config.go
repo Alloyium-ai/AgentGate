@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"alloyium.local/kernel-poc/internal/hostproto"
 )
 
 // Runtime kinds a target can be.
@@ -41,6 +44,68 @@ type Config struct {
 	// Provisioner is the argument vector of the bring-up command (appliance.py start).
 	Provisioner []string `json:"provisioner,omitempty"`
 	Instance    string   `json:"instance"`
+	// SecretRoot holds one secretseal store per target (DefaultSecretRoot
+	// when empty): root-owned, mode 0700, outside every sandbox mount.
+	SecretRoot string `json:"secret_root,omitempty"`
+	// Broker enables brokered secrets. Without it the host reports no
+	// brokered-secrets capability and refuses every launch with secrets.
+	Broker *BrokerConfig `json:"broker,omitempty"`
+}
+
+// DefaultSecretRoot is below /var/lib/agentgate, which no launch mount may
+// overlap (hostproto.ProtectedMountTrees).
+const DefaultSecretRoot = "/var/lib/agentgate/secrets"
+
+// DefaultBrokerPool is the host-reserved range every launch's broker /29
+// must fall inside. The guard denies all of it except the one exact broker
+// endpoint of a launch.
+const DefaultBrokerPool = "172.30.0.0/16"
+
+// BrokerConfig is how this host runs a launch's credential broker.
+type BrokerConfig struct {
+	// Image is the digest-pinned agentgate-broker image (name@sha256:<hex>).
+	Image string `json:"image"`
+	// UID and GID are the unprivileged identity the broker serves as.
+	UID int `json:"uid"`
+	GID int `json:"gid"`
+	// EgressNetwork is the Docker network the broker reaches upstreams on;
+	// the target is never attached to it.
+	EgressNetwork string `json:"egress_network"`
+	// Pool is the private IPv4 range of broker networks (DefaultBrokerPool).
+	Pool string `json:"pool,omitempty"`
+}
+
+var dockerNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$`)
+
+// pool returns the configured broker pool.
+func (b *BrokerConfig) pool() netip.Prefix {
+	raw := b.Pool
+	if raw == "" {
+		raw = DefaultBrokerPool
+	}
+	p, _ := netip.ParsePrefix(raw)
+	return p
+}
+
+func (b *BrokerConfig) validate() error {
+	if !hostproto.ImagePattern.MatchString(b.Image) {
+		return errors.New("hostd: broker.image must be a digest-pinned image reference (name@sha256:<hex>)")
+	}
+	if b.UID < 1 || b.UID > 1<<31-2 || b.GID < 1 || b.GID > 1<<31-2 {
+		return errors.New("hostd: broker.uid and broker.gid must be unprivileged ids")
+	}
+	if !dockerNamePattern.MatchString(b.EgressNetwork) || b.EgressNetwork == "host" || b.EgressNetwork == "none" {
+		return errors.New("hostd: broker.egress_network must name a Docker bridge network")
+	}
+	raw := b.Pool
+	if raw == "" {
+		raw = DefaultBrokerPool
+	}
+	p, err := netip.ParsePrefix(raw)
+	if err != nil || p.Masked() != p || !p.Addr().Is4() || p.Bits() < 8 || p.Bits() > 24 || !p.Addr().IsPrivate() || p.String() != raw {
+		return errors.New("hostd: broker.pool must be a canonical private IPv4 prefix of /8 to /24")
+	}
+	return nil
 }
 
 // Validate refuses anything that is not exactly a safe configuration.
@@ -60,7 +125,23 @@ func (c Config) Validate() error {
 	if err := checkArgv(c.Launcher, "launcher", true); err != nil {
 		return err
 	}
+	if c.SecretRoot != "" && (!filepath.IsAbs(c.SecretRoot) || filepath.Clean(c.SecretRoot) != c.SecretRoot || c.SecretRoot == "/") {
+		return errors.New("hostd: secret_root must be a canonical absolute path")
+	}
+	if c.Broker != nil {
+		if err := c.Broker.validate(); err != nil {
+			return err
+		}
+	}
 	return checkArgv(c.Provisioner, "provisioner", false)
+}
+
+// secretRoot is the configured or default secret store root.
+func (c Config) secretRoot() string {
+	if c.SecretRoot == "" {
+		return DefaultSecretRoot
+	}
+	return c.SecretRoot
 }
 
 func checkArgv(argv []string, label string, required bool) error {

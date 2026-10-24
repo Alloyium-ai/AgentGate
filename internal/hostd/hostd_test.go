@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"alloyium.local/kernel-poc/internal/broker"
 	"alloyium.local/kernel-poc/internal/hostproto"
 )
 
@@ -387,6 +388,16 @@ func specBytes(mode string, lifetime int, env string) []byte {
 		`","command":["sh","-c","echo hi"],"env":` + env + `,"workdir":""},"access":{"profile":"python-dev","version":3},"mounts":[],"secrets":[],"approval":"auto"}`)
 }
 
+// specWithSecret is a spec that references secret model-api.
+func specWithSecret(mode string, lifetime int) []byte {
+	return []byte(strings.Replace(string(specBytes(mode, lifetime, "{}")), `"secrets":[]`, `"secrets":[{"ref":"model-api","expose":{"env":"MODEL_BASE_URL"}}]`, 1))
+}
+
+func testLaunchSecret() hostproto.LaunchSecret {
+	return hostproto.LaunchSecret{Ref: "model-api", SecretID: strings.Repeat("1", 32), Env: "MODEL_BASE_URL", Upstreams: []string{"api.model.example"},
+		Header: "x-api-key", Rules: []hostproto.BrokerRule{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}}}
+}
+
 func (h *harness) launchJob(spec []byte, mounts []hostproto.LaunchMount, secrets []hostproto.LaunchSecret) hostproto.Job {
 	policy := policyBytes(h.t)
 	if mounts == nil {
@@ -646,9 +657,10 @@ func TestLaunchesThatCannotRunAreRejectedBeforeAnything(t *testing.T) {
 	h.runtime.info.Capabilities = []string{"snapshots"}
 	h.daemon.caps = nil
 	cases := map[string]hostproto.Job{
-		"broker_unavailable": h.launchJob(specBytes("oneshot", 30, "{}"), nil, []hostproto.LaunchSecret{{Ref: "model-api", SecretID: strings.Repeat("1", 32), Env: "MODEL_BASE_URL", Upstreams: []string{"api.model.example"}, Header: "x-api-key"}}),
-		"secret_in_env":      h.launchJob(specBytes("oneshot", 30, `{"GITHUB_TOKEN":"x"}`), nil, nil),
-		"invalid_lifetime":   h.launchJob(specBytes("session", 30, "{}"), nil, nil),
+		"broker_unavailable":     h.launchJob(specWithSecret("oneshot", 30), nil, []hostproto.LaunchSecret{testLaunchSecret()}),
+		"secret_binding_differs": h.launchJob(specBytes("oneshot", 30, "{}"), nil, []hostproto.LaunchSecret{testLaunchSecret()}),
+		"secret_in_env":          h.launchJob(specBytes("oneshot", 30, `{"GITHUB_TOKEN":"x"}`), nil, nil),
+		"invalid_lifetime":       h.launchJob(specBytes("session", 30, "{}"), nil, nil),
 		"unsupported_capability": h.launchJob(specBytes("oneshot", 30, "{}"),
 			[]hostproto.LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-write", Path: hostproto.MountRoot + "/repo"}}, nil),
 	}
@@ -663,6 +675,30 @@ func TestLaunchesThatCannotRunAreRejectedBeforeAnything(t *testing.T) {
 		results := h.service.results(job.ID)
 		if len(results) != 1 || results[0].Status != hostproto.ResultRejected || results[0].Reason != reason || results[0].EvidenceMissing != "not_started" {
 			t.Errorf("%s: %+v", reason, results)
+		}
+	}
+}
+
+func TestMountsOverlappingHostStateOrSecretsAreRefused(t *testing.T) {
+	h := newHarness(t)
+	h.daemon.Config.SecretRoot = "/srv/agentgate-secrets"
+	sources := []string{h.dir, h.dir + "/keys", filepath.Dir(h.dir), "/srv/agentgate-secrets", "/srv/agentgate-secrets/local", "/srv"}
+	jobs := []hostproto.Job{}
+	for i, source := range sources {
+		job := h.launchJob(specBytes("oneshot", 30, "{}"),
+			[]hostproto.LaunchMount{{Name: "repo", Source: source, Mode: "snapshot", Path: hostproto.MountRoot + "/repo"}}, nil)
+		job.LaunchID = fmt.Sprintf("%032x", 0xabc0+i)
+		h.service.send(t, job)
+		jobs = append(jobs, job)
+	}
+	h.cycle()
+	if h.runtime.called("run") != 0 {
+		t.Fatal("a launch mounting the host state or the secret store ran")
+	}
+	for i, job := range jobs {
+		results := h.service.results(job.ID)
+		if len(results) != 1 || results[0].Status != hostproto.ResultRejected || results[0].Reason != "invalid_mount" {
+			t.Errorf("%s: %+v", sources[i], results)
 		}
 	}
 }
@@ -876,9 +912,9 @@ func TestDoubleStopReturnsTheRecordedReceipt(t *testing.T) {
 	}
 }
 
-func TestSecretJobsFailClosedAndOtherJobsRun(t *testing.T) {
+func TestMalformedSecretJobsAreRejectedAndOtherJobsRun(t *testing.T) {
 	h := newHarness(t)
-	sealed := make([]byte, 80)
+	sealed := make([]byte, 80) // not a secretseal envelope (the retired format's framing)
 	put, _ := json.Marshal(hostproto.SecretPutPayload{SecretID: strings.Repeat("1", 32), Name: "model-api", Upstreams: []string{"api.model.example"},
 		Header: "x-api-key", Ciphertext: hostproto.EncodeSealed(sealed), CiphertextSHA256: hostproto.SHA256Hex(sealed)})
 	now := h.clock.now()
@@ -896,7 +932,7 @@ func TestSecretJobsFailClosedAndOtherJobsRun(t *testing.T) {
 		h.service.send(t, job)
 	}
 	h.cycle()
-	if r := h.service.results(secret.ID); len(r) != 1 || r[0].Status != hostproto.ResultFailed || r[0].Reason != "broker_unavailable" {
+	if r := h.service.results(secret.ID); len(r) != 1 || r[0].Status != hostproto.ResultRejected || r[0].Reason != "invalid_job" || r[0].SecretReceipt != nil {
 		t.Fatalf("secret %+v", r)
 	}
 	for _, job := range []hostproto.Job{provision, snapshot, profile} {
@@ -955,7 +991,7 @@ func TestReceiptFitsTheProtocolBound(t *testing.T) {
 	}
 	receipt["evidence"].(map[string]any)["host"] = map[string]any{"filesystem": map[string]any{"denials": denials, "raw_sha256": "keep"}, "process": map[string]any{"denials": denials}}
 	raw, _ := json.Marshal(receipt)
-	out, _, _, err := convertReceipt(job, testTarget, raw, nil)
+	out, _, _, err := convertReceipt(job, testTarget, raw, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -965,13 +1001,13 @@ func TestReceiptFitsTheProtocolBound(t *testing.T) {
 	}
 	receipt["launch_id"] = strings.Repeat("9", 32)
 	raw, _ = json.Marshal(receipt)
-	if _, _, _, err = convertReceipt(job, testTarget, raw, nil); err == nil {
+	if _, _, _, err = convertReceipt(job, testTarget, raw, nil, nil); err == nil {
 		t.Fatal("a receipt for another launch was forwarded")
 	}
 	receipt["launch_id"] = testLaunch
 	receipt["kernel_verified"] = true
 	raw, _ = json.Marshal(receipt)
-	if _, _, _, err = convertReceipt(job, testTarget, raw, nil); err == nil {
+	if _, _, _, err = convertReceipt(job, testTarget, raw, nil, nil); err == nil {
 		t.Fatal("a receipt claiming kernel verification was forwarded")
 	}
 }
@@ -1071,7 +1107,8 @@ func TestReasonCodesAndMessagesAreBounded(t *testing.T) {
 }
 
 // TestLauncherJobMatchesThePythonValidator proves the Go launcher job is
-// exactly what launch_job.py accepts, so the two sides cannot drift.
+// exactly what launch_job.py accepts, so the two sides cannot drift: a plain
+// launch and a launch with a broker block.
 func TestLauncherJobMatchesThePythonValidator(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
@@ -1081,22 +1118,53 @@ func TestLauncherJobMatchesThePythonValidator(t *testing.T) {
 	job := h.launchJob(specBytes("session", 7200, `{"EDITOR":"vi"}`), []hostproto.LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "snapshot", Path: hostproto.MountRoot + "/repo"}}, nil)
 	var payload hostproto.LaunchPayload
 	_ = json.Unmarshal(job.Payload, &payload)
-	raw, _, code, err := prepareLaunch(job, payload, []string{hostproto.CapabilitySnapshots}, h.clock.now())
+	prepared, code, err := prepareLaunch(job, payload, []string{hostproto.CapabilitySnapshots}, h.clock.now(), testTarget, nil)
 	if err != nil {
 		t.Fatalf("%s: %v", code, err)
 	}
+	raw := prepared.raw
 	script := `import json, sys
 sys.path.insert(0, sys.argv[1])
 import launch_job
 launch = launch_job.check_job(sys.stdin.buffer.read(), ['snapshots'])
-print(json.dumps({'mode': launch['mode'], 'lifetime': launch['lifetime_seconds'], 'mounts': launch['mounts'], 'workdir': launch['workdir']}))`
-	cmd := exec.Command(python, "-I", "-c", script, "../../poc/ssh-diagnostic")
-	cmd.Stdin = bytes.NewReader(raw)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("launch_job.py refused the Go launcher job: %s", out)
+print(json.dumps({'mode': launch['mode'], 'lifetime': launch['lifetime_seconds'], 'mounts': launch['mounts'], 'workdir': launch['workdir'],
+                  'env': launch['env'], 'broker': launch['broker']}))`
+	run := func(raw []byte) []byte {
+		cmd := exec.Command(python, "-I", "-c", script, "../../poc/ssh-diagnostic")
+		cmd.Stdin = bytes.NewReader(raw)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("launch_job.py refused the Go launcher job: %s", out)
+		}
+		return out
 	}
-	if !bytes.Contains(out, []byte(`"mode": "session"`)) || !bytes.Contains(out, []byte(`"mode": "snapshot"`)) {
+	out := run(raw)
+	if !bytes.Contains(out, []byte(`"mode": "session"`)) || !bytes.Contains(out, []byte(`"mode": "snapshot"`)) || !bytes.Contains(out, []byte(`"broker": null`)) {
 		t.Fatalf("python view %s", out)
+	}
+	// A launch with a secret: the Go broker plan and the Python broker check agree.
+	spec := specWithSecret("oneshot", 30)
+	policy := brokerPolicy(t, "oneshot", 30, "172.30.9.2")
+	now := h.clock.now()
+	secretPayload, _ := json.Marshal(hostproto.LaunchPayload{Spec: spec, Policy: policy, ExpiresAtMS: now.Add(30 * time.Second).UnixMilli(),
+		HeartbeatSeconds: 10, Mounts: []hostproto.LaunchMount{}, Secrets: []hostproto.LaunchSecret{testLaunchSecret()}})
+	secretJob := hostproto.Job{Version: hostproto.JobVersion, ID: nextJobID(), Type: hostproto.JobLaunch, TargetID: testTarget, LaunchID: testLaunch,
+		SpecDigest: hostproto.SHA256Hex(spec), PolicyDigest: hostproto.SHA256Hex(policy), IssuedAtMS: now.UnixMilli(), DeadlineMS: now.Add(time.Hour).UnixMilli(), Payload: secretPayload}
+	if _, err := secretJob.Check(testTarget, now); err != nil {
+		t.Fatal(err)
+	}
+	_ = json.Unmarshal(secretJob.Payload, &payload)
+	cfg := &BrokerConfig{Image: "agentgate-broker@sha256:" + strings.Repeat("b", 64), UID: 10002, GID: 10002, EgressNetwork: "agentgate-egress"}
+	prepared, code, err = prepareLaunch(secretJob, payload, []string{hostproto.CapabilityBrokeredSecrets}, now, testTarget, cfg)
+	if err != nil {
+		t.Fatalf("%s: %v", code, err)
+	}
+	out = run(prepared.raw)
+	if !bytes.Contains(out, []byte(`"MODEL_BASE_URL": "http://172.30.9.2:8443/model-api"`)) || !bytes.Contains(out, []byte(`"network": "agentgate-`+testLaunch+`-broker"`)) ||
+		!bytes.Contains(out, []byte(`"target_address": "172.30.9.3"`)) {
+		t.Fatalf("python view of a broker launch %s", out)
+	}
+	if _, err := broker.ParseConfig(prepared.config); err != nil || bytes.Contains(prepared.raw, []byte("/run/agentgate/secrets")) {
+		t.Fatalf("broker config %v", err)
 	}
 }

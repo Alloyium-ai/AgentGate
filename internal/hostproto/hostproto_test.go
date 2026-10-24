@@ -42,17 +42,21 @@ func raw(t *testing.T, v any) json.RawMessage {
 	return data
 }
 
+// sealedFixture is a fixed secretseal envelope shape (format, context and an
+// opaque ciphertext), so the golden files stay reproducible. Real envelopes
+// come from secretseal; the cross-package checks live in internal/hostd.
 func sealedFixture(t *testing.T) []byte {
 	t.Helper()
-	priv, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{0x33}, 32))
+	raw, err := json.Marshal(SealedEnvelope{Format: SealedFormat, TargetID: targetID, Name: "model-api", Version: uint64(fixedNow.UnixMilli()),
+		KeyID: strings.Repeat("ab", 32), Nonce: strings.Repeat("0f", 16), Sealed: b64.EncodeToString(bytes.Repeat([]byte{0x44}, 32+16+15))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := SealSecret(priv.PublicKey().Bytes(), []byte("synthetic-value"), SecretAAD(targetID, "model-api"), bytes.NewReader(bytes.Repeat([]byte{0x44}, 64)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sealed
+	return raw
+}
+
+func fixtureRules() []BrokerRule {
+	return []BrokerRule{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}, {Methods: []string{"GET"}, Path: "/v1/models", Match: "prefix"}}
 }
 
 func sampleJobs(t *testing.T) map[string]Job {
@@ -71,8 +75,9 @@ func sampleJobs(t *testing.T) map[string]Job {
 		JobProvision:    base("00000000000000000000000000000001", JobProvision, ProvisionPayload{Images: []string{"agentgate-coding@sha256:" + strings.Repeat("a", 64)}, Reason: "operator-request"}),
 		JobApplyProfile: apply,
 		JobLaunch: bound(base("00000000000000000000000000000003", JobLaunch, LaunchPayload{Spec: fixedSpecRaw, Policy: fixedPolicy, ExpiresAtMS: fixedNow.Add(time.Hour).UnixMilli(), HeartbeatSeconds: 10,
-			Mounts:  []LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: MountRoot + "/repo"}},
-			Secrets: []LaunchSecret{{Ref: "model-api", SecretID: "11111111111111111111111111111111", Env: "MODEL_API_BASE_URL", Upstreams: []string{"api.model.example"}, Header: "x-api-key"}}})),
+			Mounts: []LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: MountRoot + "/repo"}},
+			Secrets: []LaunchSecret{{Ref: "model-api", SecretID: "11111111111111111111111111111111", Env: "MODEL_API_BASE_URL", Upstreams: []string{"api.model.example"}, Header: "x-api-key",
+				Rules: fixtureRules(), ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"}}}})),
 		JobStop:          bound(base("00000000000000000000000000000004", JobStop, StopPayload{Reason: "operator-stop", GraceSeconds: 10})),
 		JobCollect:       bound(base("00000000000000000000000000000005", JobCollect, CollectPayload{Reason: "receipt-missing"})),
 		JobSecretPut:     base("00000000000000000000000000000006", JobSecretPut, SecretPutPayload{SecretID: "11111111111111111111111111111111", Name: "model-api", Upstreams: []string{"api.model.example"}, Header: "x-api-key", Ciphertext: EncodeSealed(sealed), CiphertextSHA256: SHA256Hex(sealed)}),
@@ -144,7 +149,12 @@ func TestHostRequestGoldenFiles(t *testing.T) {
 	golden(t, "poll.json", env)
 	exit := 0
 	jobs := sampleJobs(t)
-	receipt := Receipt{Version: ReceiptVersion, LaunchID: launchID, TargetID: targetID, SpecDigest: jobs[JobLaunch].SpecDigest, PolicyDigest: jobs[JobLaunch].PolicyDigest, BPFObjects: map[string]string{"network.bpf.o": strings.Repeat("b", 64)}, GuardDigest: strings.Repeat("c", 64), Mounts: []MountIdentity{{Name: "repo", Mode: "read-only", Identity: "2049:131"}}, BrokerCounts: map[string]uint64{"api.model.example": 3}, StartedAtMS: fixedNow.UnixMilli(), EndedAtMS: fixedNow.Add(time.Minute).UnixMilli(), ExitCode: &exit, Reason: "exited", DomainEmpty: true, EnforcementReleased: true}
+	receipt := Receipt{Version: ReceiptVersion, LaunchID: launchID, TargetID: targetID, SpecDigest: jobs[JobLaunch].SpecDigest, PolicyDigest: jobs[JobLaunch].PolicyDigest, BPFObjects: map[string]string{"network.bpf.o": strings.Repeat("b", 64)}, GuardDigest: strings.Repeat("c", 64), Mounts: []MountIdentity{{Name: "repo", Mode: "read-only", Identity: "2049:131"}}, BrokerCounts: map[string]uint64{"api.model.example": 3},
+		BrokerEvidence: &BrokerEvidence{Version: BrokerEvidenceVersion, ConfigSHA256: strings.Repeat("d", 64), Listen: "tcp:172.30.7.2:8443", State: "stopped", StopReason: "signal", Complete: true,
+			StartedAt: "2026-09-21T14:13:20Z", UpdatedAt: "2026-09-21T14:14:20Z", Hardening: &BrokerHardening{UID: 10002, GID: 10002, NotDumpable: true, CoreLimitZero: true, NoNewPrivs: true, NoCapabilities: true},
+			Connections: BrokerConnections{Accepted: 4}, Requests: BrokerRequests{Total: 4, Denied: 1, Forwarded: 3}, Denied: map[string]uint64{"path_not_allowed": 1},
+			Routes: map[string]BrokerRouteEvidence{"model-api": {Upstream: "api.model.example:443", Requests: 3, Forwarded: 3, Status: map[string]uint64{"2xx": 3}, Errors: map[string]uint64{}, BytesIn: 120, BytesOut: 900}}, DenialsRecorded: 1},
+		StartedAtMS: fixedNow.UnixMilli(), EndedAtMS: fixedNow.Add(time.Minute).UnixMilli(), ExitCode: &exit, Reason: "exited", DomainEmpty: true, EnforcementReleased: true}
 	if err := receipt.Check(jobs[JobLaunch]); err != nil {
 		t.Fatal(err)
 	}
@@ -322,22 +332,52 @@ func TestEnrollmentBindingAndSecretBox(t *testing.T) {
 	if VerifyEnrollResponse(token, swapped) == nil {
 		t.Fatal("a substituted job key passed the token binding")
 	}
-	priv, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{0x33}, 32))
 	sealed := sealedFixture(t)
-	value, err := OpenSecret(priv, sealed, SecretAAD(targetID, "model-api"))
-	if err != nil || string(value) != "synthetic-value" {
-		t.Fatal("sealed secret did not round trip", err)
+	if err := CheckSealed(sealed); err != nil {
+		t.Fatal(err)
 	}
-	if _, err = OpenSecret(priv, sealed, SecretAAD(targetID, "other")); err == nil {
-		t.Fatal("sealed secret opened under another name")
+	if raw, err := DecodeSealed(EncodeSealed(sealed)); err != nil || !bytes.Equal(raw, sealed) {
+		t.Fatal("a sealed envelope did not round trip", err)
 	}
-	flipped := append([]byte{}, sealed...)
-	flipped[len(flipped)-1] ^= 1
-	if _, err = OpenSecret(priv, flipped, SecretAAD(targetID, "model-api")); err == nil {
-		t.Fatal("tampered ciphertext opened")
+	var e SealedEnvelope
+	json.Unmarshal(sealed, &e)
+	mutate := map[string]func(*SealedEnvelope){
+		"format":  func(e *SealedEnvelope) { e.Format = "agentgate.secret-v1" },
+		"target":  func(e *SealedEnvelope) { e.TargetID = "../x" },
+		"name":    func(e *SealedEnvelope) { e.Name = "Model" },
+		"version": func(e *SealedEnvelope) { e.Version = 0 },
+		"key":     func(e *SealedEnvelope) { e.KeyID = "ab" },
+		"nonce":   func(e *SealedEnvelope) { e.Nonce = strings.Repeat("0F", 16) },
+		"short":   func(e *SealedEnvelope) { e.Sealed = b64.EncodeToString(make([]byte, 48)) },
+		"huge":    func(e *SealedEnvelope) { e.Sealed = b64.EncodeToString(make([]byte, MaxSealedValueBytes+49)) },
+		"padding": func(e *SealedEnvelope) { e.Sealed += "=" },
 	}
-	if _, err = DecodeSealed(EncodeSealed(sealed[:10])); err == nil {
-		t.Fatal("truncated ciphertext framed")
+	for name, change := range mutate {
+		bad := e
+		change(&bad)
+		raw, _ := json.Marshal(bad)
+		if CheckSealed(raw) == nil {
+			t.Errorf("a sealed envelope with a bad %s was accepted", name)
+		}
+	}
+	// One byte form only: whitespace, another key order or case, unknown and
+	// duplicate fields are refused.
+	for _, bad := range [][]byte{
+		bytes.Replace(sealed, []byte(`,"name"`), []byte(`, "name"`), 1),
+		bytes.Replace(sealed, []byte(`"format"`), []byte(`"Format"`), 1),
+		append(bytes.TrimSuffix(sealed, []byte("}")), []byte(`,"value":"x"}`)...),
+		append(bytes.TrimSuffix(sealed, []byte("}")), []byte(`,"name":"other"}`)...),
+		[]byte(`{"sealed":"AAAA","format":"agentgate.secretseal.v1"}`),
+	} {
+		if CheckSealed(bad) == nil {
+			t.Errorf("a non-canonical envelope was accepted: %s", bad)
+		}
+	}
+	if _, err := DecodeSealed(EncodeSealed(sealed[:10])); err == nil {
+		t.Fatal("truncated envelope framed")
+	}
+	if _, err := DecodeSealed(""); err == nil {
+		t.Fatal("an empty envelope framed")
 	}
 }
 

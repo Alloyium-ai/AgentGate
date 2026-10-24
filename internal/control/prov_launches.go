@@ -79,11 +79,14 @@ const (
 
 // Permissions summarizes what the effective policy allows.
 type Permissions struct {
-	Network          string   `json:"network_default"`
-	IPv6             string   `json:"ipv6"`
-	Web              []string `json:"web"`
-	DNS              []string `json:"dns_resolvers"`
+	Network string   `json:"network_default"`
+	IPv6    string   `json:"ipv6"`
+	Web     []string `json:"web"`
+	DNS     []string `json:"dns_resolvers"`
+	// Taskboard is the taskboard exception, empty in a broker launch; Broker
+	// is then the one exact private endpoint the agent may reach.
 	Taskboard        string   `json:"taskboard"`
+	Broker           string   `json:"broker,omitempty"`
 	ReadOnly         []string `json:"read_only"`
 	Writable         []string `json:"writable"`
 	Execute          []string `json:"execute"`
@@ -93,13 +96,23 @@ type Permissions struct {
 	AnonymousExecute bool     `json:"anonymous_execute"`
 }
 
-// PlanSecret is one brokered secret in a plan. It names the secret only.
+// PlanSecret is one brokered secret in a plan. It names the secret and how
+// the broker uses it, never a value. The approval covers exactly these rules.
 type PlanSecret struct {
-	Ref       string   `json:"ref"`
-	SecretID  string   `json:"secret_id"`
-	Env       string   `json:"env"`
-	Upstreams []string `json:"upstreams"`
-	Header    string   `json:"header"`
+	Ref          string                 `json:"ref"`
+	SecretID     string                 `json:"secret_id"`
+	Env          string                 `json:"env"`
+	Upstreams    []string               `json:"upstreams"`
+	Header       string                 `json:"header"`
+	Scheme       string                 `json:"scheme"`
+	Username     string                 `json:"username,omitempty"`
+	Rules        []hostproto.BrokerRule `json:"rules"`
+	Wildcard     bool                   `json:"wildcard_rules"`
+	ExtraHeaders map[string]string      `json:"extra_headers"`
+	// BaseURL is the value Env receives inside the sandbox.
+	BaseURL string `json:"base_url"`
+	// ValueFingerprint is the host's keyed fingerprint of the stored value.
+	ValueFingerprint string `json:"value_fingerprint,omitempty"`
 }
 
 // LaunchPlan is the resolved plan returned when a launch is created or
@@ -121,8 +134,11 @@ type LaunchPlan struct {
 	Permissions     Permissions             `json:"permissions"`
 	Mounts          []hostproto.LaunchMount `json:"mounts"`
 	Secrets         []PlanSecret            `json:"secrets"`
-	KernelVerified  bool                    `json:"kernel_verified"`
-	Notices         []string                `json:"notices"`
+	// Broker is the launch's broker endpoint and network, present exactly
+	// when the launch brokers secrets. It is in the signed policy as well.
+	Broker         *PlanBroker `json:"broker,omitempty"`
+	KernelVerified bool        `json:"kernel_verified"`
+	Notices        []string    `json:"notices"`
 }
 
 // Launch is the API view of a launch.
@@ -311,7 +327,12 @@ func appendLaunchEvent(tx *sql.Tx, l *launchRow, kind, actor, message string, da
 }
 
 func summarize(d pocpolicy.Document) Permissions {
-	p := Permissions{Network: d.Default, IPv6: d.IPv6, DNS: append([]string{}, d.DNS.Resolvers...), Web: []string{}, Taskboard: d.Taskboard.Address + ":" + itoa(d.Taskboard.Port)}
+	p := Permissions{Network: d.Default, IPv6: d.IPv6, DNS: append([]string{}, d.DNS.Resolvers...), Web: []string{}}
+	if d.Broker != nil {
+		p.Broker = d.Broker.Address + ":" + itoa(d.Broker.Port)
+	} else {
+		p.Taskboard = d.Taskboard.Address + ":" + itoa(d.Taskboard.Port)
+	}
 	current := access.CurrentWeb(d)
 	for _, n := range []string{"http", "https", "quic"} {
 		if current[n] {
@@ -346,7 +367,8 @@ type resolved struct {
 }
 
 // resolveLaunch turns a validated spec into an effective policy and plan.
-func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical []byte, specDigest, requester string) (resolved, error) {
+// launchID chooses the broker endpoint of a launch with secrets.
+func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical []byte, specDigest, requester, launchID string) (resolved, error) {
 	r := resolved{spec: spec, canonical: canonical}
 	target, err := s.targetBy(tx, spec.Target)
 	if err != nil {
@@ -424,29 +446,54 @@ func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical [
 		}
 		plan.ApprovalReasons = append(plan.ApprovalReasons, "brokered secrets "+joinRefs(spec.Secrets))
 	}
+	var endpoint *PlanBroker
+	if len(spec.Secrets) > 0 {
+		b := brokerEndpoint(launchID)
+		endpoint = &b
+	}
 	for _, sec := range spec.Secrets {
-		var id, upstreams, header string
-		err := tx.QueryRow("SELECT id,upstreams,header FROM secrets WHERE target_id=? AND name=? AND state='stored'", target.ID, sec.Ref).Scan(&id, &upstreams, &header)
+		stored, err := scanSecret(tx.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE target_id=? AND name=? AND state='stored'", target.ID, sec.Ref))
 		if err != nil {
 			return r, fail(422, "secret_unavailable", "Secret "+sec.Ref+" is not stored on the launch target.")
 		}
-		if err = secretInScope(tx, id, r.profile.Name, requester); err != nil {
+		if err = secretInScope(tx, stored.ID, r.profile.Name, requester); err != nil {
 			return r, err
 		}
-		ps := PlanSecret{Ref: sec.Ref, SecretID: id, Env: sec.Expose.Env, Header: header}
-		json.Unmarshal([]byte(upstreams), &ps.Upstreams)
+		if len(stored.Rules) == 0 {
+			return r, fail(422, "secret_rules_missing", "Secret "+sec.Ref+" has no broker rules, so it allows nothing (deny by default). Recreate it with explicit rules, "+
+				`for example [{"methods":["POST"],"path":"/v1/messages","match":"exact"}], or with the wildcard [{"methods":["*"],"path":"/"}] to allow every method and path of its upstreams.`)
+		}
+		ps := PlanSecret{Ref: sec.Ref, SecretID: stored.ID, Env: sec.Expose.Env, Upstreams: stored.Upstreams, Header: stored.Header, Scheme: stored.Scheme,
+			Username: stored.Username, Rules: stored.Rules, Wildcard: stored.Wildcard, ExtraHeaders: stored.ExtraHeaders,
+			BaseURL: brokerBaseURL(endpoint, sec.Ref), ValueFingerprint: stored.ValueFingerprint}
+		if stored.Wildcard {
+			plan.Notices = append(plan.Notices, "WARNING: secret "+sec.Ref+" uses wildcard rules: the broker forwards every method on every path of "+joinList(stored.Upstreams)+" with the credential")
+			plan.ApprovalReasons = append(plan.ApprovalReasons, "secret "+sec.Ref+" has wildcard broker rules")
+		}
 		plan.Secrets = append(plan.Secrets, ps)
 	}
-	if !contains(target.Capabilities, hostproto.CapabilityBroker) && len(spec.Secrets) > 0 {
-		return r, fail(422, "capability_missing", "Brokered secrets need a target that advertises broker.")
+	if !contains(target.Capabilities, hostproto.CapabilityBrokeredSecrets) && len(spec.Secrets) > 0 {
+		return r, fail(422, "capability_missing", "Brokered secrets need a target that advertises brokered-secrets (a host agent with the credential broker installed).")
 	}
 	if len(doc.Web.Rules) > 0 {
 		plan.ApprovalReasons = append(plan.ApprovalReasons, "public web access")
 	}
 	// The launch document carries the mode and lifetime, so the kernel policy
 	// itself expires at the launch lifetime.
+	if doc.Broker != nil {
+		return r, fail(422, "invalid_policy", "A broker endpoint is assigned by the service for a launch with secrets; an access document cannot name one.")
+	}
 	if doc, err = doc.ForLaunch(spec.Mode, spec.LifetimeSeconds); err != nil {
 		return r, fail(422, "invalid_policy", "The effective policy is invalid: "+err.Error())
+	}
+	if endpoint != nil {
+		// The broker takes the guard's single exact private endpoint; the
+		// taskboard exception is not part of a launch with secrets.
+		if doc, err = doc.WithBroker(endpoint.Address, endpoint.Port); err != nil {
+			return r, fail(422, "invalid_policy", "The broker endpoint is invalid: "+err.Error())
+		}
+		plan.Broker = endpoint
+		plan.Notices = append(plan.Notices, "the agent reaches its secrets only through the broker at "+endpoint.Address+":"+itoa(endpoint.Port)+"; the taskboard TCP endpoint is not allowed in this launch")
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {
@@ -477,9 +524,14 @@ func (s *Store) PlanLaunch(op Operation, raw []byte) (any, error) {
 		if verr != nil {
 			return nil, verr
 		}
-		r, err := s.resolveLaunch(tx, spec, canonical, specDigest, operation.Actor.Subject)
+		// A dry run has no launch id; its broker endpoint (and so its policy
+		// digest) is an example: the created launch gets its own.
+		r, err := s.resolveLaunch(tx, spec, canonical, specDigest, operation.Actor.Subject, "dry-run:"+specDigest)
 		if err != nil {
 			return nil, err
+		}
+		if r.plan.Broker != nil {
+			r.plan.Notices = append(r.plan.Notices, "a dry run shows an example broker endpoint; the created launch is assigned its own, so its policy digest differs")
 		}
 		r.plan.ExpiresAt = s.now().Add(time.Duration(spec.LifetimeSeconds) * time.Second).UTC().Format(time.RFC3339)
 		return map[string]any{"dry_run": true, "plan": r.plan, "spec": json.RawMessage(canonical), "policy": json.RawMessage(r.raw)}, nil
@@ -502,7 +554,8 @@ func (s *Store) CreateLaunch(op Operation, raw []byte) (any, error) {
 		if live >= 256 {
 			return nil, fail(409, "launch_limit", "Too many launches are active.")
 		}
-		r, err := s.resolveLaunch(tx, spec, canonical, specDigest, operation.Actor.Subject)
+		launchID := newID()
+		r, err := s.resolveLaunch(tx, spec, canonical, specDigest, operation.Actor.Subject, launchID)
 		if err != nil {
 			return nil, err
 		}
@@ -518,7 +571,7 @@ func (s *Store) CreateLaunch(op Operation, raw []byte) (any, error) {
 			versionID = r.version.ID
 		}
 		approval := r.plan.Approval == "required"
-		l := launchRow{Launch: Launch{ID: newID(), Name: spec.Name, SpecDigest: specDigest, TargetID: r.target.ID, ProfileVersionID: versionID, PolicyDigest: r.plan.PolicyDigest, Mode: spec.Mode, LifetimeSeconds: spec.LifetimeSeconds, ApprovalRequired: approval, State: StateRequested, RequestedBy: operation.Actor.Subject, Created: stamp(), Revision: 1}}
+		l := launchRow{Launch: Launch{ID: launchID, Name: spec.Name, SpecDigest: specDigest, TargetID: r.target.ID, ProfileVersionID: versionID, PolicyDigest: r.plan.PolicyDigest, Mode: spec.Mode, LifetimeSeconds: spec.LifetimeSeconds, ApprovalRequired: approval, State: StateRequested, RequestedBy: operation.Actor.Subject, Created: stamp(), Revision: 1}}
 		l.Updated = l.Created
 		l.policy, l.plan = string(r.raw), jsonText(r.plan)
 		if _, err = tx.Exec("INSERT INTO launches VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'','','','','','',0,?,?,'',0,'','',0,0,0,1)",
@@ -596,9 +649,15 @@ func (s *Store) queueLaunch(tx *sql.Tx, l *launchRow, plan LaunchPlan, canonical
 			return err
 		}
 	}
+	// The launch job carries exactly the approved plan's injection rules.
 	secrets := []hostproto.LaunchSecret{}
 	for _, sec := range plan.Secrets {
-		secrets = append(secrets, hostproto.LaunchSecret{Ref: sec.Ref, SecretID: sec.SecretID, Env: sec.Env, Upstreams: sec.Upstreams, Header: sec.Header})
+		ls := hostproto.LaunchSecret{Ref: sec.Ref, SecretID: sec.SecretID, Env: sec.Env, Upstreams: sec.Upstreams, Header: sec.Header,
+			Scheme: sec.Scheme, Username: sec.Username, Rules: sec.Rules}
+		if len(sec.ExtraHeaders) > 0 {
+			ls.ExtraHeaders = sec.ExtraHeaders
+		}
+		secrets = append(secrets, ls)
 	}
 	payload := hostproto.LaunchPayload{Spec: canonical, Policy: json.RawMessage(l.policy), ExpiresAtMS: expires.UnixMilli(), HeartbeatSeconds: target.HeartbeatSeconds, Mounts: plan.Mounts, Secrets: secrets}
 	if _, err = s.enqueueJob(tx, jobSpec{Type: hostproto.JobLaunch, TargetID: l.TargetID, Launch: l, Payload: payload, Deadline: expires.Add(resultGrace), Reason: "Start a launch", Actor: actor}, op); err != nil {
@@ -844,6 +903,17 @@ func (s *Store) LaunchLogs(id string, after, limit int) (map[string]any, error) 
 		items = append(items, line)
 	}
 	return map[string]any{"items": items, "bytes": l.logBytes, "limit_bytes": maxLaunchLogBytes, "truncated": l.logBytes >= maxLaunchLogBytes || l.logSeq >= maxLaunchLogLines}, rows.Err()
+}
+
+func joinList(values []string) string {
+	out := ""
+	for i, v := range values {
+		if i > 0 {
+			out += ", "
+		}
+		out += v
+	}
+	return out
 }
 
 func joinRefs(secrets []hostproto.SpecSecret) string {

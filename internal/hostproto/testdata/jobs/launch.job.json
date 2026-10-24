@@ -52,7 +52,26 @@
         "upstreams": [
           "api.model.example"
         ],
-        "header": "x-api-key"
+        "header": "x-api-key",
+        "rules": [
+          {
+            "methods": [
+              "POST"
+            ],
+            "path": "/v1/messages",
+            "match": "exact"
+          },
+          {
+            "methods": [
+              "GET"
+            ],
+            "path": "/v1/models",
+            "match": "prefix"
+          }
+        ],
+        "extra_headers": {
+          "anthropic-version": "2023-06-01"
+        }
       }
     ]
   }
