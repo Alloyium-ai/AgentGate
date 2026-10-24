@@ -1,0 +1,14 @@
+{
+  "version": "agentgate.hostd.job.v1",
+  "id": "00000000000000000000000000000005",
+  "type": "collect",
+  "target_id": "0123456789abcdef0123456789abcdef",
+  "launch_id": "fedcba9876543210fedcba9876543210",
+  "spec_digest": "1fbfbc3faa60847051b13ae995232a2dfe6f258156cc67a40809c0c23060eff7",
+  "policy_digest": "330fbdc7f3e2588f647355a2a50dcf6dc0c64f226ee7e1326ca21338f3579ab8",
+  "issued_at_ms": 1790000000000,
+  "deadline_ms": 1790007200000,
+  "payload": {
+    "reason": "receipt-missing"
+  }
+}

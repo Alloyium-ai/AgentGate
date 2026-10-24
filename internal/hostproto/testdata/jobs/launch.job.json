@@ -1,0 +1,59 @@
+{
+  "version": "agentgate.hostd.job.v1",
+  "id": "00000000000000000000000000000003",
+  "type": "launch",
+  "target_id": "0123456789abcdef0123456789abcdef",
+  "launch_id": "fedcba9876543210fedcba9876543210",
+  "spec_digest": "1fbfbc3faa60847051b13ae995232a2dfe6f258156cc67a40809c0c23060eff7",
+  "policy_digest": "330fbdc7f3e2588f647355a2a50dcf6dc0c64f226ee7e1326ca21338f3579ab8",
+  "issued_at_ms": 1790000000000,
+  "deadline_ms": 1790007200000,
+  "payload": {
+    "spec": {
+      "version": "agentgate.launch.v1",
+      "name": "repo-fixer",
+      "target": "local",
+      "mode": "session",
+      "lifetime_seconds": 3600,
+      "agent": {
+        "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "command": [
+          "sh"
+        ],
+        "env": {},
+        "workdir": "/var/lib/agentgate/workspace"
+      },
+      "access": {
+        "profile": "python-dev",
+        "version": 3
+      },
+      "mounts": [],
+      "secrets": [],
+      "approval": "auto"
+    },
+    "policy": {
+      "version": "agentgate.poc.v2"
+    },
+    "expires_at_ms": 1790003600000,
+    "heartbeat_seconds": 10,
+    "mounts": [
+      {
+        "name": "repo",
+        "source": "/srv/repos/app",
+        "mode": "read-only",
+        "path": "/var/lib/agentgate/mounts/repo"
+      }
+    ],
+    "secrets": [
+      {
+        "ref": "model-api",
+        "secret_id": "11111111111111111111111111111111",
+        "env": "MODEL_API_BASE_URL",
+        "upstreams": [
+          "api.model.example"
+        ],
+        "header": "x-api-key"
+      }
+    ]
+  }
+}
