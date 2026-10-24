@@ -17,6 +17,7 @@ import (
 const (
 	PathEnroll = "/api/v1/hostd/enroll"
 	PathPoll   = "/api/v1/hostd/poll"
+	PathResync = "/api/v1/hostd/resync"
 	// PathEvents is a pattern; replace {id} with the job id.
 	PathEvents = "/api/v1/hostd/jobs/{id}/events"
 )
@@ -136,7 +137,10 @@ func CheckCapabilities(values []string) error {
 }
 
 // EnrollResponse tells the host who it is and which service key signs its
-// jobs. TokenMAC lets the host check that the reply came from a party that
+// jobs. The binding is not active yet: an administrator must compare the
+// host key fingerprint (HostKeyID, also printed by the host) with the one the
+// service shows and approve it. Until then polls are refused with
+// key_approval_pending. TokenMAC lets the host check that the reply came from a party that
 // knows the one-time token, so a substituted job key is detected even before
 // the first job arrives.
 type EnrollResponse struct {
@@ -240,4 +244,38 @@ type PollResponse struct {
 // resynchronise its counter. It is sent only after the signature verified.
 type SequenceRejection struct {
 	LastAcceptedSequence uint64 `json:"last_accepted_sequence"`
+}
+
+// ResyncRequest is sealed under DomainResync with the enrolled host key. A
+// host that lost its sequence counter (crash before persisting, disk wipe)
+// sends it to reset the service's last accepted sequence to zero, then
+// continues from sequence 1. It carries no sequence of its own: replay is
+// bounded by the timestamp skew (MaxClockSkew) and the service's nonce
+// window, which keeps every nonce for twice the skew. A resync never
+// re-enables a request older than the skew bound, because every signed
+// request also carries a timestamp.
+type ResyncRequest struct {
+	HostID      string `json:"host_id"`
+	Nonce       string `json:"nonce"`
+	TimestampMS int64  `json:"timestamp_ms"`
+	// Reason is a short code such as counter-lost or disk-restored.
+	Reason string `json:"reason"`
+}
+
+// Check validates the request shape and the timestamp skew.
+func (r ResyncRequest) Check(now time.Time) error {
+	if !validID(r.HostID) || !validNonce(r.Nonce) || !reasonPattern.MatchString(r.Reason) {
+		return errors.New("hostproto: resync fields invalid")
+	}
+	skew := now.Sub(time.UnixMilli(r.TimestampMS))
+	if skew > MaxClockSkew || skew < -MaxClockSkew {
+		return errors.New("hostproto: timestamp is outside the allowed clock skew")
+	}
+	return nil
+}
+
+// ResyncResponse confirms the reset.
+type ResyncResponse struct {
+	LastAcceptedSequence uint64 `json:"last_accepted_sequence"`
+	ServerTimeMS         int64  `json:"server_time_ms"`
 }

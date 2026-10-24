@@ -35,6 +35,7 @@ const (
 	DomainPoll   = "agentgate.hostd.poll.v1"   // host -> service, PollRequest
 	DomainEvents = "agentgate.hostd.events.v1" // host -> service, EventsRequest
 	DomainJob    = "agentgate.hostd.job.v1"    // service -> host, Job, signed by the service job key
+	DomainResync = "agentgate.hostd.resync.v1" // host -> service, ResyncRequest
 )
 
 const signaturePrefix = "agentgate-hostproto-v1"
@@ -96,7 +97,7 @@ func signingInput(domain, keyID string, payload []byte) []byte {
 
 func knownDomain(domain string) bool {
 	switch domain {
-	case DomainEnroll, DomainPoll, DomainEvents, DomainJob:
+	case DomainEnroll, DomainPoll, DomainEvents, DomainJob, DomainResync:
 		return true
 	}
 	return false

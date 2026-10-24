@@ -340,3 +340,20 @@ func TestEnrollmentBindingAndSecretBox(t *testing.T) {
 		t.Fatal("truncated ciphertext framed")
 	}
 }
+
+func TestResyncRequestRules(t *testing.T) {
+	r := ResyncRequest{HostID: targetID, Nonce: fixedNonce, TimestampMS: fixedNow.UnixMilli(), Reason: "counter-lost"}
+	if err := r.Check(fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := Seal(DomainResync, hostKey(), r)
+	golden(t, "resync.json", env)
+	stale := r
+	stale.TimestampMS = fixedNow.Add(-2 * time.Minute).UnixMilli()
+	if stale.Check(fixedNow) == nil {
+		t.Fatal("stale resync accepted")
+	}
+	if _, err := Verify(env, DomainPoll, hostKey().Public().(ed25519.PublicKey)); err == nil {
+		t.Fatal("a resync verified as a poll")
+	}
+}
