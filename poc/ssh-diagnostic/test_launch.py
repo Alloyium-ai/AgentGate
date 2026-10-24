@@ -48,13 +48,15 @@ def spec(**changes):
     return value
 
 
-def job(launch_id='launch-1', grace=1, log_limit=1 << 20, upload=4096, **spec_changes):
+def job(launch_id='launch-1', grace=1, log_limit=1 << 20, upload=4096, mounts=None, lifetime=None, **spec_changes):
     launch_spec = spec(**spec_changes)
-    policy = dict(copy.deepcopy(FULL_POLICY), mode=launch_spec['mode'], duration_seconds=launch_spec['lifetime_seconds'])
+    lifetime = launch_spec['lifetime_seconds'] if lifetime is None else lifetime
+    policy = dict(copy.deepcopy(FULL_POLICY), mode=launch_spec['mode'], duration_seconds=lifetime)
     return {'version': 'agentgate.launcher-job.v1', 'launch_id': launch_id, 'job_id': 'job-' + launch_id,
             'spec': launch_spec, 'spec_digest': 'c' * 64, 'policy': policy, 'policy_digest': 'd' * 64,
             'profile_policy_digest': 'e' * 64, 'stop_grace_seconds': grace, 'log_limit_bytes': log_limit,
-            'upload_limit_bytes': upload}
+            'upload_limit_bytes': upload, 'lifetime_seconds': lifetime, 'mounts': mounts or [],
+            'expires_at_ms': int(time.time() * 1000) + 3_600_000}
 
 
 def raw(value):
@@ -289,6 +291,7 @@ class LaunchRunTest(LaunchTestCase):
         value = job(grace=2)
         value['spec']['mode'], value['spec']['lifetime_seconds'] = 'session', 600
         value['policy'].update(mode='session', duration_seconds=600)
+        value['lifetime_seconds'] = 600
         value['spec']['agent']['command'] = ['sleep', '30']
         host = self.host(deadline_s=30)
         directory = self.launches / 'launch-1'
@@ -688,3 +691,42 @@ class RealHostTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ExpiryAndHostCommandsTest(LaunchTestCase):
+    def test_the_signed_expiry_caps_the_host_deadline(self):
+        value = job(grace=0)
+        value['spec']['mode'], value['spec']['lifetime_seconds'] = 'session', 600
+        value['policy'].update(mode='session', duration_seconds=600)
+        value['lifetime_seconds'] = 600
+        value['expires_at_ms'] = int(time.time() * 1000) + 700
+        value['spec']['agent']['command'] = ['sleep', '30']
+        started = time.monotonic()
+        receipt, _, _ = self.run_job(value, self.host(deadline_s=600))
+        self.assertLess(time.monotonic() - started, 6)
+        self.assertEqual(receipt['state'], 'expired')
+
+    def test_pull_takes_only_digest_references(self):
+        host = self.host()
+        calls = []
+        host.run = lambda args, **kwargs: calls.append(args) or subprocess.CompletedProcess(args, 0, b'', b'')
+        for bad in ('ubuntu:latest', 'ubuntu', 'sha256:' + 'a' * 64, '--help@sha256:' + 'a' * 64):
+            with self.subTest(bad=bad), self.assertRaises(JobError):
+                launch.pull_image(host, bad)
+        launch.pull_image(host, 'agentgate-coding@sha256:' + 'a' * 64)
+        self.assertEqual(calls, [['/usr/bin/docker', 'pull', '--quiet', 'agentgate-coding@sha256:' + 'a' * 64]])
+
+    def test_stage_profile_validates_natively_and_changes_no_policy(self):
+        host = self.host()
+        good = subprocess.CompletedProcess([], 0, json.dumps({'digest': 'd' * 64, 'document': {'version': 'agentgate.poc.v2'}}).encode(), b'')
+        host.run = lambda args, **kwargs: good
+        result = launch.stage_profile(self.root, host, 'a' * 32, '3', raw(FULL_POLICY))
+        self.assertEqual(result, {'policy_digest': 'd' * 64, 'version': 'agentgate.poc.v2', 'launchable': True})
+        self.assertTrue((self.root / 'profiles' / ('a' * 32 + '-3.json')).exists())
+        self.assertFalse((self.root / 'policy.json').exists())
+        host.run = lambda args, **kwargs: subprocess.CompletedProcess([], 1, b'', b'duplicate JSON key')
+        with self.assertRaisesRegex(JobError, 'duplicate JSON key'):
+            launch.stage_profile(self.root, host, 'b' * 32, '1', b'{}')
+        for profile_id, version in (('../x', '1'), ('a' * 32, 'x'), ('a' * 32, '0')):
+            with self.assertRaises(JobError):
+                launch.stage_profile(self.root, host, profile_id, version, b'{}')

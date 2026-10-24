@@ -29,6 +29,24 @@ class LifetimeTest(unittest.TestCase):
                     with self.assertRaises(JobError):
                         check_job(raw(value), CAPS)
 
+    def test_effective_lifetime_never_exceeds_the_spec_or_the_mode_bounds(self):
+        value = job(mode='session', lifetime_seconds=3600, lifetime=1800)
+        self.assertEqual(check_job(raw(value), CAPS)['lifetime_seconds'], 1800)
+        for lifetime in (3601, 59, 0):
+            with self.subTest(lifetime=lifetime), self.assertRaises(JobError):
+                check_job(raw(job(mode='session', lifetime_seconds=3600, lifetime=lifetime)), CAPS)
+        value = job(mode='session', lifetime_seconds=3600, lifetime=1800)
+        value['policy']['duration_seconds'] = 3600
+        with self.assertRaises(JobError):
+            check_job(raw(value), CAPS)
+
+    def test_the_canonical_spec_may_carry_empty_optional_fields(self):
+        value = job(target='', approval='', secrets=None)
+        value['spec']['agent'].update(env={}, workdir='')
+        value['spec']['mounts'] = None
+        launch = check_job(raw(value), CAPS)
+        self.assertEqual((launch['workdir'], launch['env']), ('/var/lib/agentgate/workspace', {}))
+
     def test_policy_must_carry_the_same_mode_and_lifetime(self):
         for change in ({'mode': 'session'}, {'duration_seconds': 25}, {'version': 'agentgate.network-poc.v1'}):
             value = job()

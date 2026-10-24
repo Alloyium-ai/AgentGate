@@ -158,7 +158,13 @@ def check_env(env):
     return out
 
 
-def check_spec(spec, capabilities):
+def optional(value, empty):
+    """The service's canonical spec may carry an empty value for an optional field."""
+    return empty if value in (None, '', [], {}) else value
+
+
+def check_spec(spec, capabilities, mounts):
+    """Validate the launch spec; mounts are the job's resolved mounts (already checked)."""
     if not isinstance(spec, dict):
         raise JobError('the launch spec must be an object')
     allowed = {'version', 'name', 'target', 'mode', 'lifetime_seconds', 'agent', 'access', 'mounts',
@@ -175,13 +181,15 @@ def check_spec(spec, capabilities):
         raise JobError('mode must be oneshot or session')
     low, high = LIFETIMES[mode]
     integer(spec['lifetime_seconds'], mode + ' lifetime_seconds', low, high)
-    if 'target' in spec:
+    if optional(spec.get('target'), None) is not None:
         text(spec['target'], 'target', None, 128)
-    if 'approval' in spec:
+    if optional(spec.get('approval'), None) is not None:
         text(spec['approval'], 'approval', None, 32)
     if not isinstance(spec['access'], dict) or not spec['access']:
         raise JobError('access must name a profile version or embed a document')
-    secrets = spec.get('secrets', [])
+    if not isinstance(optional(spec.get('mounts'), []), list):
+        raise JobError('spec mounts must be a list')
+    secrets = optional(spec.get('secrets'), [])
     if not isinstance(secrets, list):
         raise JobError('secrets must be a list')
     if secrets:
@@ -200,21 +208,28 @@ def check_spec(spec, capabilities):
     for argument in command:
         text(argument, 'agent.command argument', None, MAX_ARG_BYTES)
     check_program(command[0])
-    mounts = check_mounts(spec.get('mounts', []), capabilities)
-    env = check_env(agent.get('env'))
-    workdir = check_workdir(agent.get('workdir'), mounts)
+    env = check_env(optional(agent.get('env'), None))
+    workdir = check_workdir(optional(agent.get('workdir'), None), mounts)
     if sum(len(item.encode()) for item in command) + sum(len(k) + len(v.encode()) for k, v in env.items()) > \
             MAX_COMMAND_BYTES:
         raise JobError('agent command and environment exceed %d bytes' % MAX_COMMAND_BYTES)
     return {'name': spec['name'], 'mode': mode, 'lifetime_seconds': spec['lifetime_seconds'], 'image': image,
-            'command': list(command), 'env': env, 'workdir': workdir, 'mounts': mounts}
+            'command': list(command), 'env': env, 'workdir': workdir, 'spec_lifetime_seconds': spec['lifetime_seconds']}
 
 
 def check_job(raw, capabilities):
-    """Return the validated launch, or raise JobError. raw is the job's bytes."""
+    """Return the validated launch, or raise JobError. raw is the job's bytes.
+
+    lifetime_seconds is the effective lifetime: the spec lifetime, shortened
+    by the host to what remains before the job's signed expiry. mounts are the
+    resolved mounts of the signed job. policy is the effective launch document
+    and policy_digest its native digest; profile_policy_digest is the digest
+    of the exact policy bytes the service signed.
+    """
     job = parse_json(raw)
     wanted = {'version', 'launch_id', 'job_id', 'spec', 'spec_digest', 'policy', 'policy_digest',
-              'profile_policy_digest', 'stop_grace_seconds', 'log_limit_bytes', 'upload_limit_bytes'}
+              'profile_policy_digest', 'stop_grace_seconds', 'log_limit_bytes', 'upload_limit_bytes',
+              'lifetime_seconds', 'mounts', 'expires_at_ms'}
     if not isinstance(job, dict) or set(job) != wanted or job['version'] != JOB_VERSION:
         raise JobError('launcher job fields differ from ' + JOB_VERSION)
     text(job['launch_id'], 'launch id', LAUNCH_ID, 64)
@@ -224,10 +239,16 @@ def check_job(raw, capabilities):
     integer(job['stop_grace_seconds'], 'stop_grace_seconds', 0, MAX_STOP_GRACE_S)
     integer(job['log_limit_bytes'], 'log_limit_bytes', 4096, MAX_LOG_BYTES)
     integer(job['upload_limit_bytes'], 'upload_limit_bytes', 0, MAX_UPLOAD_BYTES)
-    spec = check_spec(job['spec'], capabilities)
+    integer(job['expires_at_ms'], 'expires_at_ms', 1, 1 << 53)
+    mounts = check_mounts(job['mounts'], capabilities)
+    spec = check_spec(job['spec'], capabilities, mounts)
+    low, high = LIFETIMES[spec['mode']]
+    lifetime = integer(job['lifetime_seconds'], 'effective lifetime_seconds', low, min(high, spec['lifetime_seconds']))
+    spec['lifetime_seconds'] = lifetime
+    spec['mounts'] = mounts
     policy = job['policy']
     if not isinstance(policy, dict) or policy.get('mode') != spec['mode'] or \
-       policy.get('duration_seconds') != spec['lifetime_seconds'] or policy.get('version') != 'agentgate.poc.v2':
+       policy.get('duration_seconds') != lifetime or policy.get('version') != 'agentgate.poc.v2':
         raise JobError('the effective policy must be a version two launch document with the launch mode and lifetime')
     if not isinstance(policy.get('filesystem'), dict):
         raise JobError('a launch policy needs its filesystem section')
@@ -235,7 +256,7 @@ def check_job(raw, capabilities):
             'policy': policy, 'policy_digest': job['policy_digest'],
             'profile_policy_digest': job['profile_policy_digest'],
             'stop_grace_seconds': job['stop_grace_seconds'], 'log_limit_bytes': job['log_limit_bytes'],
-            'upload_limit_bytes': job['upload_limit_bytes'], **spec}
+            'upload_limit_bytes': job['upload_limit_bytes'], 'expires_at_ms': job['expires_at_ms'], **spec}
 
 
 def shell_command(launch):

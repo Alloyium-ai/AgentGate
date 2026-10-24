@@ -22,8 +22,10 @@ Commands (exit 0 success, 1 failure, 2 invalid input, 75 busy):
   logs ID stdout|stderr OFFSET LIMIT
   reconcile [--reason R]   tear down every launch whose runtime is gone
   capabilities
-  apply-profile            read a profile (policy) document on stdin; install it for SSH commands
-  snapshot NAME SOURCE     snapshot a local folder for snapshot mounts (Docker host only)
+  stage-profile ID VERSION read a profile document on stdin; validate it natively and stage a copy
+  pull NAME@sha256:DIGEST  pull one digest-pinned image
+  snapshot NAME SOURCE [--max-bytes N] [--max-entries N]
+                           snapshot a local folder for snapshot mounts (Docker host only)
   install-snapshot NAME SOURCE ARCHIVE
 """
 import base64
@@ -59,7 +61,7 @@ EXPIRY_GRACE_S = 5
 OBJECTS = ('network_policy.bpf.o', 'fs_access.bpf.o', 'process_guard.bpf.o')
 MAX_GUARD_RECEIPT = 16 << 20
 UPLOAD_DENIALS = 100
-UPLOAD_CHUNK = 32 << 10
+UPLOAD_CHUNK = 4 << 10
 MAX_LOG_READ = 1 << 20
 EVENT_QUEUE = 512
 RECEIPT_VERSION = 'agentgate.launch-receipt.v1'
@@ -653,6 +655,10 @@ def run_launch(raw, host, launches, emitter, supervisor_alive, signalled=lambda:
         checkpoint()
         identity = host.command_identity()
         config, guard_ok, target = host.bind()
+        # The signed expiry is a hard cap too: the host deadline is the earlier
+        # of the lifetime (start-guard.sh) and the expiry, on the monotonic clock.
+        remaining_ns = (launch['expires_at_ms'] - int(time.time() * 1000)) * 1_000_000
+        config['deadline_ns'] = min(int(config['deadline_ns']), time.monotonic_ns() + max(remaining_ns, 0))
         record.update('running', command=identity, deadline_ns=config['deadline_ns'])
         emitter.emit({'event': 'state', 'state': 'running', 'launch_id': launch['launch_id'],
                       'policy_digest': launch['policy_digest'], 'image_id': launch['image_id']})
@@ -829,33 +835,39 @@ def read_log(directory, stream, offset, limit):
         os.close(fd)
 
 
-def apply_profile(root, host, raw):
-    """Install a profile document as the instance's SSH command policy, between commands."""
-    import gateway
+def stage_profile(root, host, profile_id, version, raw):
+    """Pre-check a profile with the native validator and stage a copy. Running launches never change."""
+    if not launch_job.LAUNCH_ID.fullmatch(profile_id) or not version.isdigit() or not 0 < int(version) < 1 << 31:
+        raise JobError('usage: stage-profile PROFILE_ID VERSION < policy.json')
     document = launch_job.parse_json(raw, 16384)
-    if not isinstance(document, dict) or 'mode' in document:
-        raise JobError('a profile for SSH commands has no launch mode')
-    fd = acquire(root)
-    try:
-        pending = Path(root) / 'policy.pending.json'
-        write_private(pending, raw)
-        done = host.run([str(Path(root) / 'pilot-network-diagnostic'), 'network-info', str(pending)],
-                        capture_output=True, timeout=10, env={'PATH': '/usr/bin:/bin'})
-        if done.returncode != 0:
-            pending.unlink()
-            raise JobError('the native validator rejected the profile: ' + done.stderr.decode(errors='replace')[-800:])
-        info = json.loads(done.stdout)
-        from urllib.parse import urlsplit
-        board, url = info['document']['taskboard'], urlsplit(host.settings['taskboard_url'])
-        if board['address'] != url.hostname or board['port'] != url.port or board['task_id'] != host.settings['task_id']:
-            pending.unlink()
-            raise JobError('profile taskboard differs from the isolated bridge; configure a new instance')
-        os.replace(pending, Path(root) / 'policy.json')
-        gateway.append_audit(str(Path(root) / 'operator-events.jsonl'),
-                             {'scope': 'apply-profile', 'policy_digest': info['digest'], 'finished_at': utc_now()})
-        return {'policy_digest': info['digest']}
-    finally:
-        os.close(fd)
+    if not isinstance(document, dict):
+        raise JobError('a profile is one JSON object')
+    staged = Path(root) / 'profiles'
+    staged.mkdir(mode=0o700, exist_ok=True)
+    path = staged / ('%s-%s.json' % (profile_id, version))
+    pending = staged / ('.%s-%s.pending.json' % (profile_id, version))
+    write_private(pending, raw)
+    done = host.run([str(Path(root) / 'pilot-network-diagnostic'), 'network-info', str(pending)],
+                    capture_output=True, timeout=10, env={'PATH': '/usr/bin:/bin'})
+    if done.returncode != 0:
+        pending.unlink()
+        raise JobError('the native validator rejected the profile: ' + done.stderr.decode(errors='replace')[-800:])
+    info = json.loads(done.stdout)
+    os.replace(pending, path)
+    # A launch needs a version two document; a version one profile serves SSH commands only.
+    return {'policy_digest': info['digest'], 'version': info['document']['version'],
+            'launchable': info['document']['version'] == 'agentgate.poc.v2' and 'mode' not in document}
+
+
+def pull_image(host, reference):
+    """Pull one digest-pinned image; a tag is never pulled."""
+    if not launch_job.IMAGE_REFERENCE.fullmatch(reference):
+        raise JobError('only NAME@sha256:DIGEST images are pulled')
+    done = host.run(['/usr/bin/docker', 'pull', '--quiet', reference], capture_output=True, timeout=1800,
+                    env={'PATH': '/usr/bin:/bin'})
+    if done.returncode != 0:
+        raise LaunchError('docker pull failed: ' + done.stderr.decode(errors='replace')[-800:])
+    return {'pulled': reference}
 
 
 def install_share(root, name, source, archive):
@@ -869,14 +881,16 @@ def install_share(root, name, source, archive):
     return identity
 
 
-def snapshot_local(root, name, source):
+def snapshot_local(root, name, source, max_bytes=None, max_entries=None):
     import mounts
     mounts.check_name(name)
     mounts.check_source_rules(source, forbidden=(str(root),), home=None)
     mounts.check_live_directory(source)
+    max_bytes = min(max_bytes or mounts.SNAPSHOT_MAX_BYTES, mounts.SNAPSHOT_MAX_BYTES)
+    max_entries = min(max_entries or mounts.SNAPSHOT_MAX_ENTRIES, mounts.SNAPSHOT_MAX_ENTRIES)
     with tempfile.TemporaryDirectory(dir=str(root)) as directory:
         archive = Path(directory) / 'share.tar'
-        mounts.build_snapshot(source, archive)
+        mounts.build_snapshot(source, archive, max_bytes, max_entries)
         return install_share(root, name, source, archive)
 
 
@@ -980,13 +994,20 @@ def main(argv, host_factory=Host, root=ROOT, stdin=None, stdout=None):
             raise JobError('usage: reconcile [--reason host_restarted|launcher_lost]')
         out(reconcile_all(root, host, reason))
         return 0
-    if command == 'apply-profile' and not args:
-        out(apply_profile(root, host, stdin.read(16385)))
+    if command == 'stage-profile' and len(args) == 2:
+        out(stage_profile(root, host, args[0], args[1], stdin.read(16385)))
         return 0
-    if command == 'snapshot' and len(args) == 2:
+    if command == 'pull' and len(args) == 1:
+        out(pull_image(host, args[0]))
+        return 0
+    if command == 'snapshot':
+        max_bytes = option(args, '--max-bytes', None)
+        max_entries = option(args, '--max-entries', None)
+        if len(args) != 2:
+            raise JobError('usage: snapshot NAME SOURCE [--max-bytes N] [--max-entries N]')
         fd = acquire(root)
         try:
-            out(snapshot_local(root, args[0], args[1]))
+            out(snapshot_local(root, args[0], args[1], max_bytes, max_entries))
         finally:
             os.close(fd)
         return 0

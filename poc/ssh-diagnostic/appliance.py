@@ -16,7 +16,7 @@ import shlex
 import subprocess
 import sys
 
-from appliance_common import (DEFAULT_BASE, LABEL, admin, inspect_owned,
+from appliance_common import (DEFAULT_BASE, LABEL, admin, copy_guest, inspect_owned,
     load, output, preflight, protected, ready_command, run, ssh, state_directory, wait_guest, write)
 from appliance_build import build, revision
 from appliance_guest import GUEST, audit, configure, health, transition
@@ -165,7 +165,69 @@ def apply_policy(state, binding, file):
         raise RuntimeError(str(error)) from None
 
 
+# Launch runtime commands the host agent may run in the guest.
+GUEST_COMMANDS = ('run', 'stop', 'status', 'receipt', 'list', 'logs', 'reconcile', 'capabilities', 'stage-profile',
+                  'pull', 'snapshot')
+
+
+def guest_launch(argv, runner=subprocess.run, stdin=None, stdout=None):
+    """Run one launch runtime command inside the appliance guest for agentgate-hostd.
+
+    Usage: appliance.py guest-launch --state DIR -- COMMAND ARGS...
+    Standard input, output and the exit code pass through the pinned management
+    SSH connection. A snapshot is built here, from this machine's folder, and
+    copied into the guest, because the guest cannot see host files.
+    """
+    if len(argv) < 4 or argv[0] != '--state' or argv[2] != '--' or argv[3] not in GUEST_COMMANDS:
+        raise ValueError('usage: appliance.py guest-launch --state DIR -- ' + '|'.join(GUEST_COMMANDS) + ' ARGS...')
+    state = state_directory(argv[1], create=False)
+    binding = load(state)
+    item = inspect_owned(binding)
+    if not item or not item['State']['Running']:
+        raise RuntimeError('the appliance is not running; run appliance.py start')
+    args = argv[3:]
+    for value in args:
+        if '\x00' in value or '\n' in value or len(value) > 4096:
+            raise ValueError('invalid guest-launch argument')
+    if args[0] == 'snapshot':
+        return guest_snapshot(state, binding, args[1:], runner)
+    # Keepalives make a dead connection end the session: the guest runtime then
+    # sees its supervisor gone and tears the launch down.
+    command = ssh(state, binding)[:-1] + ['-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
+                                          'root@127.0.0.1', 'python3 -I ' + GUEST + '/launch.py ' + shlex.join(args)]
+    done = runner(command, stdin=stdin or sys.stdin.buffer, stdout=stdout or sys.stdout.buffer)
+    return done.returncode
+
+
+def guest_snapshot(state, binding, args, runner):
+    import mounts
+    import tempfile
+    if len(args) < 2:
+        raise ValueError('usage: snapshot NAME SOURCE [--max-bytes N] [--max-entries N]')
+    name, source = mounts.check_name(args[0]), args[1]
+    limits = {'--max-bytes': mounts.SNAPSHOT_MAX_BYTES, '--max-entries': mounts.SNAPSHOT_MAX_ENTRIES}
+    rest = args[2:]
+    while rest:
+        if len(rest) < 2 or rest[0] not in limits or not rest[1].isdigit():
+            raise ValueError('invalid snapshot option')
+        limits[rest[0]] = min(int(rest[1]), limits[rest[0]])
+        rest = rest[2:]
+    mounts.check_source_rules(source, forbidden=(str(state),), home=str(Path.home()))
+    mounts.check_live_directory(source)
+    with tempfile.TemporaryDirectory(dir=str(state)) as directory:
+        archive = Path(directory) / 'share.tar'
+        mounts.build_snapshot(source, archive, limits['--max-bytes'], limits['--max-entries'])
+        remote = GUEST + '/.share-' + name + '.tar'
+        copy_guest(state, binding, archive, remote)
+    command = ssh(state, binding) + ['python3 -I ' + GUEST + '/launch.py install-snapshot ' +
+                                     shlex.join([name, source, remote]) + '; status=$?; rm -f ' + shlex.quote(remote) +
+                                     '; exit $status']
+    return runner(command).returncode
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'guest-launch':
+        return guest_launch(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == 'grant':
         # grant needs Docker only for the appliance validator; it takes the same state lock.
         return grants.main(sys.argv[2:], 'python3 ' + shlex.quote(sys.argv[0]) + ' grant')
