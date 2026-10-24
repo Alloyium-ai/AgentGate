@@ -67,7 +67,15 @@ def effective_policy(root, data):
     result = subprocess.check_output([str(root / 'pilot-network-diagnostic'),
                                       'network-info', str(path)], timeout=5)
     info = json.loads(result)
-    board = info['document']['taskboard']
+    document = info['document']
+    if document.get('broker') is not None:
+        # A launch with brokered secrets: the broker holds the single exact
+        # endpoint instead of the taskboard (the native validator allows a
+        # broker only in a launch document, never in an SSH command policy).
+        if document.get('mode') not in ('oneshot', 'session') or 'taskboard' in document:
+            raise ValueError('a broker endpoint belongs to one launch document')
+        return info
+    board = document['taskboard']
     url = urlsplit(data['taskboard_url'])
     if (board['address'] != url.hostname or board['port'] != url.port or
             board['task_id'] != data['task_id']):

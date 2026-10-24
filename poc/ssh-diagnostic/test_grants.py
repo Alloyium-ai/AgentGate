@@ -124,6 +124,12 @@ class ShowTest(GrantTestCase):
         self.assertEqual(data['digest'], self.validated()['digest'])
         self.assertEqual(data['host_folders'], [])
 
+    def test_the_endpoint_line_names_the_taskboard_or_a_launch_broker(self):
+        board = {'address': '10.10.10.10', 'protocol': 'tcp', 'port': 8080, 'task_id': 1}
+        self.assertIn('taskboard: 10.10.10.10 tcp/8080 task 1', grants.endpoint_line({'taskboard': board}))
+        line = grants.endpoint_line({'broker': {'address': '172.30.7.2', 'protocol': 'tcp', 'port': 8443}, 'mode': 'oneshot'})
+        self.assertIn('credential broker: 172.30.7.2 tcp/8443', line)
+
     def test_show_on_version_one_says_files_are_not_controlled(self):
         shutil.copyfile(V1_EXAMPLE, self.policy)
         out = self.ok('show')

@@ -23,10 +23,13 @@ func networkPolicyCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	// endpoint names the one exact private exception (the taskboard, or a
+	// launch's broker) so callers need not infer it from the document.
 	data := struct {
 		Digest   string             `json:"digest"`
 		Document pocpolicy.Document `json:"document"`
-	}{d.Digest(), d}
+		Endpoint pocpolicy.Endpoint `json:"endpoint"`
+	}{d.Digest(), d, d.Endpoint()}
 	encoded, err := json.Marshal(data)
 	if err == nil {
 		fmt.Println(string(encoded))

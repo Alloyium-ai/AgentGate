@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Dan Metcalf
 """Tests for the public diagnostic input boundary."""
+import json
 from pathlib import Path
 import unittest
+from unittest import mock
 
+import settings
 from settings import validate_settings
 
 
@@ -16,6 +19,23 @@ class SettingsTest(unittest.TestCase):
 
     def check(self, data):
         return validate_settings(data, Path('/var/lib/agentgate-poc-demo'))
+
+    def effective(self, document):
+        info = {'digest': 'd' * 64, 'document': document}
+        with mock.patch.object(settings, 'read_root_file', lambda path: b'{}'), \
+                mock.patch.object(settings.subprocess, 'check_output', lambda *a, **k: json.dumps(info).encode()):
+            return settings.effective_policy(Path('/var/lib/agentgate-poc-demo'), self.check(self.fixture()))
+
+    def test_effective_policy_binds_the_taskboard_or_takes_a_launch_broker(self):
+        board = {'address': '10.10.10.10', 'protocol': 'tcp', 'port': 8080, 'task_id': 1}
+        self.assertEqual(self.effective({'taskboard': board})['digest'], 'd' * 64)
+        with self.assertRaises(ValueError):
+            self.effective({'taskboard': dict(board, address='10.10.10.11')})
+        broker = {'address': '172.30.7.2', 'protocol': 'tcp', 'port': 8443}
+        self.assertEqual(self.effective({'broker': broker, 'mode': 'oneshot'})['document']['broker'], broker)
+        for document in ({'broker': broker}, {'broker': broker, 'mode': 'oneshot', 'taskboard': board}):
+            with self.subTest(document=document), self.assertRaises(ValueError):
+                self.effective(document)
 
     def test_values_derive_separate_owned_resources(self):
         result = self.check(self.fixture())

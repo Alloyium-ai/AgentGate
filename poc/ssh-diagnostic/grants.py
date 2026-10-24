@@ -1037,6 +1037,15 @@ def unmount_policy(document, path):
 # Display
 
 
+def endpoint_line(document):
+    """The one exact private endpoint: the instance taskboard, or a launch's broker (launch documents only)."""
+    broker = document.get('broker')
+    if broker is not None:
+        return '  credential broker: %s tcp/%d (this launch only; no taskboard)' % (broker['address'], broker['port'])
+    board = document['taskboard']
+    return '  taskboard: %s tcp/%d task %d (fixed for this instance)' % (board['address'], board['port'], board['task_id'])
+
+
 def summarize(ctx, info):
     document = info['document']
     fs = document.get('filesystem')
@@ -1049,8 +1058,7 @@ def summarize(ctx, info):
              '  dns resolvers: %s (udp and tcp port 53)' % ', '.join(document['dns']['resolvers']),
              '  public IPv4 web: %s' % (', '.join('%s (%s/%d)' % (name, WEB[name][0], WEB[name][1])
                                                   for name in WEB_ORDER if name in web) or 'none'),
-             '  taskboard: %s tcp/%d task %d (fixed for this instance)' % (
-                 document['taskboard']['address'], document['taskboard']['port'], document['taskboard']['task_id']),
+             endpoint_line(document),
              '  domains: not enforced; rules match addresses and ports, not hostnames']
     if fs is None:
         lines += ['filesystem: not controlled by a version one policy (read-only root, the workspace volume, and',

@@ -36,13 +36,36 @@ type Taskboard struct {
 	Port     int    `json:"port"`
 	TaskID   int    `json:"task_id"`
 }
+
+// Broker is the exact endpoint of one launch's credential broker. It takes
+// the guard's single exact private TCP exception that the taskboard holds
+// otherwise: a document names the taskboard or a broker, never both, until the
+// BPF policy supports several exact endpoints (see docs/BROKER.md).
+type Broker struct {
+	Address  string `json:"address"`
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
+}
+
+// Endpoint is the document's one exact private TCP exception.
+type Endpoint struct {
+	Kind     string `json:"kind"` // "taskboard" or "broker"
+	Address  string `json:"address"`
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
+	RuleID   string `json:"rule_id"`
+}
+
 type Document struct {
-	Version         string    `json:"version"`
-	Default         string    `json:"default"`
-	IPv6            string    `json:"ipv6"`
-	DNS             DNS       `json:"dns"`
-	Web             Web       `json:"web"`
-	Taskboard       Taskboard `json:"taskboard"`
+	Version string `json:"version"`
+	Default string `json:"default"`
+	IPv6    string `json:"ipv6"`
+	DNS     DNS    `json:"dns"`
+	Web     Web    `json:"web"`
+	// Taskboard is omitted only when a launch document carries a broker
+	// instead; every other document holds it, so existing digests are unchanged.
+	Taskboard       Taskboard `json:"taskboard,omitzero"`
+	Broker          *Broker   `json:"broker,omitempty"`
 	DurationSeconds int       `json:"duration_seconds"`
 	// Mode is empty for the one-command SSH POC, whose window stays exactly 25
 	// seconds. A launch document names "oneshot" or "session"; duration_seconds
@@ -155,11 +178,73 @@ func (d Document) Validate() error {
 		}
 		seen[key] = true
 	}
+	return d.validateEndpoint()
+}
+
+// Broker endpoint bounds: the broker refuses a privileged listen port.
+const (
+	BrokerMinPort = 1024
+	BrokerMaxPort = 65535
+)
+
+var metadataAddress = netip.MustParseAddr("169.254.169.254")
+
+// ValidBrokerEndpoint checks one broker endpoint: a canonical private
+// (RFC 1918) IPv4 address that is not loopback, link-local or a metadata
+// address, TCP, and a port the broker can bind unprivileged.
+func ValidBrokerEndpoint(address, protocol string, port int) error {
+	a, err := netip.ParseAddr(address)
+	if err != nil || !a.Is4() || a.String() != address || !a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() ||
+		a == metadataAddress || protocol != "tcp" || port < BrokerMinPort || port > BrokerMaxPort {
+		return fmt.Errorf("broker requires one canonical private IPv4 TCP endpoint (not loopback, link-local or metadata) with a port %d..%d", BrokerMinPort, BrokerMaxPort)
+	}
+	return nil
+}
+
+// validateEndpoint enforces the single exact-endpoint slot: the taskboard or a
+// broker, never both and never neither.
+func (d Document) validateEndpoint() error {
+	taskboard := d.Taskboard != (Taskboard{})
+	switch {
+	case taskboard && d.Broker != nil:
+		return errors.New("a policy has exactly one exact private endpoint: the taskboard or a broker, not both")
+	case d.Broker != nil:
+		if d.Mode == "" {
+			return errors.New("a broker endpoint belongs to one launch; it requires a launch mode")
+		}
+		return ValidBrokerEndpoint(d.Broker.Address, d.Broker.Protocol, d.Broker.Port)
+	}
 	a, err := netip.ParseAddr(d.Taskboard.Address)
 	if err != nil || !a.Is4() || a.String() != d.Taskboard.Address || !a.IsPrivate() || d.Taskboard.Protocol != "tcp" || d.Taskboard.Port < 1 || d.Taskboard.Port > 65535 || d.Taskboard.TaskID < 1 {
 		return errors.New("taskboard requires one canonical private IPv4 TCP endpoint and positive task_id")
 	}
 	return nil
+}
+
+// Endpoint names the document's one exact private exception and the rule
+// that Compile emits for it.
+func (d Document) Endpoint() Endpoint {
+	if d.Broker != nil {
+		return Endpoint{Kind: "broker", Address: d.Broker.Address, Protocol: d.Broker.Protocol, Port: d.Broker.Port, RuleID: "broker-exact"}
+	}
+	return Endpoint{Kind: "taskboard", Address: d.Taskboard.Address, Protocol: d.Taskboard.Protocol, Port: d.Taskboard.Port, RuleID: "taskboard-exact"}
+}
+
+// WithBroker returns the launch document with a broker endpoint in the
+// single exact-endpoint slot. The taskboard exception is removed: the guard
+// allows one exact private endpoint, and the broker's is the one this launch
+// needs. Only a launch document (with a mode) can carry a broker.
+func (d Document) WithBroker(address string, port int) (Document, error) {
+	if d.Mode == "" {
+		return d, errors.New("a broker endpoint requires a launch document")
+	}
+	if err := ValidBrokerEndpoint(address, "tcp", port); err != nil {
+		return d, err
+	}
+	out := d
+	out.Taskboard = Taskboard{}
+	out.Broker = &Broker{Address: address, Protocol: "tcp", Port: port}
+	return out, out.Validate()
 }
 
 // Launch modes and their lifetime bounds in seconds. The lifetime is the hard
@@ -212,6 +297,22 @@ func (d Document) ForLaunch(mode string, seconds int) (Document, error) {
 	return out, out.Validate()
 }
 
+// Shorten returns a launch document whose lifetime is seconds, which may only
+// be shorter than or equal to the signed lifetime. The host uses it when the
+// signed expiry leaves less than the full lifetime: ForLaunch refuses a
+// different lifetime for a document that already names a mode.
+func (d Document) Shorten(mode string, seconds int) (Document, error) {
+	if d.Mode == "" || d.Mode != mode {
+		return d, errors.New("only a launch document of the same mode can be shortened")
+	}
+	if seconds > d.DurationSeconds {
+		return d, errors.New("a launch lifetime can be shortened, never extended")
+	}
+	out := d
+	out.DurationSeconds = seconds
+	return out, out.Validate()
+}
+
 func (d Document) Digest() string {
 	raw, _ := json.Marshal(d)
 	sum := sha256.Sum256(raw)
@@ -234,7 +335,9 @@ func (d Document) Compile(now, deadline uint64) (netrules.Compiled, error) {
 	if now == 0 || now >= deadline {
 		return out, errors.New("network policy requires a live bounded deadline")
 	}
-	out.Policy = netrules.Policy{Generation: 1, ExpiresNS: deadline, PilotMode: 1, PilotFamily: netrules.IPv4, PilotPort: uint16(d.Taskboard.Port), PilotAddress: addrBytes(d.Taskboard.Address)}
+	// The single exact private exception: the taskboard, or a launch's broker.
+	endpoint := d.Endpoint()
+	out.Policy = netrules.Policy{Generation: 1, ExpiresNS: deadline, PilotMode: 1, PilotFamily: netrules.IPv4, PilotPort: uint16(endpoint.Port), PilotAddress: addrBytes(endpoint.Address)}
 	add := func(id, ip string, bits uint16, protocol uint8, port int, effect uint8) {
 		out.RuleIDs = append(out.RuleIDs, id)
 		r := netrules.Rule{Address: addrBytes(ip), PrefixBits: bits, Family: netrules.IPv4, Protocol: protocol, PortFrom: uint16(port), PortTo: uint16(port), Effect: effect, ExpiresNS: deadline, Index: uint32(len(out.RuleIDs))}
@@ -257,6 +360,6 @@ func (d Document) Compile(now, deadline uint64) (netrules.Compiled, error) {
 			add(fmt.Sprintf("reserved-%s-%d-%d", r.Protocol, r.Port, i), ip, 24, proto, r.Port, netrules.Deny)
 		}
 	}
-	add("taskboard-exact", d.Taskboard.Address, 32, netrules.TCP, d.Taskboard.Port, netrules.Allow)
+	add(endpoint.RuleID, endpoint.Address, 32, netrules.TCP, endpoint.Port, netrules.Allow)
 	return out, nil
 }
