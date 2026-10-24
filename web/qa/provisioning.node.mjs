@@ -185,6 +185,23 @@ test("version diffs list added, removed and changed permissions", (t) => {
   assert.ok(M.diffDocuments(undefined, fullExample).length > 5);
 });
 
+// The service computes the grant change list in Go (internal/control
+// PolicyChanges). These fixtures are answers of the real service, recorded by
+// TestWebFixturesAreRealServiceAnswers; the UI's own diff must agree.
+const fixture = (name) => JSON.parse(repo(`web/qa/fixtures/api/${name}`) ?? "null");
+const rowsOf = (list) => list.map(({ area, field, change, before, after }) => ({ area, field, change, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}) }));
+
+test("the service's grant change list equals the UI's diff (real service answers)", () => {
+  const dry = fixture("grant-dry-run.json");
+  assert.equal(dry.response.dry_run, true);
+  assert.equal(dry.response.from_digest, dry.parent.digest);
+  assert.ok(dry.response.changes.length >= 3, "the fixture exercises several areas");
+  assert.deepEqual(rowsOf(M.diffDocuments(dry.parent.document, dry.response.document)), rowsOf(dry.response.changes));
+  const applied = fixture("grant-applied.json");
+  assert.equal(applied.response.version.digest, dry.response.digest, "the preview predicts the stored version");
+  assert.deepEqual(rowsOf(M.diffDocuments(applied.parent.document, applied.response.version.document)), rowsOf(applied.response.changes));
+});
+
 test("typed edits are described with their risk and pre-checked", () => {
   assert.equal(M.describeEdit({ action: "exec", values: ["/opt/tool"] }).risk, "medium");
   assert.match(M.describeEdit({ action: "write", values: ["/data"] }).text, /never be executable/);

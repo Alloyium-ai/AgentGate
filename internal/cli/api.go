@@ -82,12 +82,43 @@ type ProfileVersion struct {
 	Created   string          `json:"created_at"`
 }
 
-// GrantResult is the answer to a grants request.
+// GrantEdit is one typed access edit, as the grants endpoint takes it. The
+// CLI only builds it from the command line; the service applies it.
+type GrantEdit struct {
+	Action      string   `json:"action"`
+	Kind        string   `json:"kind,omitempty"`
+	Values      []string `json:"values,omitempty"`
+	Mode        string   `json:"mode,omitempty"`
+	UpgradeToV2 bool     `json:"upgrade_to_v2,omitempty"`
+}
+
+// grantRevokeKinds and maxGrantValues repeat the service's bounds for usage
+// messages before anything is sent (a test compares them with internal/access).
+var grantRevokeKinds = []string{"web", "dns", "read", "write", "exec", "deny", "signal", "anon-exec", "mount"}
+
+const maxGrantValues = 16
+
+// PolicyChange is one row of the service's structured change list.
+type PolicyChange struct {
+	Area   string `json:"area"`
+	Field  string `json:"field"`
+	Change string `json:"change"`
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+}
+
+// GrantResult is the answer to a grants request or its dry run.
 type GrantResult struct {
-	Changed  bool           `json:"changed"`
-	Version  ProfileVersion `json:"version"`
-	Messages []string       `json:"messages"`
-	Notices  []string       `json:"notices"`
+	DryRun      bool            `json:"dry_run,omitempty"`
+	Changed     bool            `json:"changed"`
+	Version     ProfileVersion  `json:"version"`
+	Document    json.RawMessage `json:"document,omitempty"`
+	FromVersion int             `json:"from_version"`
+	FromDigest  string          `json:"from_digest"`
+	Digest      string          `json:"digest"`
+	Changes     []PolicyChange  `json:"changes"`
+	Messages    []string        `json:"messages"`
+	Notices     []string        `json:"notices"`
 }
 
 // Permissions summarizes what an effective policy allows.

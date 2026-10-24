@@ -54,9 +54,9 @@ what was requested; it never presents a permission as proven behavior.
    Processes (signals) and Memory (executable anonymous memory), plus *Replace with a preset*. Each control stages one
    typed grant edit (at most 16) with a plain-language description and risk, for example "Let the agent run programs
    from /opt/tool. It must not overlap a writable folder." Paths are pre-checked like `access.ContainerPath`.
-5. **Preview (dry run)** sends the staged edits with `"dry_run": true` and shows the service's resulting diff, messages
-   and notices without storing anything. Today's service does not accept the field and refuses the request (`422
-   schema_constraint`) before anything changes; the page then says the dry run is unavailable. See Backend requests.
+5. **Preview (dry run)** sends the staged edits with `"dry_run": true` and shows the service's answer without storing
+   anything: whether a version would be created, the parent and result digests, the service's change list (the same rows
+   the version diff uses), and its messages and notices. A refused edit shows the service's code and message.
 6. **Apply as version N+1** sends the edits to `POST /profiles/{id}/versions/{n}/grants` on the latest version. The page
    shows the new version's digest, the diff from its parent and the service's messages and notices verbatim; that result
    stays on the page after the editor moves to the new latest version. A refused edit shows the service's code and

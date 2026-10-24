@@ -270,7 +270,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/profiles/{id}` | GET, PATCH | viewer, admin | detail; change `require_approval` (admin only) |
 | `/profiles/{id}/versions` | GET, POST | viewer, editor | immutable versions; a new version names the latest as its parent |
 | `/profiles/{id}/versions/{n}` | GET | viewer | one version with its document and digest |
-| `/profiles/{id}/versions/{n}/grants` | POST | editor | 1 to 16 typed edits (read, write, exec, deny, allow-web, deny-web, dns, signal, anon-exec, mount, unmount, preset, revoke) on the latest version, producing a new version or a no-op |
+| `/profiles/{id}/versions/{n}/grants` | POST | editor | 1 to 16 typed edits (read, write, exec, deny, allow-web, deny-web, dns, signal, anon-exec, mount, unmount, preset, revoke) on the latest version, producing a new version or a no-op; `"dry_run": true` answers the same (document, `from_digest`, `digest`, `changes`) and stores nothing |
 | `/access-presets` | GET | viewer | presets, edit actions and revoke kinds |
 | `/launches` | GET, POST | viewer, launcher | list (`?state=`); create from a spec (validates, returns the plan) |
 | `/launch-plans` | POST | launcher | the plan for a spec, creating nothing (`agentgate launch --dry-run`) |
@@ -338,8 +338,8 @@ agentgate schema launch-spec | completion bash|zsh|fish | version
   brokered secrets by name, lifetime and expiry, and every approval reason. `launch --wait` follows the event stream
   (resuming with `Last-Event-ID`) through `approval_pending` to `running`; interrupting it never stops the launch.
 - `grant` sends one typed edit to `/profiles/{id}/versions/{n}/grants` and prints the diff of the version the service
-  stored. The service has no grant preview endpoint, so `grant --dry-run` applies the same engine (`internal/access`)
-  locally to the latest version and sends nothing; a `dry_run` flag on the grants endpoint would replace that.
+  stored. `grant --dry-run` sends the same edit with `"dry_run": true`; the service answers with the resulting document,
+  digests and change list and stores nothing. The CLI holds no grant engine.
 - `secret set` reads the value from a hidden prompt or stdin, never argv or the environment. It requires a client-side
   pin of the target's approved `host_key_id` (`~/.config/agentgate/known-targets.json`, written by `target approve-key`,
   `target pin` or `up`), fetches `GET /targets/{id}/seal-key` (see

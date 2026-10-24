@@ -12,9 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"alloyium.local/kernel-poc/internal/access"
-	"alloyium.local/kernel-poc/internal/pocpolicy"
 )
 
 const maxDocumentBytes = 16 << 10
@@ -88,7 +85,7 @@ Flags:
   --mode MODE     mount access mode (default read-only)
   --upgrade       allow upgrading a version one profile to version two
   --reason TEXT   audit reason (default: a description of the edit)
-  --dry-run       preview the change and print the diff; nothing is stored
+  --dry-run       the service computes the change and its diff; nothing is stored
 The edit always applies to the latest version; the CLI never edits the policy document itself.`,
 		setup: func(fs *flag.FlagSet) runner {
 			mode := fs.String("mode", "read-only", "")
@@ -108,9 +105,9 @@ The edit always applies to the latest version; the CLI never edits the policy do
 		}})
 }
 
-// parseGrant maps the grant command line to one access.Edit.
-func parseGrant(action string, values []string, mode string, upgrade bool) (access.Edit, error) {
-	edit := access.Edit{Action: action, Values: values, UpgradeToV2: upgrade}
+// parseGrant maps the grant command line to one typed edit.
+func parseGrant(action string, values []string, mode string, upgrade bool) (GrantEdit, error) {
+	edit := GrantEdit{Action: action, Values: values, UpgradeToV2: upgrade}
 	need := func(min, max int, what string) error {
 		if len(values) < min || (max >= 0 && len(values) > max) {
 			return usageError("grant %s takes %s", action, what)
@@ -122,10 +119,10 @@ func parseGrant(action string, values []string, mode string, upgrade bool) (acce
 	case "read", "write", "exec", "deny":
 		err = need(1, 1, "one absolute path")
 	case "web":
-		edit.Action = access.ActionAllowWeb
+		edit.Action = "allow-web"
 		if len(values) > 0 && (values[0] == "allow" || values[0] == "deny") {
 			if values[0] == "deny" {
-				edit.Action = access.ActionDenyWeb
+				edit.Action = "deny-web"
 			}
 			edit.Values = values[1:]
 		}
@@ -149,7 +146,7 @@ func parseGrant(action string, values []string, mode string, upgrade bool) (acce
 		err = need(1, 1, "one preset name")
 	case "revoke":
 		if len(values) < 1 {
-			return edit, usageError("grant revoke takes a kind (%s) and its values", strings.Join(access.RevokeKinds, ", "))
+			return edit, usageError("grant revoke takes a kind (%s) and its values", strings.Join(grantRevokeKinds, ", "))
 		}
 		edit.Kind, edit.Values = values[0], values[1:]
 	default:
@@ -158,13 +155,13 @@ func parseGrant(action string, values []string, mode string, upgrade bool) (acce
 	if len(edit.Values) == 0 {
 		edit.Values = nil
 	}
-	if len(edit.Values) > access.MaxValues {
-		return edit, usageError("at most %d values per edit", access.MaxValues)
+	if len(edit.Values) > maxGrantValues {
+		return edit, usageError("at most %d values per edit", maxGrantValues)
 	}
 	return edit, err
 }
 
-func describeEdit(edit access.Edit) string {
+func describeEdit(edit GrantEdit) string {
 	parts := []string{edit.Action}
 	if edit.Kind != "" {
 		parts = append(parts, edit.Kind)
@@ -352,7 +349,7 @@ func (e *env) profileVersions(ctx context.Context, ref string) error {
 		}
 		rows := [][]string{}
 		for _, v := range list.Items {
-			var edits []access.Edit
+			var edits []GrantEdit
 			json.Unmarshal(v.Edits, &edits)
 			desc := []string{}
 			for _, ed := range edits {
@@ -418,8 +415,11 @@ type grantOutcome struct {
 	DryRun      bool            `json:"dry_run"`
 	Profile     string          `json:"profile"`
 	FromVersion int             `json:"from_version"`
+	FromDigest  string          `json:"from_digest"`
+	Digest      string          `json:"digest"`
 	Changed     bool            `json:"changed"`
 	Version     *ProfileVersion `json:"version,omitempty"`
+	Changes     []PolicyChange  `json:"changes"`
 	Added       []string        `json:"added"`
 	Removed     []string        `json:"removed"`
 	Messages    []string        `json:"messages"`
@@ -427,7 +427,7 @@ type grantOutcome struct {
 	Preview     string          `json:"preview,omitempty"`
 }
 
-func (e *env) grant(ctx context.Context, ref string, edit access.Edit, reason string, dryRun bool) error {
+func (e *env) grant(ctx context.Context, ref string, edit GrantEdit, reason string, dryRun bool) error {
 	c, err := e.authed()
 	if err != nil {
 		return err
@@ -440,51 +440,48 @@ func (e *env) grant(ctx context.Context, ref string, edit access.Edit, reason st
 	if err != nil {
 		return err
 	}
-	out := grantOutcome{DryRun: dryRun, Profile: p.Name, FromVersion: parent.Number, Messages: []string{}, Notices: []string{}}
-	var after json.RawMessage
+	out := grantOutcome{DryRun: dryRun, Profile: p.Name, FromVersion: parent.Number, Messages: []string{}, Notices: []string{}, Changes: []PolicyChange{}}
+	defaultText := "agentgate grant " + describeEdit(edit)
 	if dryRun {
-		// The service has no grant preview endpoint yet, so the preview runs
-		// the same typed engine (internal/access) the service uses, on the
-		// document the service returned. Nothing is stored or sent.
-		doc, err := pocpolicy.Parse(parent.Document)
-		if err != nil {
-			return &Error{Exit: ExitServer, Code: "invalid_response", Message: "The service returned a policy document the CLI cannot read: " + err.Error()}
+		defaultText = "Preview agentgate grant " + describeEdit(edit)
+	}
+	if reason, err = defaultReason(reason, defaultText); err != nil {
+		return err
+	}
+	body := map[string]any{"edits": []GrantEdit{edit}, "reason": reason}
+	if dryRun {
+		// The service runs the grant with every check and stores nothing.
+		body["dry_run"] = true
+	}
+	var res GrantResult
+	path := apiPrefix + "/profiles/" + pathEscape(p.ID) + "/versions/" + strconv.Itoa(parent.Number) + "/grants"
+	if _, err = c.mutate(ctx, "POST", path, body, true, &res); err != nil {
+		return err
+	}
+	after := res.Version.Document
+	if dryRun {
+		if !res.DryRun || len(res.Document) == 0 {
+			return &Error{Exit: ExitServer, Code: "invalid_response", Message: "The service did not answer the grant as a dry run; nothing is shown as a preview.", Hint: "Upgrade the service; the CLI never simulates a grant itself."}
 		}
-		res, err := access.Apply(doc, edit)
-		if err != nil {
-			code := "grant_rejected"
-			if ae, ok := err.(*access.Error); ok {
-				code = "grant_" + ae.Code
-			}
-			exit := ExitRejected
-			if code == "grant_conflict" {
-				exit = ExitConflict
-			}
-			return &Error{Exit: exit, Code: code, Message: err.Error(), Hint: codeHints[code]}
-		}
-		after, _ = json.Marshal(res.Document)
-		out.Changed, out.Messages, out.Notices = res.Changed, append(out.Messages, res.Message), append(out.Notices, res.Notices...)
-		out.Preview = "computed locally with internal/access on version " + strconv.Itoa(parent.Number) + "; the service applies the same engine when the edit is submitted"
+		after = res.Document
+		out.Preview = "computed by the service on version " + strconv.Itoa(parent.Number) + "; nothing was stored"
 	} else {
-		if reason, err = defaultReason(reason, "agentgate grant "+describeEdit(edit)); err != nil {
-			return err
-		}
-		var res GrantResult
-		path := apiPrefix + "/profiles/" + pathEscape(p.ID) + "/versions/" + strconv.Itoa(parent.Number) + "/grants"
-		if _, err = c.mutate(ctx, "POST", path, map[string]any{"edits": []access.Edit{edit}, "reason": reason}, true, &res); err != nil {
-			return err
-		}
-		after = res.Version.Document
-		out.Changed, out.Version = res.Changed, &res.Version
-		out.Messages, out.Notices = append(out.Messages, res.Messages...), append(out.Notices, res.Notices...)
+		out.Version = &res.Version
+	}
+	out.Changed, out.FromDigest, out.Digest = res.Changed, res.FromDigest, res.Digest
+	out.Messages, out.Notices = append(out.Messages, res.Messages...), append(out.Notices, res.Notices...)
+	if res.Changes != nil {
+		out.Changes = res.Changes
 	}
 	out.Added, out.Removed = diffDocuments(parent.Document, after)
 	if e.g.json {
 		return e.p.value(out)
 	}
 	switch {
+	case dryRun && out.Changed:
+		e.p.line("Preview for profile %s: version %d -> %d would store digest %s (nothing was stored):", p.Name, parent.Number, parent.Number+1, shortDigest(out.Digest))
 	case dryRun:
-		e.p.line("Preview for profile %s, version %d (nothing was stored):", p.Name, parent.Number)
+		e.p.line("Preview for profile %s, version %d: no change, nothing would be stored (nothing was stored).", p.Name, parent.Number)
 	case out.Changed:
 		e.p.line("Profile %s: version %d -> %d (digest %s).", p.Name, parent.Number, out.Version.Number, shortDigest(out.Version.Digest))
 	default:
@@ -505,7 +502,7 @@ func (e *env) grant(ctx context.Context, ref string, edit access.Edit, reason st
 		e.p.line("notice: %s", clean(n))
 	}
 	if dryRun {
-		e.p.note("This preview ran the service's grant engine locally; submit without --dry-run to store a new version.")
+		e.p.note("The service checked this edit and stored nothing; run it without --dry-run to store a new version.")
 	}
 	return nil
 }

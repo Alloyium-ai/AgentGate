@@ -60,9 +60,11 @@ type ProfileVersionInput struct {
 }
 
 // GrantInput applies typed edits to version n, which must be the latest.
+// DryRun computes the same result without storing a version.
 type GrantInput struct {
 	Edits  []access.Edit `json:"edits"`
 	Reason string        `json:"reason"`
+	DryRun bool          `json:"dry_run,omitempty"`
 }
 
 // ProfileSettingsInput changes whether launches of a profile need approval.
@@ -320,9 +322,15 @@ func (v ProfileVersion) Version() string {
 }
 
 // ApplyGrants applies typed edits to version n and stores the result as the
-// next version. An edit sequence that changes nothing creates no version.
+// next version. An edit sequence that changes nothing creates no version. A
+// dry run runs exactly the same checks and engine, stores nothing, and is
+// audited as profile.grant.previewed. Both answers carry the parent and
+// result digests and the structured change list.
 func (s *Store) ApplyGrants(op Operation, ref, number string, in GrantInput) (any, error) {
 	op.Action, op.Resource, op.Reason = "profile.grants.applied", "profile:"+ref, safeReason(in.Reason)
+	if in.DryRun {
+		op.Action = "profile.grant.previewed"
+	}
 	return s.Mutation(op, "policy:write", true, func(tx *sql.Tx, operation *Operation) (any, error) {
 		if err := reasonValid(in.Reason); err != nil {
 			return nil, err
@@ -346,6 +354,7 @@ func (s *Store) ApplyGrants(op Operation, ref, number string, in GrantInput) (an
 		if err != nil {
 			return nil, err
 		}
+		before := d
 		messages, notices := []string{}, []string{}
 		for _, edit := range in.Edits {
 			r, err := access.Apply(d, edit)
@@ -363,14 +372,23 @@ func (s *Store) ApplyGrants(op Operation, ref, number string, in GrantInput) (an
 		}
 		operation.Resource = "profile:" + p.ID
 		operation.Before = map[string]any{"version": parent.Number, "digest": parent.Digest}
-		if d.Digest() == parent.Digest {
-			return map[string]any{"changed": false, "version": parent, "messages": messages, "notices": notices}, nil
+		changed := d.Digest() != parent.Digest
+		out := map[string]any{"changed": changed, "from_version": parent.Number, "from_digest": parent.Digest, "digest": d.Digest(),
+			"changes": PolicyChanges(&before, d), "messages": messages, "notices": notices}
+		if in.DryRun {
+			out["dry_run"], out["document"] = true, d
+			return out, nil
+		}
+		if !changed {
+			out["version"] = parent
+			return out, nil
 		}
 		v, err := insertProfileVersion(tx, p, parent.ID, d, in.Edits, operation.Actor.Subject, in.Reason)
 		if err != nil {
 			return nil, err
 		}
 		operation.Version = v.ID
-		return map[string]any{"changed": true, "version": v, "messages": messages, "notices": notices}, nil
+		out["version"] = v
+		return out, nil
 	})
 }

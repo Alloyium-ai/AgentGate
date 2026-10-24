@@ -173,7 +173,16 @@ func profileFixtures(h *harness) access.Edit {
 			apiError(w, 409, "stale_parent", "Grants apply to the latest profile version only.")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"changed": true, "version": control.ProfileVersion{ID: "v2", ProfileID: "p1", Number: 2, ParentID: "v1", Document: after, Digest: res.Document.Digest(), Actor: "local:eve", Reason: "x", Created: "2026-10-24T12:00:00Z"}, "messages": []string{res.Message}, "notices": res.Notices})
+		var in control.GrantInput
+		json.Unmarshal(body, &in)
+		answer := map[string]any{"changed": true, "from_version": 1, "from_digest": doc.Digest(), "digest": res.Document.Digest(),
+			"changes": []control.PolicyChange{{Area: "Files", Field: "read", Change: "added", After: "/srv/data"}}, "messages": []string{res.Message}, "notices": res.Notices}
+		if in.DryRun {
+			answer["dry_run"], answer["document"] = true, json.RawMessage(after)
+		} else {
+			answer["version"] = control.ProfileVersion{ID: "v2", ProfileID: "p1", Number: 2, ParentID: "v1", Document: after, Digest: res.Document.Digest(), Actor: "local:eve", Reason: "x", Created: "2026-10-24T12:00:00Z"}
+		}
+		writeJSON(w, 200, answer)
 	})
 	return edit
 }
@@ -194,18 +203,26 @@ func TestProfileAndGrantCommands(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 	r = h.run("", "grant", "dev", "read", "/srv/data", "--dry-run")
-	if r.code != 0 || !strings.Contains(r.stdout, "+ filesystem.read_only[] /srv/data") || !strings.Contains(r.stdout, "nothing was stored") {
+	if r.code != 0 || !strings.Contains(r.stdout, "+ filesystem.read_only[] /srv/data") || !strings.Contains(r.stdout, "nothing was stored") || !strings.Contains(r.stdout, "version 1 -> 2 would store") {
 		t.Fatalf("dry run: %v", r)
 	}
-	if len(h.api.requestsTo("POST /api/v1/profiles/{id}/versions/{n}/grants")) != 0 {
-		t.Fatal("--dry-run stored a version")
+	var dry control.GrantInput
+	if reqs := h.api.requestsTo("POST /api/v1/profiles/{id}/versions/{n}/grants"); len(reqs) != 1 {
+		t.Fatal("--dry-run did not ask the service")
+	} else if mustDecode(t, reqs[0].Body, &dry); !dry.DryRun || dry.Edits[0].Values[0] != "/srv/data" {
+		t.Fatalf("the preview request %+v", dry)
+	}
+	r = h.run("", "grant", "dev", "read", "/srv/data", "--dry-run", "--json")
+	var preview grantOutcome
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &preview) != nil || !preview.DryRun || preview.Version != nil || len(preview.Changes) != 1 || preview.Digest == "" {
+		t.Fatalf("dry run --json: %v", r)
 	}
 	r = h.run("", "grant", "dev", "read", "/srv/data", "--reason", "Read the data set")
 	if r.code != 0 || !strings.Contains(r.stdout, "version 1 -> 2") || !strings.Contains(r.stdout, "+ filesystem.read_only[] /srv/data") {
 		t.Fatalf("grant: %v", r)
 	}
 	var in control.GrantInput
-	mustDecode(t, h.api.requestsTo("POST /api/v1/profiles/{id}/versions/{n}/grants")[0].Body, &in)
+	mustDecode(t, h.api.requestsTo("POST /api/v1/profiles/{id}/versions/{n}/grants")[2].Body, &in)
 	if len(in.Edits) != 1 || in.Edits[0].Action != "read" || in.Edits[0].Values[0] != "/srv/data" || in.Reason != "Read the data set" {
 		t.Fatalf("%+v", in)
 	}
@@ -497,5 +514,25 @@ func TestSchemaAndSecretList(t *testing.T) {
 	}
 	if r := h.run("", "secret", "rm", "nope", "--yes"); r.code != ExitNotFound {
 		t.Fatalf("%v", r)
+	}
+}
+
+func TestGrantPreviewNeedsTheServicesDryRun(t *testing.T) {
+	h := newHarness(t)
+	h.login("local:eve", "editor")
+	profileFixtures(h)
+	// A service that ignores dry_run and stores a version is reported, never
+	// shown as a preview.
+	h.api.handle("POST /api/v1/profiles/{id}/versions/{n}/grants", func(w http.ResponseWriter, r *http.Request, body []byte, p []string) {
+		writeJSON(w, 200, map[string]any{"changed": true, "version": control.ProfileVersion{ID: "v2", Number: 2}, "messages": []string{}, "notices": []string{}})
+	})
+	if r := h.run("", "grant", "dev", "read", "/srv/data", "--dry-run"); r.code != ExitServer || !strings.Contains(r.stderr, "invalid_response") || strings.Contains(r.stdout, "Preview") {
+		t.Fatalf("%v", r)
+	}
+}
+
+func TestGrantBoundsMatchTheAccessEngine(t *testing.T) {
+	if strings.Join(grantRevokeKinds, " ") != strings.Join(access.RevokeKinds, " ") || maxGrantValues != access.MaxValues {
+		t.Fatalf("the CLI's grant bounds drifted from internal/access: %v %d", grantRevokeKinds, maxGrantValues)
 	}
 }

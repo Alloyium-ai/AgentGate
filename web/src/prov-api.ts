@@ -90,12 +90,19 @@ export type Preset = {
   filesystem: NonNullable<PolicyDocument["filesystem"]>;
   process: NonNullable<PolicyDocument["process"]>;
 };
+// PolicyChange is one row of the service's structured difference between a
+// version and the grant result; access-model.ts diffDocuments computes the
+// same rows (a unit test compares them on a real service answer).
+export type PolicyChange = { area: string; field: string; change: "added" | "removed" | "changed"; before?: string; after?: string };
 export type GrantResult = {
   changed: boolean;
   dry_run?: boolean;
   version?: ProfileVersion;
   document?: PolicyDocument;
-  digest?: string;
+  from_version: number;
+  from_digest: string;
+  digest: string;
+  changes: PolicyChange[];
   messages: string[];
   notices: string[];
 };

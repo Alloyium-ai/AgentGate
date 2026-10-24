@@ -39,6 +39,7 @@ var AuditCatalog = []AuditAction{
 	{"profile.approval.changed", "profile:<id>", "An administrator changed whether a profile's launches need approval."},
 	{"profile.version.created", "profile:<id>", "A new immutable profile version was stored."},
 	{"profile.grants.applied", "profile:<id>", "Typed grant edits produced a new profile version, or a no-op."},
+	{"profile.grant.previewed", "profile:<id>", "A grant dry run computed the resulting document and changes without storing a version."},
 	{"secret.created", "secret:<id>", "Secret metadata was recorded and a sealed value queued for its host."},
 	{"secret.deletion.requested", "secret:<id>", "Removal of a secret value from its host was queued."},
 	{"secret.stored", "secret:<id>", "The host stored a sealed secret and returned a receipt for exactly the relayed envelope."},

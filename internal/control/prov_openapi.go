@@ -43,7 +43,8 @@ func provisioningSchemas() map[string]any {
 			"mode":          map[string]any{"type": "string", "enum": []string{"read-only", "read-write"}},
 			"upgrade_to_v2": map[string]any{"type": "boolean"},
 		}),
-		"GrantInput":    object([]string{"edits", "reason"}, map[string]any{"edits": map[string]any{"type": "array", "minItems": 1, "maxItems": maxProfileEdits, "items": map[string]any{"$ref": "#/components/schemas/Edit"}}, "reason": reasonSchema()}),
+		"GrantInput": object([]string{"edits", "reason"}, map[string]any{"edits": map[string]any{"type": "array", "minItems": 1, "maxItems": maxProfileEdits, "items": map[string]any{"$ref": "#/components/schemas/Edit"}}, "reason": reasonSchema(),
+			"dry_run": map[string]any{"type": "boolean", "description": "Compute the resulting document, digests and change list with the same checks, store nothing (audited as profile.grant.previewed)."}}),
 		"DecisionInput": object([]string{"reason"}, map[string]any{"reason": reasonSchema()}),
 		"SecretInput": object([]string{"name", "target", "upstreams", "header", "ciphertext", "allowed_profiles", "allowed_launchers", "reason"}, map[string]any{
 			"allowed_profiles":  map[string]any{"type": "array", "minItems": 1, "maxItems": 32, "items": nameSchema()},

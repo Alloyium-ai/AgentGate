@@ -18,6 +18,11 @@ import { createServer } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { hostFingerprint, hostKeyID, hostReceipt, makeRecord, newHost, openEnvelope, rfc3339 } from "./hpke-node.mjs";
+import { loadTS } from "./load-ts.mjs";
+
+// The fixture's grant change list uses the UI's own diff; the unit tests
+// check that diff against the real service's answers.
+const { diffDocuments } = await loadTS("access-model");
 
 const output = process.env.QA_OUTPUT;
 if (!output) throw new Error("Set QA_OUTPUT to an owned artifact directory.");
@@ -41,7 +46,6 @@ let expireSessionOnNextRead = false;
 const host = newHost();
 const attacker = newHost();
 let sealMode = "missing";
-let dryRun = false;
 let streamMode = "ok";
 const streamRequests = [];
 const requests = [];
@@ -267,17 +271,17 @@ function api(method, path, query, input, headers) {
     if (method === "GET" && sub === "versions" && !parts[3]) return { items: [...list].reverse() };
     if (method === "POST" && sub === "versions" && parts[4] === "grants") {
       need("editor");
-      if (input.dry_run && !dryRun) throw new Fail(422, "schema_constraint", "A request value does not match the API contract.");
       if (Number(parts[3]) !== p.latest_version) throw new Fail(409, "stale_parent", "Grants apply to the latest profile version only.");
       const parent = list.at(-1);
       const { d, messages, notices } = applyEdits(parent.document, input.edits);
       const digest = sha(JSON.stringify(d));
-      if (input.dry_run) return { dry_run: true, changed: digest !== parent.digest, document: d, digest, messages, notices };
-      if (digest === parent.digest) return { changed: false, version: parent, messages, notices };
+      const answer = { changed: digest !== parent.digest, from_version: parent.number, from_digest: parent.digest, digest, changes: diffDocuments(parent.document, d), messages, notices };
+      if (input.dry_run) return { ...answer, dry_run: true, document: d };
+      if (digest === parent.digest) return { ...answer, version: parent };
       const v = { id: newID(), profile_id: p.id, number: parent.number + 1, parent_id: parent.id, document: d, digest, edits: input.edits, actor: actors[who].subject, reason: input.reason, created_at: now() };
       list.push(v);
       p.latest_version = v.number;
-      return { changed: true, version: v, messages, notices };
+      return { ...answer, version: v };
     }
   }
   if (area === "launch-plans") {
@@ -560,7 +564,7 @@ try {
     await text("no — not yet verified on this host").waitFor();
   });
 
-  await step("create a profile from a preset, grant with dry run, and see validator errors verbatim", async () => {
+  await step("create a profile from a preset, preview a grant with the service's dry run, apply it, and see validator errors verbatim", async () => {
     await go("profiles", "alice");
     await page.getByRole("button", { name: "New profile" }).click();
     await page.getByLabel("Profile name").fill("python-dev");
@@ -580,14 +584,12 @@ try {
     await text("Let the agent read /srv/data").waitFor();
     await page.locator(".access-editor").getByRole("textbox", { name: "Reason", exact: true }).fill("Read the data set");
     await page.getByRole("button", { name: "Preview (dry run)" }).click();
-    await text("may not offer a grant dry run yet").waitFor();
-    await text("schema_constraint").waitFor();
-    assert.equal(versions[profiles[0].id].length, 1, "a refused dry run created nothing");
-    dryRun = true;
-    await page.getByRole("button", { name: "Preview (dry run)" }).click();
     await text("Dry run: the service's result (nothing was stored)").waitFor();
     await page.locator(".preview").getByRole("cell", { name: "/srv/data" }).waitFor();
     await page.locator(".preview").getByText("read-only: added /srv/data").waitFor();
+    await page.locator(".preview").getByText("Version 1 would become version 2.").waitFor();
+    const preview = requests.filter((r) => r.path.endsWith("/grants")).at(-1);
+    assert.equal(JSON.parse(preview.body).dry_run, true, "the preview asks the service for a dry run");
     assert.equal(versions[profiles[0].id].length, 1, "a dry run created nothing");
     await checkLabels("access editor");
     await page.getByRole("button", { name: "Apply as version 2" }).click();

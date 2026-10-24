@@ -68,7 +68,7 @@ command.
 ```sh
 agentgate preset ls
 agentgate profile new python-dev --preset python-dev --description "Python work"
-agentgate grant python-dev read /srv/data --dry-run      # preview the diff; nothing is stored
+agentgate grant python-dev read /srv/data --dry-run      # the service previews the change; nothing is stored
 agentgate grant python-dev read /srv/data --reason "Read the data set"
 agentgate grant python-dev web deny quic
 agentgate grant python-dev mount repo                     # lets a launch mount a host folder named repo, read-only
@@ -287,10 +287,12 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `grant P preset NAME` | `preset` |
 | `grant P revoke KIND [VALUE...]` | `revoke` with `kind` |
 
-`--upgrade` allows an edit to turn a version one profile into version two. `--dry-run`: the service has no grant
-preview endpoint yet, so the CLI applies the edit with the same typed engine the service uses (`internal/access`) to
-the latest version the service returned, prints the diff, messages and notices, labels the result a preview, and
-sends nothing. Without `--dry-run` the diff is between the parent version and the version the service returned.
+`--upgrade` allows an edit to turn a version one profile into version two. `--dry-run` sends the same edit with
+`"dry_run": true`: the service runs every check and the same typed engine, stores nothing (it audits
+`profile.grant.previewed`), and answers with the resulting document, the parent and result digests and its change list;
+the CLI prints the diff, messages and notices and labels the result a preview. The CLI never applies an edit itself
+(it does not link `internal/access`). Without `--dry-run` the diff is between the parent version and the version the
+service returned.
 
 ### launch flags
 

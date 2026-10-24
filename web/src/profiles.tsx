@@ -291,7 +291,7 @@ function AppliedResult({ applied, onDismiss }: { applied: Applied; onDismiss: ()
         </button>
       </div>
       {result.version && <Digest value={result.version.digest} label="Version digest" />}
-      {result.version && <DiffTable rows={diffDocuments(parent.document, result.version.document)} />}
+      {result.version && <DiffTable rows={result.changes ?? diffDocuments(parent.document, result.version.document)} />}
       <ServerMessages title="Messages" items={result.messages} />
       <ServerMessages title="Notices" items={result.notices} tone="warn" />
     </section>
@@ -616,22 +616,25 @@ function AccessEditor({ profile, latest, actor, onApplied }: { profile: Profile;
       {preview && (
         <div className="preview" aria-live="polite">
           <h3 className="subheading">Dry run: the service's result (nothing was stored)</h3>
-          {preview.document ? <DiffTable rows={diffDocuments(doc, preview.document)} /> : <p className="form-note">{preview.changed ? "The policy would change." : "No change."}</p>}
+          <p className="form-note">
+            {preview.changed ? `Version ${preview.from_version} would become version ${preview.from_version + 1}.` : "No change: the edits produce the same policy, so no version would be created."}
+          </p>
+          <div className="metadata">
+            <div>
+              <span>From (v{preview.from_version})</span>
+              <Digest value={preview.from_digest} label="Parent digest" />
+            </div>
+            <div>
+              <span>Result</span>
+              <Digest value={preview.digest} label="Result digest" />
+            </div>
+          </div>
+          <DiffTable rows={preview.changes} />
           <ServerMessages title="Messages" items={preview.messages} />
           <ServerMessages title="Notices" items={preview.notices} tone="warn" />
         </div>
       )}
-      {Boolean(previewError) && (
-        <>
-          <ValidatorError error={previewError} />
-          {previewError instanceof ApiError && previewError.code === "schema_constraint" && (
-            <p className="form-note">
-              This service may not offer a grant dry run yet (see docs/UI.md, Backend requests). The request was refused before anything changed. Applying
-              creates a new version; to undo, apply the opposite edit as another version.
-            </p>
-          )}
-        </>
-      )}
+      {Boolean(previewError) && <ValidatorError error={previewError} />}
       {Boolean(error) && <ValidatorError error={error} />}
       {result && (
         <div className="preview" aria-live="polite">

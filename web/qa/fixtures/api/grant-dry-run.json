@@ -1,0 +1,258 @@
+{
+  "parent": {
+    "actor": "oidc:eve",
+    "created_at": "2026-10-24T23:22:42.094762765Z",
+    "digest": "d81ea3096db0b17b0f376a7e68a9cfb43714d7eeda858c2b7ad0148d1d00bad3",
+    "document": {
+      "default": "deny",
+      "dns": {
+        "port": 53,
+        "protocols": [
+          "udp",
+          "tcp"
+        ],
+        "resolvers": [
+          "1.1.1.1"
+        ]
+      },
+      "duration_seconds": 25,
+      "filesystem": {
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/sbin",
+          "/lib",
+          "/lib64"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        },
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "scratch": [
+          "/tmp"
+        ],
+        "workspace": "/var/lib/agentgate/workspace"
+      },
+      "ipv6": "deny",
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2",
+          "SIGCONT",
+          "SIGSTOP",
+          "SIGCHLD",
+          "SIGPIPE",
+          "SIGALRM"
+        ]
+      },
+      "taskboard": {
+        "address": "10.10.10.10",
+        "port": 8080,
+        "protocol": "tcp",
+        "task_id": 1
+      },
+      "version": "agentgate.poc.v2",
+      "web": {
+        "destination": "public-ipv4",
+        "rules": [
+          {
+            "port": 80,
+            "protocol": "tcp"
+          },
+          {
+            "port": 443,
+            "protocol": "tcp"
+          }
+        ]
+      }
+    },
+    "edits": [
+      {
+        "action": "preset",
+        "values": [
+          "python-dev"
+        ]
+      }
+    ],
+    "id": "fc3092992bc7d0537b79431f79b5f73e",
+    "number": 1,
+    "parent_id": "",
+    "profile_id": "56b179013af0e2c1e04ae2199cbe24c6",
+    "reason": "Create a synthetic profile"
+  },
+  "request": {
+    "dry_run": true,
+    "edits": [
+      {
+        "action": "read",
+        "values": [
+          "/srv/data"
+        ]
+      },
+      {
+        "action": "deny-web",
+        "values": [
+          "http"
+        ]
+      },
+      {
+        "action": "mount",
+        "mode": "read-only",
+        "values": [
+          "repo"
+        ]
+      },
+      {
+        "action": "signal",
+        "values": [
+          "WINCH"
+        ]
+      }
+    ],
+    "reason": "Read the data set"
+  },
+  "response": {
+    "changed": true,
+    "changes": [
+      {
+        "area": "Network",
+        "before": "HTTP (TCP 80)",
+        "change": "removed",
+        "field": "public web"
+      },
+      {
+        "after": "/srv/data",
+        "area": "Files",
+        "change": "added",
+        "field": "read"
+      },
+      {
+        "after": "repo (read-only)",
+        "area": "Mounts",
+        "change": "added",
+        "field": "host folder"
+      },
+      {
+        "after": "SIGWINCH",
+        "area": "Processes",
+        "change": "added",
+        "field": "signals"
+      }
+    ],
+    "digest": "e51c290b9ee93aeee99c246e06387a843fcf85363c26abd0133eca5c39badf9a",
+    "document": {
+      "default": "deny",
+      "dns": {
+        "port": 53,
+        "protocols": [
+          "udp",
+          "tcp"
+        ],
+        "resolvers": [
+          "1.1.1.1"
+        ]
+      },
+      "duration_seconds": 25,
+      "filesystem": {
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/sbin",
+          "/lib",
+          "/lib64"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        },
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard",
+          "/srv/data",
+          "/var/lib/agentgate/mounts/repo"
+        ],
+        "scratch": [
+          "/tmp"
+        ],
+        "workspace": "/var/lib/agentgate/workspace"
+      },
+      "ipv6": "deny",
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2",
+          "SIGCONT",
+          "SIGSTOP",
+          "SIGCHLD",
+          "SIGPIPE",
+          "SIGALRM",
+          "SIGWINCH"
+        ]
+      },
+      "taskboard": {
+        "address": "10.10.10.10",
+        "port": 8080,
+        "protocol": "tcp",
+        "task_id": 1
+      },
+      "version": "agentgate.poc.v2",
+      "web": {
+        "destination": "public-ipv4",
+        "rules": [
+          {
+            "port": 443,
+            "protocol": "tcp"
+          }
+        ]
+      }
+    },
+    "dry_run": true,
+    "from_digest": "d81ea3096db0b17b0f376a7e68a9cfb43714d7eeda858c2b7ad0148d1d00bad3",
+    "from_version": 1,
+    "messages": [
+      "read-only: added /srv/data",
+      "public web: denied http",
+      "host folder: /var/lib/agentgate/mounts/repo (read-only)",
+      "signals: added SIGWINCH"
+    ],
+    "notices": []
+  }
+}
