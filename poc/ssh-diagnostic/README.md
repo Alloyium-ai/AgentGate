@@ -478,3 +478,26 @@ Store audits privately; receipts include host and task details.
 Run Python tests in a container with `python3 -m unittest discover -s poc/ssh-diagnostic -p 'test_*.py'`.
 The `grant` tests build the native validator with `go build`; without Go they skip and say so.
 Build `ssh/Dockerfile --target test` for the existing transport and bridge tests.
+
+## Launching agents and verifying the kernel
+
+A long-running or one-shot agent is launched by the host agent
+(`agentgate-hostd`, `cmd/agentgate-hostd`), which verifies a signed job from
+the service and hands it to the launch runtime (`launch.py`). The runtime runs
+the agent in exactly the guarded-target path the SSH command uses: a fresh
+Docker target, the BPF guard attached before anything runs, and the late-join
+runner. The policy document names `"mode": "oneshot"` (1..3600 s) or
+`"session"` (60..86400 s); `duration_seconds` is then the launch lifetime, the
+hard cap in the kernel policy expiry and in the host (which kills the domain at
+the deadline). A document without a mode is the SSH command policy and still
+requires `duration_seconds: 25`.
+
+`verify-kernel.sh --instance NAME` runs the staged kernel verification on a
+disposable BPF-LSM VM: preflight, per-program BPF object load (each verifier
+result reported verbatim), a validation-time check that a more-specific allow
+beneath a deny is rejected, and behaviour probes through one real guarded
+launch (`verify-probe.sh`). It refuses to run without the disposable-VM marker,
+cleans up, and writes a JSON report the service attaches to a target to decide
+`kernel_verified`. The kit never sets that flag itself. It cannot run in the
+build sandbox; its logic is unit-tested with fakes (`test_verify_kernel.py`),
+and `verify-probe.sh` is unexercised on a kernel.
