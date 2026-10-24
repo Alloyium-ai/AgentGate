@@ -13,7 +13,7 @@ import (
 )
 
 func init() {
-	register(&command{name: "audit", summary: "Show the audit trail (every grant, launch, approval and stop, with actor and digests).",
+	register(&command{name: "audit", args: "[catalog]", summary: "Show the audit trail (every grant, launch, approval and stop, with actor and digests).",
 		help: `  --launch ID      only records of this launch
   --since T        RFC 3339 time or a duration such as 1h or 7d
   --until T        RFC 3339 time or a duration before now

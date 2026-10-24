@@ -446,9 +446,20 @@ func (e *env) secretList(ctx context.Context) error {
 			if target == "" {
 				target = short(s.TargetID)
 			}
-			rows = append(rows, []string{s.Name, target, e.p.state(s.State), strings.Join(s.Upstreams, ","), s.Header, strings.Join(s.AllowedProfiles, ","), strings.Join(s.AllowedLaunchers, ","), short(s.ID)})
+			rules := ""
+			switch {
+			case s.Wildcard:
+				rules = "WILDCARD"
+			case len(s.Rules) > 0:
+				texts := []string{}
+				for _, r := range s.Rules {
+					texts = append(texts, ruleText(r))
+				}
+				rules = strings.Join(texts, "; ")
+			}
+			rows = append(rows, []string{s.Name, target, e.p.state(s.State), strings.Join(s.Upstreams, ","), strings.TrimSpace(s.Header + " " + s.Scheme), rules, strings.Join(s.AllowedProfiles, ","), strings.Join(s.AllowedLaunchers, ","), s.ValueFingerprint, short(s.ID)})
 		}
-		e.p.table([]string{"NAME", "TARGET", "STATE", "UPSTREAMS", "HEADER", "PROFILES", "LAUNCHERS", "ID"}, rows)
+		e.p.table([]string{"NAME", "TARGET", "STATE", "UPSTREAMS", "HEADER", "RULES", "PROFILES", "LAUNCHERS", "VALUE FINGERPRINT", "ID"}, rows)
 		return nil
 	})
 }
