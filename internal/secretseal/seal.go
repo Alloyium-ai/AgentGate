@@ -383,3 +383,22 @@ func walkValue(dec *json.Decoder, delim json.Delim, depth int) error {
 	}
 	return nil
 }
+
+// Encode is the envelope's wire string: unpadded base64url of its JSON. It
+// fits a string field such as hostproto.SecretPutPayload.Ciphertext.
+func (e *Envelope) Encode() string {
+	raw, _ := json.Marshal(e)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// DecodeEnvelope reverses Encode and validates the shape.
+func DecodeEnvelope(s string) (*Envelope, error) {
+	if len(s) > MaxEnvelopeBytes*2 {
+		return nil, ErrEnvelope
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(s)
+	if err != nil {
+		return nil, ErrEnvelope
+	}
+	return ParseEnvelope(raw)
+}

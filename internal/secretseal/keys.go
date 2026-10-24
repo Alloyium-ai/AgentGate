@@ -246,3 +246,13 @@ func ParseSignedKeyRecord(raw []byte) (*SignedKeyRecord, error) {
 	}
 	return &s, nil
 }
+
+// HostKeyFromECDH builds a seal key from an existing X25519 key (for example
+// the encryption key agentgate-hostd generated at enrollment) and signs its
+// record with the host's Ed25519 enrollment key.
+func HostKeyFromECDH(targetID string, priv *ecdh.PrivateKey, signer crypto.Signer, now time.Time, lifetime time.Duration) (*HostKey, error) {
+	if priv == nil || priv.Curve() != ecdh.X25519() {
+		return nil, ErrKeyRecord
+	}
+	return newHostKey(targetID, priv.Bytes(), signer, now, lifetime)
+}

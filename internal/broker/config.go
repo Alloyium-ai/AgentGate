@@ -267,7 +267,6 @@ func (c *Config) Validate(now time.Time) (Settings, error) {
 		return s, cfgErr("routes", "must hold 1 to 16 routes")
 	}
 	names := map[string]bool{}
-	files := map[string]bool{}
 	fds := map[int]bool{}
 	for i := range c.Routes {
 		r := &c.Routes[i]
@@ -287,12 +286,10 @@ func (c *Config) Validate(now time.Time) (Settings, error) {
 			return s, cfgErr(field+".name", "is duplicated")
 		}
 		names[r.Name] = true
-		if r.Credential.SecretFile != "" {
-			if files[r.Credential.SecretFile] {
-				return s, cfgErr(field+".credential.secret_file", "is shared with another route")
-			}
-			files[r.Credential.SecretFile] = true
-		} else {
+		// One secret file may back several routes (a secret whose metadata
+		// lists several origins); each route still binds exactly one origin.
+		// A descriptor can be read only once, so it is never shared.
+		if r.Credential.SecretFile == "" {
 			if fds[*r.Credential.SecretFD] {
 				return s, cfgErr(field+".credential.secret_fd", "is shared with another route")
 			}

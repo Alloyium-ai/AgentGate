@@ -461,3 +461,29 @@ func TestSuiteIdentifiers(t *testing.T) {
 		t.Fatal("suite identifiers differ from the documented suite")
 	}
 }
+
+func TestEnvelopeWireStringAndECDHKey(t *testing.T) {
+	f := newFixture(t, "local")
+	sealed, _ := SealAt(f.pub, "local", "anthropic", []byte(fakeValue), now)
+	wire := sealed.Envelope.Encode()
+	env, err := DecodeEnvelope(wire)
+	if err != nil || *env != sealed.Envelope {
+		t.Fatal(err)
+	}
+	if _, err := DecodeEnvelope(wire[:len(wire)-2] + "!!"); err == nil {
+		t.Fatal("corrupt wire accepted")
+	}
+	ex, _ := ecdh.X25519().GenerateKey(rand.Reader)
+	k, err := HostKeyFromECDH("local", ex, f.hostPriv, now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := k.Published()
+	if raw, _ := base64.RawURLEncoding.DecodeString(rec.Record.PublicKey); !bytes.Equal(raw, ex.PublicKey().Bytes()) {
+		t.Fatal("record does not publish the existing key")
+	}
+	p256, _ := ecdh.P256().GenerateKey(rand.Reader)
+	if _, err := HostKeyFromECDH("local", p256, f.hostPriv, now, time.Hour); err == nil {
+		t.Fatal("non-X25519 key accepted")
+	}
+}
