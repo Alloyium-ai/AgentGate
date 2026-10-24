@@ -423,7 +423,7 @@ curl -sS -X POST "$U/api/v1/targets/local/enrollment" -H "Authorization: Bearer 
 | --- | --- | --- |
 | This contract | `docs/PROVISIONING.md` | written |
 | Control plane: store, API, roles, job queue, audit | `internal/control`, `internal/access`, `internal/hostproto`, `cmd/community` | implemented and tested in the build sandbox (no BPF LSM kernel, no real host); see the cookbook |
-| Host agent and long-running launch runtime | `cmd/agentgate-hostd`, `internal/hostd`, `poc/ssh-diagnostic` | not started |
+| Host agent and long-running launch runtime | `cmd/agentgate-hostd`, `internal/hostd`, `poc/ssh-diagnostic` | implemented and unit-tested with fakes; Docker, systemd and the BPF LSM kernel were not exercised. The launch runtime (`launch.py`) runs a verified job in the guarded-target path; the daemon enrolls, polls, verifies and runs jobs at most once, retries uploads from a durable outbox, enforces the lifetime and the lost-service grace, and reconciles after a crash. `agentgate-hostd provision` and the `provision` job wrap `appliance.py start`. `verify-kernel.sh` is the kernel verification kit |
 | Credential broker | `cmd/agentgate-broker`, `internal/broker` | not started |
 | CLI | `cmd/agentgate` | not started |
 | UI pages | `web/src` | not started |
