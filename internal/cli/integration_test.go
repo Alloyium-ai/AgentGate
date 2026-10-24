@@ -311,28 +311,11 @@ func TestEndToEndAgainstTheRealService(t *testing.T) {
 		}
 	}
 
-	// A secret: refused without a host-signed seal key, sealed to the
-	// approval-time key with the explicit flag, and opened by the host key.
+	// A secret: the service does not publish the target's signed seal key
+	// yet, so secret set refuses before it reads the value.
 	secretArgs := []string{"secret", "set", "model-api", "--upstream", "api.model.example", "--allow-profile", "dev", "--allow-launcher", "local:ada"}
-	must(run("sk-e2e-value-0123456789\n", secretArgs...), ExitTrust, "seal_key_unsigned")
-	must(run("sk-e2e-value-0123456789\n", append(secretArgs, "--allow-unsigned-key")...), 0, "Stored secret model-api", "pending")
-	var put []hostproto.Job
-	for _, j := range host.poll() {
-		if j.Type == hostproto.JobSecretPut {
-			put = append(put, j)
-		}
-	}
-	if len(put) != 1 {
-		t.Fatal("no secret-put job")
-	}
-	var payload hostproto.SecretPutPayload
-	json.Unmarshal(put[0].Payload, &payload)
-	sealed, _ := hostproto.DecodeSealed(payload.Ciphertext)
-	value, err := hostproto.OpenSecret(host.box, sealed, hostproto.SecretAAD(host.id, "model-api"))
-	if err != nil || string(value) != "sk-e2e-value-0123456789" {
-		t.Fatalf("the host cannot open the relayed value: %v", err)
-	}
-	must(run("", "secret", "ls"), 0, "model-api")
+	must(run("sk-e2e-value-0123456789\n", secretArgs...), ExitTrust, "seal_key_unpublished")
+	must(run("", "secret", "ls", "-q"), 0)
 	must(run("", "target", "retire", "local"), ExitUsage, "--yes")
 }
 

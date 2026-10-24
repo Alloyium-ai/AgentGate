@@ -24,16 +24,13 @@ var hostKeyIDPattern = regexp.MustCompile(`^ed25519:[a-f0-9]{32}$`)
 // target whose service-reported key differs from the pin. HostKeyID is the
 // hostproto key id the administrator compared with the host console;
 // HostKeyFingerprint (secretseal.HostKeyFingerprint, SHA256:...) is added
-// once a verified host public key was seen. EncryptionKey is the X25519 key
-// the service reported at approval time; it is used only with secret set
-// --allow-unsigned-key.
+// once a verified host public key was seen.
 type KnownTarget struct {
 	Server             string `json:"server"`
 	TargetID           string `json:"target_id"`
 	TargetName         string `json:"target_name"`
 	HostKeyID          string `json:"host_key_id"`
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
-	EncryptionKey      string `json:"encryption_key,omitempty"`
 	PinnedAt           string `json:"pinned_at"`
 	Source             string `json:"source"`
 }
@@ -101,9 +98,6 @@ func (s store) pin(entry KnownTarget, replace bool) (*KnownTarget, error) {
 					return nil, trustError("host_key_pin_mismatch", "Target "+entry.TargetName+" is pinned to host key fingerprint "+merged.HostKeyFingerprint+", not "+entry.HostKeyFingerprint+".", "Do not trust this host until you know why.")
 				}
 				merged.HostKeyFingerprint = entry.HostKeyFingerprint
-			}
-			if entry.EncryptionKey != "" && (merged.EncryptionKey == "" || replace) {
-				merged.EncryptionKey = entry.EncryptionKey
 			}
 			if merged == *old {
 				return nil, nil

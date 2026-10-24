@@ -323,9 +323,8 @@ agentgate schema launch-spec | completion bash|zsh|fish | version
   `target pin` or `up`), fetches `GET /targets/{id}/seal-key` (the pending control plane request in
   [BROKER.md](BROKER.md#integration-requests)), checks `hostproto.KeyID(host_public_key)` against the pin and the
   record's signature with `secretseal.VerifyKeyRecord`, and uploads `Envelope.Encode()` as `ciphertext`. Until the
-  service publishes the seal key it refuses, unless `--allow-unsigned-key` seals with `hostproto.SealSecret` to the
-  encryption key pinned at approval. It does not verify the host's `secretseal.Receipt` yet: the service does not
-  relay it.
+  service serves the seal key it refuses; it never seals to an unsigned key. It does not verify the host's
+  `secretseal.Receipt` yet: the service does not relay it.
 - `up` delegates every host-side action to `docker compose` (`control job-key`, `init`, `first-admin` with the
   password on stdin, `up -d`) and `agentgate-hostd` (`status`, `install --token-file`, `provision`) through argument
   vectors; each step checks the current state first, and the steps that need root refuse without it.

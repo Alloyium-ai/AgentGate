@@ -158,7 +158,7 @@ agentgate audit catalog
 | File | Mode | Holds |
 | --- | --- | --- |
 | `~/.config/agentgate/config.json` | 0600 | contexts: service URL, API token and its id, name, subject, roles and expiry, CA file, certificate pin |
-| `~/.config/agentgate/known-targets.json` | 0600 | host key pins: service, target id and name, approved `host_key_id`, the encryption key reported at approval |
+| `~/.config/agentgate/known-targets.json` | 0600 | host key pins: service, target id and name, the approved `host_key_id`, and the `SHA256:` host key fingerprint once a signed seal key was verified |
 | `~/.config/agentgate/ca-CONTEXT.pem` | 0600 | the local TLS front's CA, written by `agentgate up` |
 
 The directory is `$AGENTGATE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/agentgate`, else `~/.config/agentgate`. It must be a
@@ -306,36 +306,34 @@ sends a complete `agentgate.launch.v1` document as it is and cannot be combined 
 
 ```sh
 agentgate secret set NAME --upstream HOST [--upstream HOST] [--header x-api-key|Authorization] [--scheme Bearer] \
-  [--target local] --allow-profile PROFILE [--allow-launcher SUBJECT] [--reason R] [--allow-unsigned-key]
+  [--target local] --allow-profile PROFILE [--allow-launcher SUBJECT] [--reason R]
 ```
 
 The value is read from a hidden prompt (entered twice) on a terminal, or from standard input otherwise; never from
 arguments or the environment. `--scheme Bearer` (with `--header Authorization`) prefixes the value with `Bearer `
 before sealing, because the API carries no scheme field. `--allow-launcher` defaults to your own subject.
 
-Before it reads the value, the CLI checks the target:
+Before it reads the value, the CLI checks the target, and every failure is exit 13 with nothing read or sent:
 
 1. The target is active and this machine holds a pin for it (`known-targets.json`), created when you approved its
    host key with `agentgate target approve-key` or `agentgate up`, or with `agentgate target pin` after comparing the
-   fingerprint on the host console. No pin, or a service that now reports another `host_key_id`, is a hard error
-   (exit 13) that says what to compare.
-2. When the service publishes the target's signed seal key (`GET /targets/{id}/seal-key` returning
-   `{host_public_key, host_key_fingerprint, record}`, the control plane request in
-   [BROKER.md](BROKER.md#integration-requests); `record` is a `secretseal.SignedKeyRecord`), the CLI requires that the key's `hostproto.KeyID` equals the pin and that the record
-   is signed by that key, names this target and is in date (`secretseal.VerifyKeyRecord`). It then seals the value
-   with `internal/secretseal` (RFC 9180 HPKE; the associated data binds the target, the name, a version and a nonce)
-   and sends the envelope (`Envelope.Encode`) in the `ciphertext` field. A substituted host key, a seal key signed by
-   anything else, a record for another target and an expired record all fail with exit 13 and nothing is sent.
-3. A service that publishes no signed seal key (today's service answers 404) gives the CLI nothing to verify, so
-   `secret set` refuses (exit 13)
-   unless you pass `--allow-unsigned-key`. Then the value is sealed with `hostproto.SealSecret` (X25519, HKDF-SHA256,
-   AES-256-GCM, associated data binding the target id and the secret name) to the encryption key the service reported
-   when you approved or pinned the host key, and only if the service still reports exactly that key. This protects
-   the value from the service and the network, but not from a service that substituted the key before the approval.
+   fingerprint on the host console. No pin, or a service that now reports another `host_key_id`, is refused with
+   what to compare.
+2. It fetches the target's signed seal key, `GET /targets/{id}/seal-key` returning
+   `{host_public_key, host_key_fingerprint, record}` (`record` is the `secretseal.SignedKeyRecord` the host
+   publishes; the endpoint is the control plane request in [BROKER.md](BROKER.md#integration-requests)). It requires
+   that `hostproto.KeyID(host_public_key)` equals the pinned `host_key_id`, that the SHA-256 fingerprint matches the
+   one pinned earlier (recorded on first successful use), and that the record is signed by that key, names this
+   target and is in date (`secretseal.VerifyKeyRecord`). A substituted host key, a seal key signed by anything else,
+   a record for another target and an expired record are all refused.
+3. A service that does not serve the seal key (it answers 404) gives the CLI nothing to verify, and `secret set`
+   refuses. There is no option to seal to an unsigned key: the earlier `hostproto.SealSecret` format is retired.
 
-The buffers holding the value are zeroed after sealing. Only ciphertext is submitted, the submission is never
-retried, and the CLI prints the pinned host key, the seal method, the seal key id and the ciphertext SHA-256. If the
-service records a different ciphertext SHA-256 than the one sent, the CLI reports it with exit 13.
+The value is sealed with `internal/secretseal` (RFC 9180 HPKE; the associated data binds the target, the name, a
+version and a nonce), and only the envelope (`Envelope.Encode()`) is submitted, in the `ciphertext` field. The buffers
+holding the value are zeroed after sealing, the submission is never retried, and the CLI prints the pinned host key
+and its fingerprint, the seal method, the seal key id and the ciphertext SHA-256. If the service records a different
+ciphertext SHA-256 than the one sent, the CLI reports it with exit 13.
 
 ## What the CLI does not do
 

@@ -355,7 +355,7 @@ func (e *env) pinTarget(t Target, source string, replace bool) (*KnownTarget, er
 	if err != nil {
 		return nil, err
 	}
-	return st.pin(KnownTarget{Server: e.server.String(), TargetID: t.ID, TargetName: t.Name, HostKeyID: t.HostKeyID, EncryptionKey: t.EncryptionKey, PinnedAt: e.app.Now().UTC().Format("2006-01-02T15:04:05Z"), Source: source}, replace)
+	return st.pin(KnownTarget{Server: e.server.String(), TargetID: t.ID, TargetName: t.Name, HostKeyID: t.HostKeyID, PinnedAt: e.app.Now().UTC().Format("2006-01-02T15:04:05Z"), Source: source}, replace)
 }
 
 func (e *env) targetPin(ctx context.Context, ref, keyID string, replace bool) error {

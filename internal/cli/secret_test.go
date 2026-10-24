@@ -72,13 +72,9 @@ func (f *sealFixture) serve(hostPub ed25519.PublicKey, record any) {
 	f.h.api.reply("GET /api/v1/targets/{id}/seal-key", 200, m)
 }
 
-func (f *sealFixture) pin(withEncryption bool) {
+func (f *sealFixture) pin() {
 	st := store{dir: f.h.dir, euid: os.Geteuid()}
-	enc := ""
-	if withEncryption {
-		enc = f.target.EncryptionKey
-	}
-	if _, err := st.pin(KnownTarget{Server: f.h.api.URL(), TargetID: f.target.ID, TargetName: f.target.Name, HostKeyID: f.target.HostKeyID, EncryptionKey: enc, Source: "test"}, true); err != nil {
+	if _, err := st.pin(KnownTarget{Server: f.h.api.URL(), TargetID: f.target.ID, TargetName: f.target.Name, HostKeyID: f.target.HostKeyID, Source: "test"}, true); err != nil {
 		f.h.t.Fatal(err)
 	}
 }
@@ -112,7 +108,7 @@ func assertNoSecret(t *testing.T, f *sealFixture, r result) {
 
 func TestSecretSetSealsToTheHostSignedKey(t *testing.T) {
 	f := newSealFixture(t)
-	f.pin(false)
+	f.pin()
 	f.serve(f.hostPub, f.seal.Published())
 	r := f.set(plaintext + "\n")
 	if r.code != 0 || !strings.Contains(r.stdout, f.target.HostKeyID+" (pinned)") || !strings.Contains(r.stdout, sealMethodSigned) {
@@ -164,10 +160,10 @@ func TestSecretSetRefusesAMaliciousService(t *testing.T) {
 	for name, attack := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newSealFixture(t)
-			f.pin(true)
+			f.pin()
 			pub, rec := attack(f)
 			f.serve(pub, rec)
-			r := f.set(plaintext+"\n", "--allow-unsigned-key")
+			r := f.set(plaintext + "\n")
 			if r.code != ExitTrust || !strings.Contains(r.stderr, "Nothing was sent") && !strings.Contains(r.stderr, "nothing was sent") {
 				t.Fatalf("%v", r)
 			}
@@ -185,7 +181,7 @@ func TestSecretSetPinChecks(t *testing.T) {
 	if r := f.set(plaintext + "\n"); r.code != ExitTrust || !strings.Contains(r.stderr, "target pin local") {
 		t.Fatalf("an unpinned target: %v", r)
 	}
-	f.pin(true)
+	f.pin()
 	moved := f.target
 	moved.HostKeyID = "ed25519:" + strings.Repeat("7", 32)
 	f.h.api.reply("GET /api/v1/targets/{id}", 200, moved)
@@ -197,41 +193,45 @@ func TestSecretSetPinChecks(t *testing.T) {
 	}
 }
 
-func TestSecretSetUnsignedKeyNeedsTheFlagAndTheApprovalPin(t *testing.T) {
+func TestSecretSetRefusesWithoutAPublishedSealKey(t *testing.T) {
 	f := newSealFixture(t)
-	f.pin(true)
+	f.pin()
 	f.serve(nil, nil)
 	r := f.set(plaintext + "\n")
-	if r.code != ExitTrust || !strings.Contains(r.stderr, "seal_key_unsigned") || !strings.Contains(r.stderr, "--allow-unsigned-key") {
-		t.Fatalf("%v", r)
-	}
-	r = f.set(plaintext+"\n", "--allow-unsigned-key", "--header", "Authorization", "--scheme", "Bearer")
-	if r.code != 0 || !strings.Contains(r.stderr, "publishes no host-signed seal key") {
+	if r.code != ExitTrust || !strings.Contains(r.stderr, "seal_key_unpublished") || !strings.Contains(r.stderr, "Nothing was read or sent") || len(f.posted) != 0 {
 		t.Fatalf("%v", r)
 	}
 	assertNoSecret(t, f, r)
+	if r = f.set(plaintext+"\n", "--allow-unsigned-key"); r.code != ExitUsage {
+		t.Fatalf("there is no way to seal to an unsigned key: %v", r)
+	}
+}
+
+func TestSecretSetBearerSchemeAndFingerprintPin(t *testing.T) {
+	f := newSealFixture(t)
+	f.pin()
+	f.serve(f.hostPub, f.seal.Published())
+	r := f.set(plaintext+"\n", "--header", "Authorization", "--scheme", "Bearer")
+	if r.code != 0 {
+		t.Fatalf("%v", r)
+	}
 	var in control.SecretInput
 	mustDecode(t, f.posted[0], &in)
-	sealed, err := hostproto.DecodeSealed(in.Ciphertext)
-	if err != nil {
-		t.Fatal(err)
+	env, _ := secretseal.DecodeEnvelope(in.Ciphertext)
+	opened, err := secretseal.Open(f.seal, env, 0, f.h.now)
+	if err != nil || string(opened.Value) != "Bearer "+plaintext || in.Header != "Authorization" {
+		t.Fatalf("the host opens %q (%v)", opened.Value, err)
 	}
-	value, err := hostproto.OpenSecret(f.boxKey, sealed, hostproto.SecretAAD(f.target.ID, "anthropic"))
-	if err != nil || string(value) != "Bearer "+plaintext || in.Header != "Authorization" {
-		t.Fatalf("the host cannot open it: %v %q", err, value)
-	}
-	// The service now reports a different encryption key than at approval.
-	other, _ := ecdh.X25519().GenerateKey(rand.Reader)
-	f.target.EncryptionKey = hostproto.EncodeKey(other.PublicKey().Bytes())
-	f.serve(nil, nil)
-	if r = f.set(plaintext+"\n", "--allow-unsigned-key"); r.code != ExitTrust || !strings.Contains(r.stderr, "encryption_key_changed") || len(f.posted) != 1 {
-		t.Fatalf("%v", r)
+	st := store{dir: f.h.dir, euid: os.Geteuid()}
+	k, _ := st.loadTrust()
+	if pin := k.find(f.h.api.URL(), f.target.ID); pin == nil || pin.HostKeyFingerprint != secretseal.HostKeyFingerprint(f.hostPub) {
+		t.Fatalf("the verified SHA256 fingerprint is recorded next to the pin: %+v", pin)
 	}
 }
 
 func TestSecretSetInputRules(t *testing.T) {
 	f := newSealFixture(t)
-	f.pin(false)
+	f.pin()
 	f.serve(f.hostPub, f.seal.Published())
 	if r := f.h.run("", "secret", "set", "anthropic", "--value", plaintext, "--upstream", "api.anthropic.com", "--allow-profile", "p"); r.code != ExitUsage {
 		t.Fatalf("there is no value flag: %v", r)
@@ -261,7 +261,7 @@ func TestSecretSetInputRules(t *testing.T) {
 
 func TestSecretSetDetectsAChangedCiphertext(t *testing.T) {
 	f := newSealFixture(t)
-	f.pin(false)
+	f.pin()
 	f.serve(f.hostPub, f.seal.Published())
 	f.h.api.handle("POST /api/v1/secrets", func(w http.ResponseWriter, r *http.Request, body []byte, _ []string) {
 		writeJSON(w, 200, control.Secret{ID: "s1", Name: "anthropic", TargetID: f.target.ID, Fingerprint: strings.Repeat("0", 64), State: "pending"})

@@ -24,12 +24,11 @@ import (
 //	record (secretseal.SignedKeyRecord) signed by host_public_key, this target, in date
 //	-> secretseal (RFC 9180 HPKE) envelope, Envelope.Encode() in the ciphertext field
 //
-// The seal-key endpoint is the control plane integration request in
-// docs/BROKER.md. A service without it gives the CLI nothing to verify; then
-// secret set refuses, unless the operator passes --allow-unsigned-key: the
-// value is sealed with hostproto.SealSecret to the X25519 key the service
-// reported when the operator approved the host key, and only if the service
-// still reports exactly that key.
+// The host publishes the signed record (agentgate-hostd heartbeat) and the
+// service serves it at the seal-key endpoint; a service or host without it
+// gives the CLI nothing to verify, and secret set refuses. The retired
+// hostproto.SealSecret format (an unsigned key, associated data without a
+// version or nonce) is never used.
 
 // sealKeyAnswer is the answer of GET /targets/{id}/seal-key.
 type sealKeyAnswer struct {
@@ -49,10 +48,7 @@ type sealPlan struct {
 	seal               func(name string, value []byte) (string, error)
 }
 
-const (
-	sealMethodSigned   = "secretseal-hpke"
-	sealMethodUnsigned = "hostproto-unsigned-pinned"
-)
+const sealMethodSigned = "secretseal-hpke"
 
 func pinHint(t Target) string {
 	return "Compare the fingerprint on the host console, then run agentgate target pin " + t.Name + " --host-key-id <host's fingerprint> (or approve the key with agentgate target approve-key, which pins it)."
@@ -60,7 +56,7 @@ func pinHint(t Target) string {
 
 // planSeal checks the pin and the service's key material before anything
 // secret is read. It never contacts the network.
-func planSeal(pin *KnownTarget, t Target, sk *sealKeyAnswer, allowUnsigned bool, now time.Time) (*sealPlan, error) {
+func planSeal(pin *KnownTarget, t Target, sk *sealKeyAnswer, now time.Time) (*sealPlan, error) {
 	if pin == nil {
 		return nil, trustError("host_key_not_pinned", "No host key is pinned on this machine for target "+t.Name+" ("+t.ID+").", pinHint(t))
 	}
@@ -68,70 +64,47 @@ func planSeal(pin *KnownTarget, t Target, sk *sealKeyAnswer, allowUnsigned bool,
 		return nil, trustError("host_key_pin_mismatch", "The service reports host key "+t.HostKeyID+" for target "+t.Name+", but this machine pinned "+pin.HostKeyID+". Nothing was sent.",
 			"Do not store secrets on this target until you know why: if the host was re-enrolled on purpose, approve its new key (agentgate target approve-key) after comparing it on the host console.")
 	}
-	if sk != nil {
-		if sk.HostPublicKey == "" || len(sk.Record) == 0 || string(sk.Record) == "null" {
-			return nil, trustError("seal_key_incomplete", "The service published only part of the target's seal key material.", "Report this to the service operator; nothing was sent.")
-		}
-		raw, err := hostproto.DecodeKey(sk.HostPublicKey)
-		if err != nil {
-			return nil, trustError("seal_key_invalid", "The service reported an invalid host public key.", "Report this to the service operator; nothing was sent.")
-		}
-		hostPub := ed25519.PublicKey(raw)
-		if subtle.ConstantTimeCompare([]byte(hostproto.KeyID(hostPub)), []byte(pin.HostKeyID)) != 1 {
-			return nil, trustError("host_key_substituted", "The host public key the service sent has fingerprint "+hostproto.KeyID(hostPub)+", not the pinned "+pin.HostKeyID+". Nothing was sent.",
-				"The service (or something between you and it) substituted the host key: do not store secrets through it.")
-		}
-		if sk.HostKeyFingerprint != "" && sk.HostKeyFingerprint != secretseal.HostKeyFingerprint(hostPub) {
-			return nil, trustError("seal_key_inconsistent", "The service's host key fingerprint does not match the host public key it sent. Nothing was sent.", "Report this to the service operator.")
-		}
-		if pin.HostKeyFingerprint != "" && subtle.ConstantTimeCompare([]byte(pin.HostKeyFingerprint), []byte(secretseal.HostKeyFingerprint(hostPub))) != 1 {
-			return nil, trustError("host_key_substituted", "The host public key the service sent does not match the pinned "+pin.HostKeyFingerprint+". Nothing was sent.",
-				"The service (or something between you and it) substituted the host key: do not store secrets through it.")
-		}
-		rec, err := secretseal.ParseSignedKeyRecord(sk.Record)
-		if err != nil {
-			return nil, trustError("seal_key_invalid", "The target's seal key record is malformed.", "Report this to the service operator; nothing was sent.")
-		}
-		pub, err := secretseal.VerifyKeyRecord(rec, hostPub, secretseal.HostKeyFingerprint(hostPub), t.ID, now)
-		if err != nil {
-			msg := "The target's seal key is not valid for this target and time. Nothing was sent."
-			if errors.Is(err, secretseal.ErrSignature) || errors.Is(err, secretseal.ErrFingerprint) {
-				msg = "The target's seal key is not signed by the pinned host key. Nothing was sent."
-			}
-			return nil, trustError("seal_key_unverified", msg, "Do not store secrets through this service until the host publishes a fresh signed seal key (restart agentgate-hostd).")
-		}
-		return &sealPlan{Method: sealMethodSigned, TargetID: t.ID, HostKeyID: pin.HostKeyID, HostKeyFingerprint: secretseal.HostKeyFingerprint(hostPub), SealKeyID: pub.KeyID(), Verified: true, seal: func(name string, value []byte) (string, error) {
-			sealed, err := secretseal.SealAt(pub, t.ID, name, value, now)
-			if err != nil {
-				return "", failure("cannot seal the value: %v", err)
-			}
-			defer sealed.Wipe()
-			return sealed.Envelope.Encode(), nil
-		}}, nil
+	if sk == nil {
+		return nil, trustError("seal_key_unpublished", "The service does not publish a host-signed seal key for target "+t.Name+" (GET /targets/ID/seal-key), so there is no key the CLI can verify against the pinned host key. Nothing was read or sent.",
+			"Upgrade the service and agentgate-hostd so the host publishes its signed seal key, then run secret set again.")
 	}
-	if !allowUnsigned {
-		return nil, trustError("seal_key_unsigned", "The service does not publish a host-signed seal key for target "+t.Name+", so its encryption key cannot be verified against the pinned host key. Nothing was read or sent.",
-			"Upgrade the service and agentgate-hostd so the target publishes its signed seal key (GET /targets/ID/seal-key); or accept the encryption key the service reported when you approved the host key, with --allow-unsigned-key.")
+	if sk.HostPublicKey == "" || len(sk.Record) == 0 || string(sk.Record) == "null" {
+		return nil, trustError("seal_key_incomplete", "The service published only part of the target's seal key material.", "Report this to the service operator; nothing was sent.")
 	}
-	if pin.EncryptionKey == "" {
-		return nil, trustError("encryption_key_not_pinned", "No encryption key was pinned for target "+t.Name+" when its host key was approved.", "Approve or pin the target from this machine (agentgate target approve-key or target pin) first.")
-	}
-	if subtle.ConstantTimeCompare([]byte(pin.EncryptionKey), []byte(t.EncryptionKey)) != 1 {
-		return nil, trustError("encryption_key_changed", "The service now reports a different encryption key for target "+t.Name+" than when its host key was approved. Nothing was sent.",
-			"Do not store secrets through this service until you know why.")
-	}
-	key, err := hostproto.DecodeKey(t.EncryptionKey)
+	raw, err := hostproto.DecodeKey(sk.HostPublicKey)
 	if err != nil {
-		return nil, trustError("encryption_key_invalid", "The pinned encryption key is invalid.", "Pin the target again.")
+		return nil, trustError("seal_key_invalid", "The service reported an invalid host public key.", "Report this to the service operator; nothing was sent.")
 	}
-	return &sealPlan{Method: sealMethodUnsigned, TargetID: t.ID, HostKeyID: pin.HostKeyID, seal: func(name string, value []byte) (string, error) {
-		if len(value) > hostproto.MaxSecretBytes {
-			return "", usageError("the value exceeds %d bytes", hostproto.MaxSecretBytes)
+	hostPub := ed25519.PublicKey(raw)
+	if subtle.ConstantTimeCompare([]byte(hostproto.KeyID(hostPub)), []byte(pin.HostKeyID)) != 1 {
+		return nil, trustError("host_key_substituted", "The host public key the service sent has fingerprint "+hostproto.KeyID(hostPub)+", not the pinned "+pin.HostKeyID+". Nothing was sent.",
+			"The service (or something between you and it) substituted the host key: do not store secrets through it.")
+	}
+	if sk.HostKeyFingerprint != "" && sk.HostKeyFingerprint != secretseal.HostKeyFingerprint(hostPub) {
+		return nil, trustError("seal_key_inconsistent", "The service's host key fingerprint does not match the host public key it sent. Nothing was sent.", "Report this to the service operator.")
+	}
+	if pin.HostKeyFingerprint != "" && subtle.ConstantTimeCompare([]byte(pin.HostKeyFingerprint), []byte(secretseal.HostKeyFingerprint(hostPub))) != 1 {
+		return nil, trustError("host_key_substituted", "The host public key the service sent does not match the pinned "+pin.HostKeyFingerprint+". Nothing was sent.",
+			"The service (or something between you and it) substituted the host key: do not store secrets through it.")
+	}
+	rec, err := secretseal.ParseSignedKeyRecord(sk.Record)
+	if err != nil {
+		return nil, trustError("seal_key_invalid", "The target's seal key record is malformed.", "Report this to the service operator; nothing was sent.")
+	}
+	pub, err := secretseal.VerifyKeyRecord(rec, hostPub, secretseal.HostKeyFingerprint(hostPub), t.ID, now)
+	if err != nil {
+		msg := "The target's seal key is not valid for this target and time. Nothing was sent."
+		if errors.Is(err, secretseal.ErrSignature) || errors.Is(err, secretseal.ErrFingerprint) {
+			msg = "The target's seal key is not signed by the pinned host key. Nothing was sent."
 		}
-		sealed, err := hostproto.SealSecret(key, value, hostproto.SecretAAD(t.ID, name), nil)
+		return nil, trustError("seal_key_unverified", msg, "Do not store secrets through this service until the host publishes a fresh signed seal key (restart agentgate-hostd).")
+	}
+	return &sealPlan{Method: sealMethodSigned, TargetID: t.ID, HostKeyID: pin.HostKeyID, HostKeyFingerprint: secretseal.HostKeyFingerprint(hostPub), SealKeyID: pub.KeyID(), Verified: true, seal: func(name string, value []byte) (string, error) {
+		sealed, err := secretseal.SealAt(pub, t.ID, name, value, now)
 		if err != nil {
-			return "", failure("cannot seal the value")
+			return "", failure("cannot seal the value: %v", err)
 		}
-		return hostproto.EncodeSealed(sealed), nil
+		defer sealed.Wipe()
+		return sealed.Envelope.Encode(), nil
 	}}, nil
 }

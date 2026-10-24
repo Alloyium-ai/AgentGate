@@ -17,7 +17,6 @@ import (
 type secretFlags struct {
 	upstreams, profiles, launchers listFlag
 	header, scheme, target, reason string
-	allowUnsigned                  bool
 }
 
 func init() {
@@ -29,8 +28,7 @@ func init() {
   --allow-profile NAME     profile whose launches may use it (repeatable, required)
   --allow-launcher SUBJECT human who may launch with it (repeatable; default: you)
   --reason TEXT
-  --allow-unsigned-key     seal to the encryption key pinned at key approval when the service
-                           publishes no host-signed seal key (see docs/CLI.md)
+The target's seal key must be signed by the host key pinned on this machine (docs/CLI.md).
 The value is never read from arguments or the environment. On a terminal it is prompted twice
 with echo off; otherwise it is read from standard input (one trailing newline is removed).`,
 		setup: func(fs *flag.FlagSet) runner {
@@ -42,7 +40,6 @@ with echo off; otherwise it is read from standard input (one trailing newline is
 			fs.StringVar(&f.scheme, "scheme", "", "")
 			fs.StringVar(&f.target, "target", "local", "")
 			fs.StringVar(&f.reason, "reason", "", "")
-			fs.BoolVar(&f.allowUnsigned, "allow-unsigned-key", false, "")
 			return func(ctx context.Context, e *env, args, tail []string) error {
 				if len(args) != 1 || len(tail) != 0 {
 					return usageError("secret set takes one secret name; the value is read from a prompt or standard input, never from arguments")
@@ -131,7 +128,7 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 		return err
 	}
 	pin := known.find(e.server.String(), t.ID)
-	plan, err := planSeal(pin, t, sk, f.allowUnsigned, e.app.Now())
+	plan, err := planSeal(pin, t, sk, e.app.Now())
 	if err != nil {
 		return err
 	}
@@ -142,9 +139,6 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 		if _, err := st.pin(entry, true); err != nil {
 			return err
 		}
-	}
-	if plan.Method == sealMethodUnsigned {
-		e.p.warn("target %s publishes no host-signed seal key; sealing to the encryption key pinned when its host key %s was approved", t.Name, plan.HostKeyID)
 	}
 	value, err := e.readNewSecret(ctx, "Value for secret "+name, true)
 	if err != nil {
@@ -181,7 +175,7 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 		return e.p.value(result)
 	}
 	e.p.line("Stored secret %s for target %s (id %s, state %s until the host confirms).", out.Name, t.Name, out.ID, e.p.state(out.State))
-	e.p.fields("  ", [][2]string{{"host key", plan.HostKeyID + " (pinned)"}, {"sealed with", plan.Method}, {"seal key", joinOr([]string{plan.SealKeyID}, "the encryption key pinned at approval")},
+	e.p.fields("  ", [][2]string{{"host key", plan.HostKeyID + " (pinned), " + plan.HostKeyFingerprint}, {"sealed with", plan.Method}, {"seal key", plan.SealKeyID},
 		{"ciphertext sha256", out.Fingerprint}, {"upstreams", strings.Join(out.Upstreams, ", ")}, {"header", out.Header},
 		{"profiles", strings.Join(out.AllowedProfiles, ", ")}, {"launchers", strings.Join(out.AllowedLaunchers, ", ")}})
 	e.p.note("Reference it in a launch with --secret %s[:ENV]; the agent sees only the broker address.", out.Name)

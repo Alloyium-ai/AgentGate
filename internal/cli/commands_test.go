@@ -129,7 +129,7 @@ func TestTargetCommands(t *testing.T) {
 	}
 	st := store{dir: h.dir, euid: os.Geteuid()}
 	k, _ := st.loadTrust()
-	if pin := k.find(h.api.URL(), pending.ID); pin == nil || pin.HostKeyID != hostKey || pin.EncryptionKey == "" {
+	if pin := k.find(h.api.URL(), pending.ID); pin == nil || pin.HostKeyID != hostKey || pin.Source != "approve-key" {
 		t.Fatalf("pin %+v", pin)
 	}
 
