@@ -303,11 +303,70 @@ digest without creating anything.
 
 ## Credentials
 
-A secret value is entered once, on the target host's side, through a path the service relays but cannot read: the
-host publishes an X25519 key, the client encrypts to it, and the service stores only ciphertext in transit and metadata
-afterwards. The host keeps the value in a root-owned file. A broker on the host listens on an exact private endpoint,
-holds an upstream allowlist, adds the credential to requests it forwards, and records counts. The sandbox sees only the
-broker address. The kernel network policy allows that one endpoint and nothing else private.
+A secret value is entered once, on the operator's client, and reaches the target host through a path the service
+relays but cannot read. The host keeps the value in a root-owned 0600 file outside every sandbox mount. A per-launch
+broker on the host holds it, listens on one exact private endpoint, forwards only allowed requests to an exact HTTPS
+origin allowlist, adds the credential to the requests it forwards, and records counts. The sandbox sees only the
+broker address. Design, threat model, configuration and limits: [BROKER.md](BROKER.md).
+
+### Sealed relay (`secret-put`)
+
+- **Host seal key.** The host publishes an X25519 seal key in a record signed by its enrolled Ed25519 key
+  (`secretseal.SignedKeyRecord`: target id, key id, suite, public key, validity of at most 90 days, and the host key
+  fingerprint `SHA256:...`). The service stores and relays the record and never re-signs it. Because the service could
+  otherwise substitute its own key and read every secret, the client verifies the signature against a host key
+  fingerprint it obtained out of band (the value `agentgate-hostd` prints at enrollment) and pinned client side
+  (`~/.config/agentgate/known-targets.json`, mode 0600). Trust on first use happens only when the operator asks for it
+  and never replaces a different pin.
+- **Envelope.** The client seals with RFC 9180 HPKE (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305, base
+  mode). The associated data binds the secret name (the `ref`), the target id, a version (the sealing time in Unix
+  milliseconds) and a fresh 128-bit nonce. The envelope holds only ciphertext and that public context. The service
+  keeps nothing it can decrypt: it relays the envelope in the `secret-put` job, then keeps only its SHA-256 and the
+  host's fingerprint.
+- **Host acceptance.** The host refuses a different target or key, a version not newer than the stored one (replay or
+  rollback of a rotated secret), an envelope older than 24 hours or more than 5 minutes ahead, and a value the broker
+  cannot inject (8 to 8192 bytes of visible ASCII). It writes the value atomically to its 0600 file.
+- **Receipt.** The job result carries `{target_id, name, version, key_id, nonce, fingerprint, tag}`. The fingerprint
+  is a keyed hash (HMAC-SHA256 under a random key that never leaves the host, truncated to 128 bits), so a short or
+  guessable secret cannot be recovered by guessing, and an unchanged value keeps its fingerprint. The tag is keyed by
+  the HPKE exporter secret that only the sealing client shares with the host; the client verifies it, so a service
+  that replaced the ciphertext with its own (for example its own account key) is detected.
+
+### Brokered use in a launch
+
+- `secrets[].expose.env` receives the route's base URL, `http://ADDRESS:PORT/REF` (for example
+  `ANTHROPIC_BASE_URL=http://172.30.7.2:8443/anthropic`), never a value. Optional `expose.placeholder_env` names a
+  variable the host sets to the fixed non-secret value `agentgate-brokered` for SDKs that refuse to start without a
+  key variable; the broker strips whatever the client sends.
+- Each route binds exactly one secret to exactly one origin (`https://host:port`) and a set of method and path rules.
+  A secret with several upstreams becomes one route per origin (`REF`, `REF-2`, ...); `expose.env` names the first.
+  Secret metadata carries `scheme` (`""`, `Bearer`, `Basic`), `username` for Basic, `rules` and optional
+  `extra_headers`; without `rules` every path of the origin is allowed, which is the widest setting.
+- The broker routes by path only. A client `Host` must equal the broker's own address and never selects a destination.
+  The broker resolves each upstream itself, refuses an answer containing any loopback, private, link-local (including
+  `169.254.169.254`), CGNAT, multicast, documentation or reserved address (or the broker network, or the host's own
+  addresses), connects only to a validated address with TLS verification and SNI equal to the configured name, and
+  re-resolves and re-checks for every new connection. A private-by-design upstream lists its exact private addresses
+  and nothing else is accepted for it. Redirects are returned to the agent and never followed, so a redirect to a
+  private range never carries the credential.
+- Request and response sizes, header sizes and counts, the request rate, concurrency and every timeout are capped; the
+  broker exits at the launch deadline. It never logs headers, bodies, queries or secrets.
+- **Network exception.** The kernel network policy allows the broker's one exact endpoint (address, TCP, port) and
+  nothing else private. Today the guard supports one exact private endpoint per launch, which the taskboard also uses;
+  see the integration requests in BROKER.md.
+- **Evidence.** The broker writes a bounded stats document (`agentgate.broker-stats.v1`): per route the upstream,
+  request, forwarded, status-class and error counts, bytes in and out, masked echoes; denial counts by fixed reason;
+  the first denials as method, sanitized host and a two-segment path prefix; the configuration digest and the process
+  hardening achieved. The host derives `broker_counts` (forwarded requests per upstream) from it and attaches the
+  document to the receipt. It never holds a body, header value, query string or secret.
+
+**Migration status.** `internal/secretseal` and `internal/broker` implement the above. The service and host protocol
+still carry the earlier `hostproto.SealSecret` format (X25519, HKDF-SHA256, AES-256-GCM with associated data of target
+and name only, no version or nonce, and a seal key the client cannot check against a pinned host signature), and
+`agentgate-hostd` refuses `secret-put` and launches with secrets. `expose.placeholder_env`, the secret `scheme`,
+`username`, `rules` and `extra_headers` fields, seal key publication, the receipt in the job result and
+`broker_evidence` in the receipt are contract additions that the spec validator, the service and the host agent do not
+accept yet. The exact changes are the integration requests in [BROKER.md](BROKER.md#integration-requests).
 
 ## Security invariants
 
@@ -424,7 +483,7 @@ curl -sS -X POST "$U/api/v1/targets/local/enrollment" -H "Authorization: Bearer 
 | This contract | `docs/PROVISIONING.md` | written |
 | Control plane: store, API, roles, job queue, audit | `internal/control`, `internal/access`, `internal/hostproto`, `cmd/community` | implemented and tested in the build sandbox (no BPF LSM kernel, no real host); see the cookbook |
 | Host agent and long-running launch runtime | `cmd/agentgate-hostd`, `internal/hostd`, `poc/ssh-diagnostic` | implemented and unit-tested with fakes; Docker, systemd and the BPF LSM kernel were not exercised. The launch runtime (`launch.py`) runs a verified job in the guarded-target path; the daemon enrolls, polls, verifies and runs jobs at most once, retries uploads from a durable outbox, enforces the lifetime and the lost-service grace, and reconciles after a crash. `agentgate-hostd provision` and the `provision` job wrap `appliance.py start`. `verify-kernel.sh` is the kernel verification kit |
-| Credential broker | `cmd/agentgate-broker`, `internal/broker` | not started |
+| Credential broker | `cmd/agentgate-broker`, `internal/broker`, `internal/secretseal` | broker, sealed relay and helpers implemented and tested in the build sandbox with fakes (no Docker, systemd, BPF LSM kernel, real DNS or real upstream); end-to-end use needs the guard, host agent and protocol changes listed in [BROKER.md](BROKER.md#integration-requests) |
 | CLI | `cmd/agentgate` | not started |
 | UI pages | `web/src` | not started |
 | Kernel verification on a BPF LSM host | `docs/QUALIFICATION.md` | not possible in the build sandbox |

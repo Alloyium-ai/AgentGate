@@ -487,3 +487,15 @@ func TestEnvelopeWireStringAndECDHKey(t *testing.T) {
 		t.Fatal("non-X25519 key accepted")
 	}
 }
+
+func TestStoreValidateRefusesUnusableValues(t *testing.T) {
+	f := newFixture(t, "local")
+	f.store.Validate = func(v []byte) bool { return !bytes.ContainsAny(v, " \r\n") }
+	sealed, _ := SealAt(f.pub, "local", "anthropic", []byte("two words"), now)
+	if _, err := f.store.Accept(f.key, &sealed.Envelope, now); !errors.Is(err, ErrValue) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "anthropic")); err == nil {
+		t.Fatal("refused value was stored")
+	}
+}

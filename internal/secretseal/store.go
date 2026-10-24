@@ -28,6 +28,10 @@ const fingerprintKeyFile = ".fingerprint-key"
 type Store struct {
 	dir   string
 	fpKey []byte
+	// Validate, when set, must accept a value before it is stored (for
+	// example broker.ValidSecret, so a value the broker cannot inject is
+	// refused at secret-put time rather than at launch).
+	Validate func([]byte) bool
 }
 
 type secretMeta struct {
@@ -126,6 +130,9 @@ func (s *Store) Accept(key *HostKey, env *Envelope, now time.Time) (*Receipt, er
 		return nil, err
 	}
 	defer opened.Wipe()
+	if s.Validate != nil && !s.Validate(opened.Value) {
+		return nil, ErrValue
+	}
 	fp := s.Fingerprint(env.TargetID, env.Name, opened.Value)
 	if err := writePrivate(filepath.Join(s.dir, env.Name), opened.Value, false); err != nil {
 		return nil, err
