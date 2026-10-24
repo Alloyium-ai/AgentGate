@@ -1,0 +1,18 @@
+Launch 9a8b7c6d5e4f30211203f4e5d6c7b8a9 (repo-fixer) created: approval_pending.
+  target         local (6f1d2c3b4a5968778695a4b3c2d1e0f1)
+  access         profile python-dev version 3 (digest ffffffffffffffff)
+  mode           session, lifetime 1h, expires 2026-10-24T13:00:00Z
+  spec digest    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  policy digest  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Waiting for approval: a different human with the approver role must decide this launch.
+  - brokered secrets anthropic
+  - live host folder repo
+  - the profile requires approval
+  The approver runs: agentgate approve 9a8b7c6d5e4f30211203f4e5d6c7b8a9 --reason "..."
+  You cannot approve your own launch. Ctrl-C stops waiting; the launch keeps waiting for its decision.
+12:00:01  - -> requested  Launch requested
+12:00:02  requested -> approval_pending  Approval required
+12:00:03  approval_pending -> approved  Reviewed the plan
+12:00:04  approved -> queued  Queued
+12:00:05  queued -> provisioning
+12:00:06  provisioning -> running
