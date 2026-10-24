@@ -13,7 +13,7 @@ import { Items, Job, LAUNCH_STATES, Launch, LaunchEvent, LaunchPage, LogPage, Ta
 import { CodeBlock, ConfirmDialog, CopyButton, Digest, Gate, KernelNotice, LiveRegion, ServerMessages, StateBadge } from "./prov-components";
 import { CursorPager, useCursorPages } from "./prov-paging";
 import { PlanView } from "./launch-form";
-import { StreamStatus, followLaunch } from "./launch-stream";
+import { LogStatus, StreamStatus, followLaunch, followLog } from "./launch-stream";
 import { LogBuffer, TRUNCATION_MARKER, filterLines, toText, visible } from "./log-view";
 import { missingText, readEvidence } from "./evidence";
 import { lifetimeText } from "./launch-spec";
@@ -199,42 +199,51 @@ function Timeline({ events }: { events: LaunchEvent[] }) {
   );
 }
 
-function LogViewer({ id, terminal, poke }: { id: string; terminal: boolean; poke: number }) {
+function logStatusText(s?: LogStatus) {
+  if (!s) return "Connecting…";
+  switch (s.mode) {
+    case "live":
+      return "Live";
+    case "connecting":
+      return "Connecting…";
+    case "reconnecting":
+      return `Reconnecting (attempt ${s.attempt})…`;
+    default:
+      return s.detail || "Not following";
+  }
+}
+
+function LogViewer({ id, terminal }: { id: string; terminal: boolean }) {
   const buffer = useRef(new LogBuffer(20000));
   const [, setVersion] = useState(0);
   const [paused, setPaused] = useState(false);
   const [query, setQuery] = useState("");
   const [truncated, setTruncated] = useState(false);
-  const [error, setError] = useState<unknown>();
+  const [status, setStatus] = useState<LogStatus>();
   const [done, setDone] = useState(false);
   const view = useRef<HTMLDivElement>(null);
+  const ended = useRef(terminal);
+  ended.current = terminal;
   useEffect(() => {
-    if (paused) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    const run = async () => {
-      try {
-        for (;;) {
-          const page = await api<LogPage>(`launches/${id}/logs?after=${buffer.current.lastSeq}&limit=1000`, "GET", undefined, undefined, undefined, controller.signal);
-          setTruncated(page.truncated);
-          const added = buffer.current.append(page.items);
-          if (added) setVersion((v) => v + 1);
-          if (page.items.length < 1000) break;
-        }
-        setError(undefined);
-        if (terminal) setDone(true);
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        setError(cause);
-      }
-      if (!terminal && !controller.signal.aborted) timer = setTimeout(run, 4000);
-    };
-    run();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [id, paused, terminal, poke]);
+    if (paused || done) return;
+    // The service streams the output (Server-Sent Events) and resumes after
+    // the last line this page holds; polling is the fallback.
+    const handle = followLog(id, {
+      after: buffer.current.lastSeq,
+      onLines: (lines) => {
+        if (buffer.current.append(lines)) setVersion((v) => v + 1);
+      },
+      onStatus: setStatus,
+      onEnd: (end) => {
+        setTruncated((t) => t || end.truncated);
+        setDone(true);
+      },
+      onTruncated: (t) => setTruncated((x) => x || t),
+      ended: () => ended.current,
+      onSessionEnded: () => dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: "session_expired" })),
+    });
+    return () => handle.stop();
+  }, [id, paused, done]);
   const all = buffer.current.lines;
   const shown = filterLines(all, query);
   const visibleLines = shown.slice(-2000);
@@ -278,7 +287,6 @@ function LogViewer({ id, terminal, poke }: { id: string; terminal: boolean; poke
         </div>
       )}
       {buffer.current.dropped > 0 && <p className="form-note">This page keeps the newest 20,000 lines; {buffer.current.dropped} older lines are only in the download from a fresh load.</p>}
-      {Boolean(error) && <ErrorBox error={error} />}
       <div className="log-view" ref={view} tabIndex={0} role="log" aria-label="Agent output" aria-live="off">
         {visibleLines.length ? (
           visibleLines.map((l) => (
@@ -289,11 +297,11 @@ function LogViewer({ id, terminal, poke }: { id: string; terminal: boolean; poke
             </div>
           ))
         ) : (
-          <p className="muted">{query ? "No line matches." : terminal || done ? "The agent produced no output." : "Waiting for output…"}</p>
+          <p className="muted">{query ? "No line matches." : done ? "The agent produced no output." : "Waiting for output…"}</p>
         )}
       </div>
       <p className="form-note">
-        {shown.length} of {all.length} lines{shown.length > 2000 ? " (showing the newest 2000 matches)" : ""}. {paused ? "Paused: new output is not fetched." : terminal ? "The launch ended." : "Following."} Output is shown as plain text; control
+        {shown.length} of {all.length} lines{shown.length > 2000 ? " (showing the newest 2000 matches)" : ""}. {paused ? "Paused: new output is not fetched." : done ? "The launch ended; this is all of its output." : `Following: ${logStatusText(status)}.`} Output is shown as plain text; control
         characters appear as escapes.
       </p>
     </section>
@@ -491,7 +499,6 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
   const [announce, setAnnounce] = useState("");
   const [dialog, setDialog] = useState<"approve" | "reject" | "stop">();
   const [stopRequested, setStopRequested] = useState<string>();
-  const [poke, setPoke] = useState(0);
   const [, setNow] = useState(0);
   const reload = useRef(detail.reload);
   reload.current = detail.reload;
@@ -512,7 +519,6 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
           clearTimeout(refreshTimer);
           refreshTimer = setTimeout(() => reload.current(), 300);
         }
-        setPoke((x) => x + 1);
       },
       onStatus: setStream,
       onSessionEnded: () => dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: "session_expired" })),
@@ -644,7 +650,7 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
         <h2 id="timeline-title">State timeline</h2>
         <Timeline events={sortedEvents} />
       </section>
-      <LogViewer id={l.id} terminal={terminal} poke={poke} />
+      <LogViewer id={l.id} terminal={terminal} />
       <Receipt launch={l} />
       {l.plan && (
         <section className="panel">

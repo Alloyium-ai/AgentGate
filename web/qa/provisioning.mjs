@@ -48,6 +48,7 @@ const attacker = newHost();
 let sealMode = "missing";
 let streamMode = "ok";
 const streamRequests = [];
+const logStreams = [];
 const requests = [];
 const opened = [];
 const targets = [];
@@ -369,7 +370,14 @@ function api(method, path, query, input, headers) {
       return { items: events[id].filter((e) => e.seq > after) };
     }
     if (method === "GET" && sub === "logs") {
-      const after = Number(query.get("after") || 0);
+      const after = Number(query.get("after") || headers["last-event-id"] || 0);
+      if ((headers.accept || "").includes("text/event-stream")) {
+        logStreams.push({ id, after, lastEventID: headers["last-event-id"] });
+        const body = logs[id].filter((x) => x.seq > after).map((x) => `id: ${x.seq}\nevent: log\ndata: ${JSON.stringify(x)}\n\n`).join("");
+        const ended = ["stopped", "expired", "failed", "rejected", "cancelled"].includes(l.state);
+        const truncated = logs[id].some((x) => x.text.includes("[output truncated"));
+        return { __sse: "event: ready\ndata: {}\n\n" + body + (ended ? `event: end\ndata: ${JSON.stringify({ state: l.state, last_seq: logs[id].at(-1)?.seq || 0, truncated })}\n\n` : "") };
+      }
       return { items: logs[id].filter((x) => x.seq > after), bytes: 1024, limit_bytes: 1 << 20, truncated: logs[id].some((x) => x.text.includes("[output truncated")) };
     }
     if (method === "POST" && (sub === "approve" || sub === "reject")) {
@@ -748,6 +756,9 @@ try {
     await text("Updates: Live").waitFor();
     const logView = page.getByRole("log", { name: "Agent output" });
     await logView.getByText("agent started <img src=x onerror=alert(1)>").waitFor({ timeout: 10000 });
+    assert.ok(logStreams.some((s) => s.id === launchID), "the output is followed over the service's stream");
+    assert.ok(!requests.some((r) => r.path === `launches/${launchID}/logs` && !(r.headers.accept || "").includes("text/event-stream")), "the output is not polled while it streams");
+
     assert.equal(await logView.locator("img").count(), 0, "log text never becomes markup");
     await logView.getByText("\\x1b[31mred\\x1b[0m \\u202eevil").waitFor();
     await page.getByLabel("Search the output").fill("stderr");
@@ -786,6 +797,9 @@ try {
     await text("/etc/shadow").waitFor();
     await text("api.model.example").waitFor();
     await text("Output truncated.").waitFor({ timeout: 10000 });
+    await text("The launch ended; this is all of its output.").waitFor({ timeout: 10000 });
+    const resumedLogs = logStreams.filter((s) => s.id === launchID && s.after > 0);
+    assert.ok(resumedLogs.length > 0 && resumedLogs.every((s) => s.lastEventID === String(s.after)), "the output stream resumes after the last line with Last-Event-ID");
     await text("matches the launch").waitFor();
     await checkLabels("launch detail");
     await page.screenshot({ path: `${output}/launch-detail-desktop.png`, fullPage: true });

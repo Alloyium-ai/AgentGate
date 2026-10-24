@@ -141,7 +141,10 @@ The launch page shows:
   over Server-Sent Events. The client resumes after the last sequence (`?after=` and `Last-Event-ID`), reconnects with
   backoff (1, 2, 4 … 30 s), and after four failures polls the JSON events every 5 s while retrying the stream each
   minute. The status line says Live, Reconnecting or Polling;
-- **agent output**: polled from `/logs?after=` while the launch runs; follow or pause, search (text or `stderr`),
+- **agent output**: streamed from `/logs` as Server-Sent Events (one `log` event per line, resumed after the last line
+  with `?after=` and `Last-Event-ID`, ended by the service's `end` event once the launch is terminal); when the stream
+  keeps failing, or the service does not stream, the page polls `/logs?after=` every 4 s and retries the stream each
+  minute. Follow or pause, search (text or `stderr`),
   download as plain text. Output is rendered only as text; control characters and bidirectional overrides appear as
   escapes such as `\x1b` and `‮`. The page keeps the newest 20,000 lines and shows the newest 2,000 matches. When
   the service's 1 MiB / 20,000-line bound was hit, a banner says so and the marker line is highlighted;
@@ -259,7 +262,6 @@ The browser QA needs a build and Playwright's Chromium. Where the pinned Playwri
   today's service. Against today's service the dry run is refused before anything changes, and storing a secret stops
   at *Verify seal key* with "does not publish a signed seal key"; nothing is sent. The browser flows were tested against
   the fixture, and the sealing code against the Go package's vector and its `Open`, not against a running service.
-- Logs are polled every 4 seconds while a launch runs.
 - Browser pins live in `localStorage`: a private window or cleared site data loses them, and the page then asks for the
   fingerprint again. They are not shared with the CLI.
 - The receipt check only works while the dialog that sealed the secret is open, because the browser keeps the receipt

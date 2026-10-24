@@ -133,7 +133,7 @@ with exit code 4.
 ```sh
 agentgate ps --active --mine
 agentgate events <launch id> -f        # Server-Sent Events, resumes after a disconnect without loss or repeats
-agentgate logs <launch id> -f
+agentgate logs <launch id> -f          # Server-Sent Events of the output, until the launch ends
 agentgate show <launch id>             # state, plan, effective permissions, host jobs, evidence receipt
 ```
 
@@ -202,7 +202,7 @@ never retried. Responses are bounded (8 MiB, 64 KiB for errors, 1 MiB per event-
 Ctrl-C (or SIGTERM) ends the command with exit code 130. An interrupted `launch --wait`, `stop --wait`, `events -f` or
 `logs -f` stops only the waiting: the launch keeps going, and the CLI prints its id and how to follow or stop it.
 
-The event stream resumes after a disconnect with `Last-Event-ID` and drops events it already printed. A stream that
+The event and output streams resume after a disconnect with `Last-Event-ID` and drop what they already printed. A stream that
 fails or goes quiet for 45 seconds is reopened with backoff; after 3 consecutive failures the CLI also polls the events
 endpoint, and after 9 it gives up with the error.
 
@@ -260,7 +260,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `launch (-f SPEC \| FLAGS) [--dry-run] [--wait] [--until running\|done] [--wait-timeout D] [-- CMD...]` | `POST /launch-plans`, `POST /launches`, events | flags below |
 | `ps [--state S\|--active] [--target T] [--name N] [--mine\|--requester S] [--limit N] [--cursor C\|--all]` | `GET /launches` | the service filters and pages (newest first); a full page prints the next `--cursor`; `--all` follows every page (at most 10000) |
 | `show ID` | `GET /launches/{id}` | |
-| `logs ID [-f] [--after N] [--stream stdout\|stderr]` | `GET /launches/{id}/logs` | `-f` polls the bounded log until the launch ends |
+| `logs ID [-f] [--after N] [--stream stdout\|stderr]` | `GET /launches/{id}/logs` | `-f` follows the output as Server-Sent Events (resuming with `Last-Event-ID`) until the service's end event; it polls when the service does not stream |
 | `events ID [-f] [--after N]` | `GET /launches/{id}/events` | `-f` streams with resume |
 | `stop ID [--wait] [--yes]` | `POST /launches/{id}/stop` | confirms for a running session |
 | `approve ID --reason R [--yes]`, `reject ID --reason R` | `POST /launches/{id}/approve`, `/reject` | approver; never your own launch |

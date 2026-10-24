@@ -302,6 +302,8 @@ func TestEndToEndAgainstTheRealService(t *testing.T) {
 	}
 	must(run("", "events", id), 0, "approval_pending -> approved", "stopping -> stopped")
 	must(run("", "show", id), 0, "Evidence receipt", "domain empty          true")
+	// The real service streams the output of an ended launch and ends the stream.
+	must(run("", "logs", id, "-f"), 0, "agent started", "Launch "+id+" stopped")
 
 	// The audit trail names both humans and the digests.
 	audit := must(run("", "audit", "--launch", id, "--json"), 0)

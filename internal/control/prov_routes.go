@@ -36,9 +36,11 @@ func apiTail(path string) []string {
 	return parts[2:]
 }
 
+// isLaunchStream reports a launch event or log stream; streams hold their
+// own bounded capacity instead of a request slot.
 func isLaunchStream(r *http.Request) bool {
 	tail := apiTail(r.URL.Path)
-	return r.Method == "GET" && len(tail) == 3 && tail[0] == "launches" && tail[2] == "events" && strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+	return r.Method == "GET" && len(tail) == 3 && tail[0] == "launches" && (tail[2] == "events" || tail[2] == "logs") && strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 }
 
 // provisioning serves the provisioning API. It returns false for paths it
@@ -155,6 +157,17 @@ func (s *Server) provisioningRead(w http.ResponseWriter, r *http.Request, a Acto
 		v, err := s.Store.LaunchEvents(tail[1], listParam(r, "after", 0), listParam(r, "limit", 200))
 		return map[string]any{"items": v}, err
 	case area == "launches" && n == 3 && tail[2] == "logs":
+		if isLaunchStream(r) {
+			after, err := streamAfter(r)
+			if err != nil {
+				return nil, err
+			}
+			if _, err = launchFrom(s.Store.DB, tail[1]); err != nil {
+				return nil, err
+			}
+			s.logStream(w, r, a, tail[1], after)
+			return nil, nil
+		}
 		return s.Store.LaunchLogs(tail[1], listParam(r, "after", 0), listParam(r, "limit", 500))
 	case area == "secrets" && n == 1:
 		v, err := s.Store.Secrets()
@@ -373,6 +386,160 @@ func (s *Server) launchStreamAuthorized(r *http.Request, a Actor) bool {
 	}
 	svc, err := serviceFrom(s.Store.DB, a.Subject)
 	return err == nil && svc.Enabled && require(Actor{Subject: svc.Subject, Kind: svc.Kind, Scopes: svc.Scopes}, "launch:read", false) == nil
+}
+
+// Stream bounds. A stream is ended after streamLifetime (the client
+// reconnects and resumes), a keepalive comment is sent every streamHeartbeat,
+// and a write that cannot complete within streamWriteTimeout (a client that
+// stopped reading) ends the stream.
+const (
+	defaultStreamWriteTimeout = 20 * time.Second
+	defaultStreamHeartbeat    = 15 * time.Second
+	defaultStreamLifetime     = 5 * time.Minute
+	logStreamBatch            = 64
+	maxStreams                = 64
+)
+
+func (s *Server) streamTimings() (write, heartbeat, lifetime time.Duration) {
+	write, heartbeat, lifetime = s.StreamWriteTimeout, s.StreamHeartbeat, s.StreamLifetime
+	if write <= 0 {
+		write = defaultStreamWriteTimeout
+	}
+	if heartbeat <= 0 {
+		heartbeat = defaultStreamHeartbeat
+	}
+	if lifetime <= 0 {
+		lifetime = defaultStreamLifetime
+	}
+	return
+}
+
+// streamAfter reads the resume point: ?after= wins over Last-Event-ID; both
+// are sequence numbers.
+func streamAfter(r *http.Request) (int, error) {
+	value := r.Header.Get("Last-Event-ID")
+	if v := r.URL.Query().Get("after"); v != "" {
+		value = v
+	}
+	if value == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 || n > 1<<30 || len(value) > 10 {
+		return 0, fail(422, "invalid_filter", "after and Last-Event-ID are a line sequence number.")
+	}
+	return n, nil
+}
+
+// logStream sends a launch's agent output as Server-Sent Events: one "log"
+// event per stored line, id = the line's sequence, data = the line as JSON
+// (so control characters and newlines are escaped and an event never spans
+// more than one data line). It resumes after Last-Event-ID or ?after=,
+// fetches at most logStreamBatch lines before it has written them (a slow
+// client holds back the reads, never memory), sends keepalives, and ends
+// with an "end" event once the launch is terminal and every line was sent.
+func (s *Server) logStream(w http.ResponseWriter, r *http.Request, a Actor, id string, after int) {
+	f, ok := w.(http.Flusher)
+	if !ok {
+		return
+	}
+	writeTimeout, heartbeat, lifetime := s.streamTimings()
+	s.mu.Lock()
+	if len(s.clients) >= maxStreams {
+		s.mu.Unlock()
+		http.Error(w, "stream capacity reached", 503)
+		return
+	}
+	c := make(chan int64, 16)
+	s.clients[c] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.clients[c] {
+			delete(s.clients, c)
+			close(c)
+		}
+		s.mu.Unlock()
+	}()
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("X-Accel-Buffering", "no")
+	write := func(format string, args ...any) bool {
+		rc.SetWriteDeadline(time.Now().Add(writeTimeout))
+		_, err := fmt.Fprintf(w, format, args...)
+		return err == nil
+	}
+	// send writes every line after the resume point, one bounded batch at a
+	// time, and reports whether the stream should go on.
+	send := func() (more bool) {
+		if !s.launchStreamAuthorized(r, a) {
+			return false
+		}
+		for {
+			page, err := s.Store.LaunchLogs(id, after, logStreamBatch)
+			if err != nil {
+				return false
+			}
+			lines := page["items"].([]LogLine)
+			s.logLinesFetched.Add(int64(len(lines)))
+			for _, line := range lines {
+				raw, _ := json.Marshal(line)
+				rc.SetWriteDeadline(time.Now().Add(writeTimeout))
+				if _, err := fmt.Fprintf(w, "id: %d\nevent: log\ndata: %s\n\n", line.Seq, raw); err != nil {
+					return false
+				}
+				after = line.Seq
+				s.logLinesDelivered.Add(1)
+			}
+			rc.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if rc.Flush() != nil || r.Context().Err() != nil {
+				return false
+			}
+			if len(lines) < logStreamBatch {
+				break
+			}
+		}
+		l, err := launchFrom(s.Store.DB, id)
+		if err != nil {
+			return false
+		}
+		if TerminalState(l.State) {
+			raw, _ := json.Marshal(map[string]any{"state": l.State, "last_seq": after, "truncated": l.logBytes >= maxLaunchLogBytes || l.logSeq >= maxLaunchLogLines})
+			write("event: end\ndata: %s\n\n", raw)
+			f.Flush()
+			return false
+		}
+		return true
+	}
+	ready, _ := json.Marshal(map[string]int{"after": after})
+	if !write("retry: 2000\nevent: ready\ndata: %s\n\n", ready) {
+		return
+	}
+	f.Flush()
+	if !send() {
+		return
+	}
+	tick := time.NewTicker(heartbeat)
+	defer tick.Stop()
+	end := time.NewTimer(lifetime)
+	defer end.Stop()
+	for {
+		select {
+		case _, ok := <-c:
+			if !ok || !send() {
+				return
+			}
+		case <-tick.C:
+			if !s.launchStreamAuthorized(r, a) || !write(": keepalive\n\n") {
+				return
+			}
+			f.Flush()
+		case <-end.C:
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 // hostd serves /api/v1/hostd/*. A host authenticates every request with its

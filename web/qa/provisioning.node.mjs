@@ -272,6 +272,55 @@ test("repeated stream failures fall back to polling and a 401 ends following", a
   assert.equal(M.backoff(10), 30000);
 });
 
+const logLine = (seq, text) => `id: ${seq}\nevent: log\ndata: ${JSON.stringify({ seq, time: "2026-10-24T00:00:00.000Z", stream: "stdout", text })}\n\n`;
+
+test("the output stream resumes after the last line and stops at the end event", async () => {
+  const calls = [];
+  const lines = [];
+  let end;
+  let n = 0;
+  const fetchImpl = async (url, init) => {
+    calls.push([url, init.headers["Last-Event-ID"]]);
+    n++;
+    // The first stream drops after two lines; the second repeats one, adds one and ends.
+    if (n === 1) return sse("retry: 2000\nevent: ready\ndata: {}\n\n" + logLine(1, "one") + logLine(2, "two\n\nevent: forged"));
+    if (n === 2) return sse("event: ready\ndata: {}\n\n" + logLine(2, "two again") + logLine(3, "three") + ": keepalive\n\nevent: end\ndata: {\"state\":\"stopped\",\"last_seq\":3,\"truncated\":true}\n\n");
+    return new Promise(() => {});
+  };
+  const statuses = [];
+  M.followLog("L3", { fetchImpl, onLines: (ls) => lines.push(...ls), onEnd: (e) => (end = e), onStatus: (s) => statuses.push(s.mode), maxBackoffMs: 10 });
+  await wait(1300);
+  assert.deepEqual(lines.map((l) => [l.seq, l.text]), [[1, "one"], [2, "two\n\nevent: forged"], [3, "three"]]);
+  assert.deepEqual(calls[0], ["/api/v1/launches/L3/logs?after=0", "0"]);
+  assert.deepEqual(calls[1], ["/api/v1/launches/L3/logs?after=2", "2"]);
+  assert.equal(calls.length, 2, "the end event stops following");
+  assert.deepEqual(end, { state: "stopped", last_seq: 3, truncated: true });
+  assert.equal(statuses.at(-1), "ended");
+});
+
+test("a service without the output stream is polled until the launch ends; a 401 ends the session", async () => {
+  const lines = [];
+  let polls = 0;
+  let terminal = false;
+  let end;
+  const fetchImpl = async (url, init) => {
+    if (init.headers.Accept === "text/event-stream") return json({ items: [] });
+    polls++;
+    if (polls === 1) return json({ items: [{ seq: 1, time: "t", stream: "stderr", text: "warn" }], truncated: false });
+    terminal = true;
+    return json({ items: [{ seq: 2, time: "t", stream: "stdout", text: "done" }], truncated: true });
+  };
+  let truncated = false;
+  M.followLog("L4", { fetchImpl, onLines: (ls) => lines.push(...ls), onEnd: (e) => (end = e), onTruncated: (t) => (truncated = truncated || t), ended: () => terminal, pollMs: 20, sseRetryWhilePollingMs: 100000 });
+  await wait(200);
+  assert.deepEqual(lines.map((l) => l.seq), [1, 2]);
+  assert.ok(truncated && end && end.last_seq === 2, "polling stops once the launch ended");
+  let session = false;
+  M.followLog("L5", { fetchImpl: async () => json({ error: { code: "session_expired" } }, 401), onLines: () => {}, onSessionEnded: () => (session = true) });
+  await wait(20);
+  assert.ok(session);
+});
+
 // ---- logs and receipts -----------------------------------------------------------------
 test("log text keeps control characters and bidi overrides visible", () => {
   assert.equal(M.visible("ok\x1b[31mred‮evil\tend\n"), "ok\\x1b[31mred\\u202eevil\tend\n");

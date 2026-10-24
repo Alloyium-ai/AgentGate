@@ -111,7 +111,7 @@ func provisioningOperations() []apiOperation {
 		{path: "launches/{id}/reject", method: "post", scope: "launch:approve (approver, not the requester)", body: "DecisionInput"},
 		{path: "launches/{id}/stop", method: "post", scope: "launch:write (launcher); idempotent", body: "DecisionInput"},
 		{path: "launches/{id}/events", method: "get", scope: "launch:read; Accept: text/event-stream streams"},
-		{path: "launches/{id}/logs", method: "get", scope: "launch:read"},
+		{path: "launches/{id}/logs", method: "get", scope: "launch:read; bounded agent output (?after=); Accept: text/event-stream streams it (event log, id = line sequence, resume with Last-Event-ID; keepalives; event end when the launch is terminal)"},
 		{path: "secrets", method: "get", scope: "secrets:admin (admin)"},
 		{path: "secrets", method: "post", scope: "secrets:admin (human admin)", body: "SecretInput"},
 		{path: "secrets/{id}", method: "delete", scope: "secrets:admin (human admin)", body: "ReasonInput"},
@@ -136,6 +136,10 @@ var provisioningQuery = map[string][]map[string]any{
 		{"name": "name", "in": "query", "schema": map[string]any{"type": "string", "pattern": `^[a-z0-9-]{1,40}$`}, "description": "Launches whose name contains this text."},
 		{"name": "requester", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Launches requested by this subject."},
 		{"name": "mine", "in": "query", "schema": map[string]any{"type": "boolean"}, "description": "Launches requested by the caller."},
+	},
+	"launches/{id}/logs": {
+		{"name": "Accept", "in": "header", "schema": map[string]any{"type": "string"}, "description": "text/event-stream streams the output as Server-Sent Events."},
+		{"name": "Last-Event-ID", "in": "header", "schema": map[string]any{"type": "string"}, "description": "Resume the stream after this line sequence (?after= wins)."},
 	},
 	"targets/{id}/secrets": {{"name": "profile", "in": "query", "schema": map[string]any{"type": "string", "pattern": `^[a-z0-9][a-z0-9-]{0,39}$`}, "description": "Also answer whether this profile may use each secret."}},
 }

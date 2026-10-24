@@ -223,3 +223,44 @@ func TestLogsFollowPollsUntilTheLaunchEnds(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 }
+
+func TestLogsFollowStreamsAndResumesWithLastEventID(t *testing.T) {
+	h := newHarness(t)
+	h.login("local:vic", "viewer")
+	var conns atomic.Int32
+	lastIDs := make(chan string, 4)
+	line := func(w http.ResponseWriter, seq int, text string) {
+		raw, _ := json.Marshal(control.LogLine{Seq: seq, Time: "2026-10-24T12:00:00Z", Stream: "stdout", Text: text})
+		fmt.Fprintf(w, "id: %d\nevent: log\ndata: %s\n\n", seq, raw)
+	}
+	h.api.handle("GET /api/v1/launches/{id}/logs", func(w http.ResponseWriter, r *http.Request, _ []byte, _ []string) {
+		if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			t.Error("logs -f polled although the service streams")
+			writeJSON(w, 200, map[string]any{"items": []any{}})
+			return
+		}
+		lastIDs <- r.Header.Get("Last-Event-ID")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		fmt.Fprint(w, "event: ready\ndata: {\"after\":0}\n\n")
+		if conns.Add(1) == 1 {
+			// The first connection drops after two lines.
+			line(w, 1, "one")
+			line(w, 2, "two\x1b[31m")
+			return
+		}
+		line(w, 2, "two again")
+		line(w, 3, "three")
+		fmt.Fprint(w, ": keepalive\n\nevent: end\ndata: {\"state\":\"stopped\",\"last_seq\":3,\"truncated\":true}\n\n")
+	})
+	r := h.run("", "logs", "x1", "-f")
+	if r.code != 0 || r.stdout != "one\ntwo[31m\nthree\n" || !strings.Contains(r.stderr, "Launch x1 stopped") || !strings.Contains(r.stderr, "1 MiB") {
+		t.Fatalf("%v", r)
+	}
+	if first, second := <-lastIDs, <-lastIDs; first != "" || second != "2" {
+		t.Fatalf("Last-Event-ID %q then %q", first, second)
+	}
+	if len(h.api.requestsTo("GET /api/v1/launches/{id}")) != 0 {
+		t.Fatal("a streamed follow polled the launch")
+	}
+}

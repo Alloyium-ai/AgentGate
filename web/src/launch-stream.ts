@@ -191,3 +191,192 @@ export function followLaunch(id: string, options: StreamOptions): { stop: () => 
     },
   };
 }
+
+// ---- agent output ---------------------------------------------------------------
+
+export type StreamLine = { seq: number; time: string; stream: string; text: string };
+export type LogEnd = { state: string; last_seq: number; truncated: boolean };
+export type LogStatus = {
+  mode: "connecting" | "live" | "reconnecting" | "polling" | "ended" | "stopped";
+  attempt: number;
+  lastSeq: number;
+  detail?: string;
+};
+export type LogOptions = {
+  after?: number;
+  onLines: (lines: StreamLine[]) => void;
+  onStatus?: (status: LogStatus) => void;
+  onEnd?: (end: LogEnd) => void;
+  // onTruncated reports the service's bound note from a polled page.
+  onTruncated?: (truncated: boolean) => void;
+  onSessionEnded?: () => void;
+  // ended tells the polling fallback that the launch is terminal, so it
+  // stops after reading what is left.
+  ended?: () => boolean;
+  fetchImpl?: typeof fetch;
+  pollMs?: number;
+  maxBackoffMs?: number;
+  failuresBeforePoll?: number;
+  sseRetryWhilePollingMs?: number;
+  base?: string;
+};
+
+// followLog streams one launch's output from GET /launches/{id}/logs as
+// Server-Sent Events ("log" events whose id is the line sequence, an "end"
+// event once the launch is terminal). It resumes after the last line it holds
+// (?after= and Last-Event-ID) and drops repeats. When the stream keeps failing,
+// or the service answers without a stream, it polls the same endpoint as JSON
+// and retries the stream every minute.
+export function followLog(id: string, options: LogOptions): { stop: () => void } {
+  const doFetch = options.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
+  const base = options.base ?? "/api/v1";
+  const pollMs = options.pollMs ?? 4000;
+  const failuresBeforePoll = options.failuresBeforePoll ?? 3;
+  let lastSeq = options.after ?? 0;
+  let attempt = 0;
+  let failures = 0;
+  let stopped = false;
+  let polling = false;
+  let live = false;
+  let controller: AbortController | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  const path = `${base}/launches/${encodeURIComponent(id)}/logs`;
+  const status = (mode: LogStatus["mode"], detail?: string) => options.onStatus?.({ mode, attempt, lastSeq, detail });
+  const deliver = (items: Record<string, unknown>[]) => {
+    const fresh: StreamLine[] = [];
+    for (const raw of items) {
+      const seq = Number(raw.seq);
+      if (!Number.isInteger(seq) || seq <= lastSeq) continue;
+      lastSeq = seq;
+      fresh.push({ seq, time: String(raw.time ?? ""), stream: String(raw.stream ?? ""), text: String(raw.text ?? "") });
+    }
+    if (fresh.length) options.onLines(fresh);
+  };
+  const finish = (end: LogEnd) => {
+    stopped = true;
+    polling = false;
+    clearTimeout(timer);
+    clearTimeout(pollTimer);
+    status("ended", `The launch is ${end.state.replaceAll("_", " ")}; every line was received.`);
+    options.onEnd?.(end);
+  };
+  const sessionEnded = (res: Response) => {
+    if (res.status !== 401) return false;
+    stopped = true;
+    status("stopped", "Your session ended. Sign in again to follow the output.");
+    options.onSessionEnded?.();
+    return true;
+  };
+  const startPolling = () => {
+    if (polling || stopped) return;
+    polling = true;
+    status("polling", `The output stream is unavailable; checking every ${Math.round(pollMs / 1000)} s.`);
+    const tick = async () => {
+      if (stopped || !polling) return;
+      try {
+        for (;;) {
+          const res = await doFetch(`${path}?after=${lastSeq}&limit=1000`, { credentials: "same-origin", headers: { Accept: "application/json" } });
+          if (sessionEnded(res)) return;
+          if (!res.ok) break;
+          const page = (await res.json()) as { items?: Record<string, unknown>[]; truncated?: boolean };
+          deliver(page.items || []);
+          options.onTruncated?.(Boolean(page.truncated));
+          if ((page.items || []).length < 1000) break;
+        }
+        if (options.ended?.()) {
+          finish({ state: "ended", last_seq: lastSeq, truncated: false });
+          return;
+        }
+      } catch {
+        /* the next tick retries */
+      }
+      if (!stopped && polling) pollTimer = setTimeout(tick, pollMs);
+    };
+    tick();
+  };
+  const schedule = () => {
+    if (stopped) return;
+    if (failures >= failuresBeforePoll) {
+      startPolling();
+      timer = setTimeout(connect, options.sseRetryWhilePollingMs ?? 60000);
+      return;
+    }
+    status("reconnecting");
+    timer = setTimeout(connect, backoff(attempt, options.maxBackoffMs));
+  };
+  const connect = async () => {
+    if (stopped) return;
+    attempt++;
+    if (!live) status(attempt > 1 ? "reconnecting" : "connecting");
+    controller = new AbortController();
+    let ready = false;
+    try {
+      const res = await doFetch(`${path}?after=${lastSeq}`, {
+        credentials: "same-origin",
+        headers: { Accept: "text/event-stream", "Last-Event-ID": String(lastSeq) },
+        signal: controller.signal,
+      });
+      if (sessionEnded(res)) return;
+      if (res.ok && !(res.headers.get("Content-Type") || "").includes("text/event-stream")) {
+        // A service without the output stream answers JSON: poll it.
+        failures = failuresBeforePoll;
+        throw new Error("the service does not stream output");
+      }
+      if (!res.ok || !res.body) throw new Error(`stream refused (${res.status})`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const parser = new SSEParser();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const message of parser.push(decoder.decode(value, { stream: true }))) {
+          if (message.event === "ready") {
+            ready = true;
+            live = true;
+            attempt = 0;
+            failures = 0;
+            if (polling) {
+              polling = false;
+              clearTimeout(pollTimer);
+            }
+            clearTimeout(timer);
+            status("live");
+            continue;
+          }
+          try {
+            const data = JSON.parse(message.data) as Record<string, unknown>;
+            if (message.event === "log") deliver([data]);
+            else if (message.event === "end") {
+              finish({ state: String(data.state ?? "ended"), last_seq: Number(data.last_seq ?? lastSeq), truncated: Boolean(data.truncated) });
+              controller.abort();
+              return;
+            }
+          } catch {
+            /* a malformed message is skipped; the sequence resumes it */
+          }
+        }
+      }
+      if (!ready) throw new Error("stream ended before it was ready");
+      // A normal end (the service closes streams after five minutes).
+      if (!stopped) timer = setTimeout(connect, 1000);
+      return;
+    } catch (error) {
+      if (stopped || controller.signal.aborted) return;
+      live = false;
+      failures++;
+      status("reconnecting", error instanceof Error ? error.message : undefined);
+    }
+    schedule();
+  };
+  connect();
+  return {
+    stop() {
+      stopped = true;
+      polling = false;
+      clearTimeout(timer);
+      clearTimeout(pollTimer);
+      controller?.abort();
+    },
+  };
+}

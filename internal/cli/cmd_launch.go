@@ -118,7 +118,7 @@ Exit codes: 0 queued or running, 8 waiting for approval, 12 ended without reachi
 		}
 	}})
 	register(&command{name: "logs", args: "ID", summary: "Print an agent's output; -f follows it until the launch ends.",
-		help: "  -f, --follow      keep printing new output until the launch ends\n  --after N         start after line N\n  --stream NAME     only stdout or stderr",
+		help: "  -f, --follow      stream new output (Server-Sent Events, resumes after a disconnect) until the launch ends\n  --after N         start after line N\n  --stream NAME     only stdout or stderr",
 		setup: func(fs *flag.FlagSet) runner {
 			follow := fs.Bool("f", false, "")
 			fs.BoolVar(follow, "follow", false, "")
@@ -887,12 +887,34 @@ func (e *env) logs(ctx context.Context, id string, follow bool, after int, strea
 			}
 		}
 	}
+	if follow {
+		// Follow the output as Server-Sent Events; a service without the log
+		// stream, or a stream that keeps failing, falls back to polling.
+		state, streamTruncated, err := e.followLogStream(ctx, c, id, &after, print)
+		switch {
+		case err == nil:
+			truncated = streamTruncated
+			e.p.note("Launch %s %s.", id, state)
+			if truncated {
+				e.p.note("The service keeps at most 1 MiB and 20000 lines per launch; later output was not kept.")
+			}
+			return nil
+		case errors.Is(err, errNoLogStream):
+			if e.g.verbose {
+				e.p.note("the log stream is unavailable; polling the output instead")
+			}
+		case ctx.Err() != nil:
+			return &Error{Exit: ExitInterrupted, Code: "interrupted", Message: "Stopped following the output; the launch keeps going."}
+		default:
+			return err
+		}
+	}
 	if err := drain(); err != nil {
 		return err
 	}
 	if follow {
-		// Agent output is not on the event stream, so following polls the
-		// bounded log endpoint, and checks the launch state between polls.
+		// Polling: read the bounded log endpoint and check the launch state
+		// between reads.
 		idle := 0
 		for {
 			d, _, err := e.getLaunch(ctx, c, id)
@@ -925,6 +947,76 @@ func (e *env) logs(ctx context.Context, id string, follow bool, after int, strea
 		e.p.note("The service keeps at most 1 MiB and 20000 lines per launch; later output was not kept.")
 	}
 	return nil
+}
+
+// errNoLogStream means the service did not stream the output, so logs -f polls.
+var errNoLogStream = errors.New("no log stream")
+
+// followLogStream prints a launch's output from GET /launches/{id}/logs as
+// Server-Sent Events until the service sends its end event. It resumes after
+// a disconnect with Last-Event-ID and drops lines it already printed.
+func (e *env) followLogStream(ctx context.Context, c *Client, id string, after *int, print func([]LogLine)) (string, bool, error) {
+	path := apiPrefix + "/launches/" + pathEscape(id) + "/logs"
+	failures := 0
+	for {
+		last := ""
+		if *after > 0 {
+			last = strconv.Itoa(*after)
+		}
+		started, delivered, ended := time.Now(), false, false
+		var end struct {
+			State     string `json:"state"`
+			Truncated bool   `json:"truncated"`
+		}
+		_, err := c.stream(ctx, path, last, sseIdleTimeout, func(ev sseEvent) (bool, error) {
+			switch ev.event {
+			case "log":
+				var line LogLine
+				if json.Unmarshal(ev.data, &line) != nil || line.Seq <= 0 {
+					return false, &Error{Exit: ExitServer, Code: "invalid_response", Message: "The log stream carried a line the CLI cannot read."}
+				}
+				delivered, failures = true, 0
+				if line.Seq > *after {
+					*after = line.Seq
+					print([]LogLine{line})
+				}
+			case "end":
+				if json.Unmarshal(ev.data, &end) != nil || end.State == "" {
+					return false, &Error{Exit: ExitServer, Code: "invalid_response", Message: "The log stream ended with an answer the CLI cannot read."}
+				}
+				ended = true
+				return true, nil
+			}
+			return false, nil
+		})
+		if ended {
+			return end.State, end.Truncated, nil
+		}
+		var ce *Error
+		if errors.As(err, &ce) && ce.Code == "invalid_response" && !delivered {
+			return "", false, errNoLogStream
+		}
+		if err != nil && !retryableStream(err) {
+			return "", false, err
+		}
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		if err == nil && (delivered || time.Since(started) > minStreamLife) {
+			continue
+		}
+		failures++
+		if failures >= pollFallbackAfter {
+			return "", false, errNoLogStream
+		}
+		d := backoffBase << failures
+		if d > streamBackoffCap || d <= 0 {
+			d = streamBackoffCap
+		}
+		if err := e.app.Sleep(ctx, time.Duration(float64(d)*c.jitter())); err != nil {
+			return "", false, err
+		}
+	}
 }
 
 func (e *env) events(ctx context.Context, id string, follow bool, after int) error {

@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,12 @@ type Server struct {
 	clients                  map[chan int64]bool
 	limits                   map[string]*bucket
 	inflight                 chan struct{}
+	// StreamWriteTimeout, StreamHeartbeat and StreamLifetime bound the launch
+	// log stream; zero means the defaults (20 s, 15 s and 5 minutes).
+	StreamWriteTimeout, StreamHeartbeat, StreamLifetime time.Duration
+	// logLinesFetched and logLinesDelivered count log stream lines read from
+	// the store and written to clients.
+	logLinesFetched, logLinesDelivered atomic.Int64
 }
 type bucket struct {
 	Count int
