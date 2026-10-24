@@ -516,11 +516,50 @@ hard cap in the kernel policy expiry and in the host (which kills the domain at
 the deadline). A document without a mode is the SSH command policy and still
 requires `duration_seconds: 25`.
 
+### Launching with secrets
+
+A launch may use credentials (a model API key, a git token) that the sandbox
+never holds. The operator seals the value once on a client (`agentgate secret
+set`) to the seal key the host agent publishes; the host stores it in
+`/var/lib/agentgate/secrets/<target>/` (root, 0700, outside every launch mount)
+and starts one `agentgate-broker` container per launch. Enable it with
+`agentgate-hostd install ... --broker-image NAME@sha256:HEX` (optionally
+`--broker-egress-network`, `--broker-uid`, `--broker-gid`, `--broker-pool`,
+`--secret-root`); the host then advertises `brokered-secrets`.
+
+For such a launch the service assigns a `/29` inside `172.30.0.0/16` and puts the
+broker's exact endpoint in the signed policy instead of the taskboard (a
+top-level field next to `dns` and `web`):
+
+```json
+"broker": {"address": "172.30.7.2", "protocol": "tcp", "port": 8443}
+```
+
+`broker` and `taskboard` are mutually exclusive (the guard allows one exact
+private endpoint, compiled as the rule `broker-exact`);
+`pilot-network-diagnostic network-info FILE` prints the digest, the document and
+that `endpoint`. The launcher job carries a `broker` block
+(`network`, `subnet`, `address`, `port`, `target_address`, `env`) that
+`launch_job.py` checks against that endpoint. `launch.py` starts the target,
+attaches the guard, and only then joins the target to
+`agentgate-LAUNCH-broker` as `.3`; it refuses to run the agent unless the target
+is on exactly its own network and the broker network. The agent receives only
+base URLs such as `ANTHROPIC_BASE_URL=http://172.30.7.2:8443/anthropic`; no
+secret file, store or broker configuration is mounted into the target. The
+host agent starts the broker before this and stops it after the agent ends;
+its counts reach the receipt as `broker_counts` and `broker_evidence`, and the
+receipt's `broker` block records how the target joined. None of this has run
+with a Docker daemon or on a BPF LSM kernel; see `docs/BROKER.md`.
+
 `verify-kernel.sh --instance NAME` runs the staged kernel verification on a
 disposable BPF-LSM VM: preflight, per-program BPF object load (each verifier
 result reported verbatim), a validation-time check that a more-specific allow
 beneath a deny is rejected, and behaviour probes through one real guarded
-launch (`verify-probe.sh`). It refuses to run without the disposable-VM marker,
+launch (`verify-probe.sh`, which runs the probe agent with a broker stand-in on
+`172.30.255.0/29` and a secret canary, and checks among others that the broker
+endpoint is reachable, its other ports, gateway and neighbours are refused,
+`mkfifo` and `AF_UNIX` binds are denied, and the canary never appears). It
+refuses to run without the disposable-VM marker,
 cleans up, and writes a JSON report the service attaches to a target to decide
 `kernel_verified`. The kit never sets that flag itself. It cannot run in the
 build sandbox; its logic is unit-tested with fakes (`test_verify_kernel.py`),

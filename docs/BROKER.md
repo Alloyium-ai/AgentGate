@@ -14,9 +14,11 @@ service cannot read (`internal/secretseal`).
 | systemd sample | `cmd/agentgate-broker/agentgate-broker@.service` |
 | Sealed relay | `internal/secretseal` (host store, client pinning helper, known-answer vector) |
 
-**Status.** Implemented and tested in the build sandbox with a local TLS fake upstream, a test CA, a fake resolver
-and a fake dialer. Docker, systemd, the BPF LSM guard, real DNS and real upstreams were **not** exercised. End-to-end
-use needs the integration changes listed below; until they land, `agentgate-hostd` refuses launches with secrets.
+**Status.** The broker, the sealed relay, the policy endpoint, the host agent, the service and the launch runtime are
+connected (see [Integration status](#integration-status)). The whole path, from a sealed `POST /secrets` to a launch
+receipt with broker counts, runs in one in-process test with the real service, the real host agent and protocol and the
+real broker against a local TLS fake upstream (test CA, fake resolver). Docker, systemd, the BPF LSM guard, real DNS and
+real upstreams were **not** exercised: the host's Docker steps ran against a command recorder, the guard not at all.
 
 ## Design
 
@@ -270,8 +272,10 @@ messages that name a field or route). It never logs a header, query, body, addre
 ## Evidence: the stats document
 
 The broker atomically replaces `stats_path` (mode 0600) every `stats_interval_seconds` and on exit. The host agent
-parses it with `broker.ParseStats` (strict, at most 1 MiB), checks `launch_id` and `config_sha256` against the
-configuration it wrote, fills `hostproto.Receipt.BrokerCounts` with `broker.BrokerCounts`, and attaches the document.
+parses it with `broker.ParseStats` (strict, at most 1 MiB), checks `launch_id`, `target_id`, `config_sha256` and
+`listen` against the configuration it wrote, fills `hostproto.Receipt.BrokerCounts` with `broker.BrokerCounts`, and
+folds the document into `Receipt.BrokerEvidence` (counts and fixed codes only). The stats file, with its denial records, is removed with the container; the host
+keeps the summary in `STATE/brokers/<launch>/evidence.json`.
 
 ```json
 {
@@ -328,27 +332,34 @@ configuration it wrote, fills `hostproto.Receipt.BrokerCounts` with `broker.Brok
   in a second exactly sized mapping; the scratch mapping is zeroed and unmapped. Arenas are zeroed when the broker
   stops. The value never enters argv, the environment, an error, a log line, the stats or a panic message.
 
-Hardened container (the host agent's recipe; `IMAGE` is the digest-pinned image):
+Hardened container: the commands `agentgate-hostd` runs (`internal/hostd.DockerBroker`; `IMAGE` is the
+digest-pinned image from `--broker-image`, `STATE` the host agent's state directory, default
+`/var/lib/agentgate-hostd`, `SECRETS` the secret root, default `/var/lib/agentgate/secrets`):
 
 ```sh
-L=lch-0001; NET=agentgate-$L-broker; NAME=agentgate-$L-broker
-docker network create --internal --driver bridge --subnet 172.30.7.0/29 "$NET"
-install -d -o 10002 -g 10002 -m 0700 "/var/lib/agentgate/launches/$L/broker"
-digest=$(sha256sum "/var/lib/agentgate/launches/$L/broker.json" | cut -d' ' -f1)
-docker create --name "$NAME" --network "$NET" --ip 172.30.7.2 \
+L=<launch id>; NET=agentgate-$L-broker; D=$STATE/brokers/$L
+# refused first if 172.30.7.0/29 overlaps any Docker network or any host address
+docker network create --internal --driver bridge --subnet 172.30.7.0/29 --gateway 172.30.7.1 \
+  --label agentgate.launch=$L --label agentgate.role=broker-network "$NET"
+docker create --name "$NET" --network "$NET" --ip 172.30.7.2 \
   --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
-  --ulimit core=0 --memory 256m --pids-limit 64 --cpus 1 --restart no \
-  -v "/var/lib/agentgate/launches/$L/broker.json:/etc/agentgate/broker.json:ro" \
-  -v "/var/lib/agentgate/secrets/local/anthropic:/run/agentgate/secrets/anthropic:ro" \
-  -v "/var/lib/agentgate/launches/$L/broker:/var/lib/agentgate/broker" \
-  "$IMAGE" run --config-sha256 "$digest" /etc/agentgate/broker.json
-docker network connect agentgate-egress "$NAME"      # the broker's own route to the internet
-docker start "$NAME"
-docker network connect --ip 172.30.7.3 "$NET" "$TARGET"   # the target joins only the broker network
+  --ulimit core=0 --memory 256m --pids-limit 64 --cpus 1 --restart no --pull never \
+  --label agentgate.launch=$L --label agentgate.role=broker \
+  --mount type=bind,source=$D/broker.json,target=/etc/agentgate/broker.json,readonly \
+  --mount type=bind,source=$SECRETS/<target>/anthropic,target=/run/agentgate/secrets/anthropic,readonly \
+  --mount type=bind,source=$D/stats,target=/var/lib/agentgate/broker \
+  "$IMAGE" run --config-sha256 <sha256 of broker.json> /etc/agentgate/broker.json
+docker network connect agentgate-egress "$NET"   # the broker's own route to the internet (--broker-egress-network)
+docker start "$NET"
+# launch.py, after the guard is attached: the target joins the broker network as .3
+docker network connect --ip 172.30.7.3 "$NET" <target container>
+# stop: docker stop --time 5; rm --force --volumes; network rm; then inspect proves both are gone
 ```
 
-The broker container never mounts the Docker socket, the secret store or anything of the target. The target never
-mounts a secret file. Docker user-namespace remapping changes file ownership inside the container; the custody checks
+`$D` is 0700 and root-owned, `broker.json` is created exclusively with mode 0600, and `$D/stats` (0700) is owned by
+the broker's uid and gid (`--broker-uid`, `--broker-gid`, default 10002). The broker container never mounts the Docker
+socket, the whole secret store or anything of the target; it mounts exactly the store files of the launch's secrets.
+The target never mounts a secret file, the store, the configuration or the stats. Docker user-namespace remapping changes file ownership inside the container; the custody checks
 then refuse root-owned files, so a remapped host must own the config and secret files by the remapped root uid. For a host without Docker, see the systemd sample (not exercised here).
 
 ## Sealed relay for `secret-put` (`internal/secretseal`)
@@ -383,94 +394,133 @@ then refuse root-owned files, so a remapped host must own the config and secret 
 tags use `hmac.Equal`. Plaintext and exporter secrets are cleared after use; Go cannot guarantee that no transient
 copy remains.
 
-## Integration requests
+## Integration status
 
-These changes are outside the broker's files. Each is required for end-to-end use unless marked optional.
+<a id="integration-requests"></a>Each earlier integration request is listed with what now implements it. "Connected"
+means implemented and exercised by tests in the build sandbox; nothing below ran on Docker or a BPF LSM kernel.
 
-### Guard and policy (`internal/pocpolicy`, `bpf/`)
+### Connected
 
-The pilot guard (`bpf/network_peer_match.h`) denies every private, loopback and link-local destination except one
-exact TCP endpoint (`pilot_family`, `pilot_port`, `pilot_address`), which `pocpolicy.Document.Compile` fills from
-`taskboard` together with the allow rule `taskboard-exact`.
+**Policy (`internal/pocpolicy`; no BPF change).** `pocpolicy.Document` has `broker: {address, protocol: "tcp", port}`,
+validated like `taskboard` (canonical RFC 1918 IPv4, not loopback, link-local or `169.254.169.254`, TCP, port
+1024..65535) and mutually exclusive with it: a document with both is refused (`... not both`), because the pilot guard
+holds one exact private endpoint. `Compile` fills `pilot_mode 1`, `pilot_family`, `pilot_port` and `pilot_address` from
+whichever is present and adds the exact allow rule `broker-exact` (or `taskboard-exact`): `/32`, TCP, that port. The
+policy digest covers the endpoint. Documents without `broker` encode and digest exactly as before (pinned in
+`broker_test.go`). `ForLaunch` keeps a broker, `WithBroker(address, port)` replaces the taskboard with the broker, and
+`Shorten` narrows a signed launch document's lifetime without changing anything else.
 
-1. **Broker endpoint in the policy (no BPF change).** Add `broker: {address, protocol: "tcp", port}` to
-   `pocpolicy.Document`, validated exactly like `taskboard` (canonical private IPv4, TCP, port 1024..65535) and
-   mutually exclusive with `taskboard` in v1. `Compile` sets `PilotMode 1`, `PilotFamily IPv4`, `PilotPort` and
-   `PilotAddress` from it and adds the exact allow rule `broker-exact` (`/32`, TCP, that port). The digest covers it,
-   so the receipt binds the endpoint.
-2. **Taskboard and broker together (BPF change).** Extend `struct net_policy` with up to four pilot endpoints
-   (`pilot_count`, `pilot_addresses[4][16]`, `pilot_ports[4]`) and make `pilot_endpoint()` allow a private destination
-   only when family, TCP and port and all 16 address bytes equal one entry; keep everything else in the function as it
-   is. `pocpolicy` then accepts `taskboard` and `broker` together and emits one exact allow rule for each.
-3. Nothing else changes: the broker subnet must never be allowed as a prefix, and the guard keeps denying the
-   target's own egress network and loopback.
-4. **Unix mode (optional).** Today's pilot hooks do not see `AF_UNIX`, so a socket on a read-only per-launch volume is
-   reachable; with a v2 policy the socket directory must be in `filesystem.read_only` (like
-   `/run/agentgate/taskboard`). The full socket component (`internal/enforcement`) denies `AF_UNIX` creation, so this
-   mode will not survive a move to it; TCP is the supported route.
+**Seal key publication.** `agentgate-hostd` derives its seal key with `secretseal.HostKeyFromECDH(target, enrollment
+X25519 key, enrolled Ed25519 key, now, 30 days)` and re-signs it when less than 7 days remain (the key id depends only
+on the public key, so re-signing never invalidates an envelope). Every poll heartbeat carries the record
+(`heartbeat.seal_key`, at most 4 KiB). The service verifies it against the target's approved host key, stores it
+verbatim (`target.seal_key.published`; a record that does not verify is kept out and audited as
+`target.seal_key.rejected`), clears it on re-enrollment, and serves `GET /api/v1/targets/{id}/seal-key`:
+`{target_id, host_key_id, host_public_key, host_key_fingerprint, seal_key_id, not_after, record}`. It never re-signs.
 
-### Host agent and launch runtime (`internal/hostd`, `poc/ssh-diagnostic`)
+**Envelope format.** `SecretPutPayload.ciphertext` is `secretseal.Envelope.Encode()`; `hostproto.DecodeSealed`,
+`ParseSealed` and `CheckSealed` accept only that envelope in its canonical encoding, and `ciphertext_sha256` is the
+SHA-256 of the decoded envelope bytes. `hostproto.SealSecret`, `OpenSecret` and `SecretAAD` are removed, so no new
+secret can use the old format. `CreateSecret` requires the envelope's target and name to equal the secret's, and its
+key id to equal the seal key the target publishes (`seal_key_changed` otherwise).
 
-1. **Seal key.** At start, build `secretseal.HostKeyFromECDH(targetID, keys.Encryption, keys.Signing, now, 30 days)`,
-   publish `Published()` through the service (see the control plane requests) and rotate it before `not_after`.
-2. **`secret-put`.** Replace the fail-closed branch: `env, _ := secretseal.DecodeEnvelope(payload.Ciphertext)`; open
-   `secretseal.OpenStore("/var/lib/agentgate/secrets/" + targetID)` (root, 0700, outside every mount and outside
-   `/var/lib/agentgate/workspace`); set `store.Validate = broker.ValidSecret`; `receipt, err := store.Accept(hostKey,
-   env, now)`; return the receipt in the job result. Map `ErrReplay`, `ErrStale`, `ErrContext`, `ErrOpen`, `ErrValue`
-   to `rejected` results. `secret-delete` removes `DIR/NAME` and `DIR/NAME.meta.json` under the store lock.
-3. **`launch` with secrets.** Allocate a per-launch `/29` from a host-reserved pool (for example `172.30.0.0/16`):
-   broker `.2`, target `.3`, port 8443. Build the config with `broker.BuildLaunchConfig` (`secret_file` = the bind
-   target of each store file, `stats_path` in a per-launch directory owned by the `run_as` uid, `deadline` = the
-   launch `expires_at`); write it root-owned 0600; run `agentgate-broker validate`; start the container with the recipe
-   above; wait up to 10 seconds for the stats file to show `state: running`, else fail the launch closed; put the
-   endpoint in the launch policy (guard request 1); add the returned environment (`expose.env` to base URL) to the
-   agent environment; connect the target to the broker network only after the policy is attached.
-4. **Stop.** `docker stop --time 5` the broker (SIGTERM, graceful within the deadline), read the stats with
-   `broker.ParseStats`, verify `launch_id` and `config_sha256`, set `Receipt.BrokerCounts = broker.BrokerCounts(doc)`,
-   attach the document, then remove the container, the broker network and the per-launch config. A missing or
-   incomplete stats file is reported as `evidence_missing: broker_stats`.
-5. **Never** mount the secret store, a secret file or the broker's config into the target, and never put a value in
-   `agent.env`, argv or job events.
-6. **SDK placeholder (optional, contract amendment below).** Some SDKs refuse to start without a key variable. The
-   host may set the name in `expose.placeholder_env` to the fixed non-secret value `agentgate-brokered`; the broker
-   strips whatever the client sends.
+**Injection rules.** Secret metadata, `LaunchSecret` and the plan carry `scheme` (`""`, `Bearer`, `Basic`; an empty
+scheme for `authorization` is stored as `Bearer`), `username`, `rules` (`[{methods, path, match}]`) and
+`extra_headers`. The service validates them with `hostproto.CheckInjection` and then with `broker.BuildLaunchConfig` on
+a synthetic launch, so a secret the broker would refuse is refused when it is created. **Deny by default:** a secret
+without rules may be stored (older clients), but every launch that references it is refused with
+`secret_rules_missing`. The only wildcard is exactly `rules: [{"methods":["*"],"path":"/"}]`; it is stored expanded
+with `wildcard_rules: true`, and every plan that uses it carries a `WARNING:` notice and an approval reason.
+`BuildLaunchConfig` itself now refuses a secret without rules instead of defaulting to every path.
 
-### Control plane and host protocol (`internal/hostproto`, `internal/control`)
+**`secret-put` and `secret-delete` on the host.** `DecodeEnvelope`, a target and name check, then `Store.Accept` on
+`SECRETS/<target>` (root, 0700; `Validate = broker.ValidSecret`). The host binds the name to the service's secret id,
+version and fingerprint (`STATE/secret-bindings.json`), so a launch uses only the value the service relayed for that
+exact secret id, and answers with `secret_receipt` in the job result. Refusals map to fixed codes
+(`replayed_or_rolled_back`, `envelope_stale`, `envelope_wrong_context`, `envelope_unauthenticated`, `value_refused`,
+`envelope_malformed`). `secret-delete` is refused while a running launch uses the secret; otherwise
+`Store.Delete` overwrites and removes the value and keeps a tombstone of its version (see the fix below).
 
-1. **Envelope format.** `SecretPutPayload.Ciphertext` carries `secretseal.Envelope.Encode()`; `DecodeSealed` and
-   `CheckSealed` (or a new `envelope` field) accept it, `ciphertext_sha256` is the SHA-256 of the decoded envelope
-   bytes, and `CreateSecret` checks `secretseal.DecodeEnvelope` with `TargetID` equal to the target and `Name` equal
-   to the secret name. Retire `hostproto.SealSecret` for new secrets: its AAD binds no version or nonce, so a relayed
-   old ciphertext can roll a rotated secret back, and its X25519 key reaches clients without a host signature the
-   client can check against a pin.
-2. **Seal key publication.** The host sends its `SignedKeyRecord` at enrollment (`EnrollRequest.seal_key_record`) and
-   on rotation; `GET /api/v1/targets/{id}/seal-key` returns `{host_public_key, host_key_fingerprint, record}`. The
-   service stores and relays the record and never re-signs it.
-3. **Receipt relay.** The `secret-put` result carries the `secretseal.Receipt` (fingerprint and tag only); the service
-   stores `fingerprint` as the displayed value fingerprint and returns the receipt to the creating client.
-4. **Evidence.** `hostproto.Receipt` gains `broker_evidence` (raw JSON, at most 64 KiB, the stats document) next to
-   `broker_counts`.
-5. **Injection rules.** Secret metadata and `LaunchSecret` gain `scheme` (`""`, `Bearer`, `Basic`), `username`,
-   `rules` (`[{methods, path, match}]`) and optional `extra_headers`. Until they exist, `BuildLaunchConfig` uses
-   `Bearer` for an `authorization` header, the raw value otherwise, and `DefaultRules()` (every method on every path of
-   the one origin), which is the widest setting. Prefer one upstream per secret; several upstreams become routes
-   `REF`, `REF-2`, ... each bound to one origin, and `expose.env` receives the first.
+**Receipt relay.** The service accepts a successful `secret-put` only with a receipt for exactly the relayed envelope
+(target, name, version, key id, nonce), stores it, shows its keyed fingerprint as `value_fingerprint`, and serves it
+verbatim at `GET /api/v1/secrets/{id}/receipt` (and in the secret object as `receipt`). It cannot check the tag; the
+sealing client does, with `Sealed.VerifyReceipt`.
 
-### CLI (`cmd/agentgate`)
+**Broker endpoint in a launch.** For a launch with secrets the service chooses the launch's `/29` deterministically
+from the launch id inside `172.30.0.0/16` (8191 blocks, block 0 unused): broker `.2`, target `.3`, port 8443. It puts
+the endpoint in the signed launch policy with `WithBroker` (so the policy digest and the approval cover it), names it in
+the plan (`plan.broker`) and in each secret's `base_url`, and refuses an access document that names a broker itself.
+A launch with secrets always needs approval and a target that advertises `brokered-secrets`. A dry run shows an
+example endpoint; the created launch gets its own.
 
-`agentgate secret set NAME --target T --upstream HOST [--header H]` reads the value from stdin, fetches the seal key,
-loads `~/.config/agentgate/known-targets.json`, calls `secretseal.SealForTarget` (trust on first use only with an
-explicit flag, after printing the host key fingerprint for comparison with the one `agentgate-hostd` printed at
-enrollment), uploads `Envelope.Encode()`, keeps the `Sealed` value until the receipt arrives, verifies it with
-`VerifyReceipt` and prints the fingerprint.
+**Launch on the host.** `agentgate-hostd` refuses a broker endpoint that is not the `.2` of a `/29` inside its pool
+(`--broker-pool`, default `172.30.0.0/16`), builds the configuration with `BuildLaunchConfig` (deadline = the signed
+expiry), checks every secret's binding, version and fingerprint, writes the configuration, starts the broker (recipe
+above), and waits at most 10 seconds for stats with `state: running` bound to this launch, target, configuration
+digest and endpoint. Any failure tears down what was created and fails the launch closed (`broker_start_failed`,
+`broker_not_running`, `broker_config_refused`, `secret_unavailable`) before the target starts. The launcher job gains
+a `broker` block `{network, subnet, address, port, target_address, env}` (paths and values never appear in it);
+`launch_job.py` checks it against the signed policy's single endpoint, and `launch.py` joins the target to the broker
+network as `.3` only after the guard is attached, verifies that the target is on exactly its own network and the broker
+network, and gives the agent only the base URLs. The Go and Python shapes are pinned by a drift test.
+
+**Stop and evidence.** When the agent ends (exit, stop, expiry, lost service), the host runs `docker stop --time 5`,
+reads the stats with `broker.ParseStats`, checks launch, target, configuration digest and endpoint, and folds them into
+`Receipt.broker_counts` (forwarded requests per upstream) and `Receipt.broker_evidence`
+(`agentgate.broker-evidence.v1`: state, stop reason, hardening, connection, request and per-route counts and fixed
+codes; no denial records, paths or values). It then removes the container and the network and proves both are gone;
+leftovers are reported as `broker_cleanup_errors` in the network evidence. Missing or invalid stats become
+`broker_evidence.missing` (`broker_stats`, `broker_stats_invalid`, `broker_evidence_unreadable`). A durable
+`STATE/brokers/<launch>/state.json` lets a restarted host agent stop and remove a broker a crash left behind and still
+report its outcome. The service validates the evidence on ingest: none for a launch without secrets, counts and routes
+only for the plan's upstreams, and `listen` equal to the plan's endpoint.
+
+**Capability.** The host advertises `brokered-secrets` only with a broker configured (`--broker-image`), the image
+present, the egress network present and the secret store usable.
+
+**Verification kit.** `verify-probe.sh` runs its probe launch with a broker stand-in on `172.30.255.0/29` and a secret
+canary in a store directory, and `verify_kernel.py` judges, among others: `open(O_CREAT)` allowed, `mkfifo` and an
+`AF_UNIX` pathname bind denied, the broker endpoint reachable, the broker address on another port, the gateway and a
+neighbour in the `/29` refused with `EPERM`/`EACCES`, the secret paths unreadable, and the canary absent from the agent's
+output. The kit is unit-tested with fakes and has not run on a kernel.
+
+**Fixes outside the integration code** (bugs found while connecting the parts):
+
+- `internal/secretseal`: `Store.Delete` writes a tombstone with the deleted version, so the envelope that set a deleted
+  secret cannot set it again (before, a deleted name accepted any older envelope).
+- `internal/broker`: `BuildLaunchConfig` refused nothing for a secret without rules and defaulted to every method on
+  every path; it now refuses (`deny by default`).
+- `internal/pocpolicy`: the host could not run a signed launch document whose expiry was shorter than its lifetime
+  (`ForLaunch` refused a document that already had a mode); `Shorten` narrows it.
+- `poc/ssh-diagnostic`: `verify_kernel.py` was truncated and did not parse, and the probe policy in `verify-probe.sh`
+  was invalid (memory controls in the wrong block, an unknown signal) with a hard-coded digest; both are rewritten.
+- `internal/hostd`: a launch mount that overlaps the host agent's state directory or a configured secret root is refused
+  (`invalid_mount`); the protocol already refused the default locations.
+
+### Remaining
+
+- **Kernel and Docker.** Nothing above ran with a Docker daemon (networks, `--ip`, `--internal`, bind mounts, the
+  privilege drop inside a container, user namespaces) or on a BPF LSM kernel (the guard allowing exactly the broker
+  endpoint). Run `verify-kernel.sh` on a disposable VM before relying on either.
+- **Taskboard and broker together** needs the BPF change from the original request: up to four pilot endpoints in
+  `struct net_policy` and an exact match in `pilot_endpoint()`. Until then a launch with secrets has no taskboard TCP
+  endpoint. The taskboard's `AF_UNIX` bridge volume is still mounted into launch targets by the shared
+  `start-target.sh`.
+- **Pool overlap.** Docker's default address pools can hand out `172.30.0.0/16` subnets. The host refuses a broker
+  network that overlaps an existing network or host address, which fails that launch closed; reserve the pool in
+  `daemon.json` (`default-address-pools`) or set `--broker-pool` on hosts that run brokers.
+- **Appliance runtime.** The one-command appliance does not run brokers and never advertises `brokered-secrets`.
+- **`expose.placeholder_env`** (a fixed non-secret key variable for SDKs that insist on one) is not implemented.
+- **Unix listen mode** is not used by the host agent; TCP is the only supported route.
+- **systemd** (the sample unit) is not wired into the host agent.
 
 ## Limits
 
 - **The broker narrows where a credential goes, not what it can do there.** Within an allowed route and its rules, a
   compromised agent can use the credential as fully as the upstream permits: spend model quota, read or push every
   repository the token reaches, and send any data it holds to that upstream (in prompts, commits or issues). Use
-  least-privilege tokens with spending limits, and tight path and method rules; the interim default rules allow every
-  path of the origin.
+  least-privilege tokens with spending limits, and tight path and method rules; the explicit wildcard rule allows
+  every path of the origin and is flagged in every plan that uses it.
 - **Masking is best effort.** It catches the raw value and its base64 forms, also across reads, but not a value the
   upstream reverses, splits, escapes, hashes or encodes otherwise. Compressed responses are refused rather than passed
   unmasked. Allow only upstreams that do not reflect credentials.
@@ -493,7 +543,7 @@ enrollment), uploads `Envelope.Encode()`, keeps the `Sealed` value until the rec
 - **Not exercised here:** Docker (networks, `--ip`, `--read-only`, capabilities, user namespaces, the default seccomp
   profile's treatment of `openat2`), systemd, the BPF guard with a broker endpoint, real DNS, real upstream TLS, IPv6
   egress, `mlock` under container limits, and the privilege drop inside a container. The privilege drop was tested as
-  root in a child process on the build host.
+  root in a child process on the build host. The host agent's Docker commands were checked against a recorder only.
 
 ## Tests
 
@@ -512,3 +562,16 @@ test that no form of the secret appears in logs, stats or errors. `secretseal` a
 every ciphertext byte and every context field, replay, rollback, stale and future envelopes, a wrong host, a
 substituted seal key, a substituted ciphertext with the same public context, receipt tampering, pin handling and store
 custody.
+
+The integration tests: `go test -race ./internal/control/ -run Broker` runs the real service, the real host agent
+(`internal/hostd`) on the real host protocol, and the real broker in process against a TLS fake upstream: a client
+pins the host key, fetches and verifies the seal key, seals, the host stores the value and returns a receipt the
+client verifies, a launch is planned, approved and run, the agent's request reaches the upstream with the credential,
+and the receipt carries broker counts, broker evidence and `kernel_verified: false`. After every step it checks that no
+form of the value appears in the database, the audit log, job payloads, events, logs, errors, the launcher job or the
+receipt. Negatives: a substituted or tampered seal key, a replayed and a rolled-back `secret-put`, a launcher or profile
+outside the secret's scope, a broker that fails to start (the launch aborts and nothing remains), and a host crash
+mid-launch (the restarted host removes the broker and reports it). `prov_broker_test.go` covers the seal key record
+checks, the envelope and injection refusals, a secret without rules (`secret_rules_missing`), the wildcard warning,
+the endpoint derivation, receipt matching and the schema 6 migration. `internal/hostd` adds the Docker recipe against a recorder, overlap refusals, start and stop failures, recovery, and
+the Go and Python launcher-job drift test.

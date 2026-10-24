@@ -86,15 +86,20 @@ Rules every implementation enforces (`internal/control/prov_launchspec.go`; JSON
   `approver` (or `admin`) role. The requester can never decide their own launch, with any credential.
 - Brokered secrets need a stored profile. Each secret is scoped to the profiles (`allowed_profiles`) and human
   subjects (`allowed_launchers`) that may reference it; the scope is checked when the launch is planned and again when
-  it is queued. The plan names the exact secret refs and secret ids, and the approval covers that plan.
+  it is queued. The plan names the exact secret refs and secret ids, and the approval covers that plan. A secret
+  stored without broker rules is refused when a launch is planned (`secret_rules_missing`, deny by default); a secret
+  with the explicit wildcard rule adds a `WARNING:` notice and an approval reason. A launch with secrets is assigned its
+  own broker endpoint, which the effective policy carries (see [Credentials](#credentials)).
 - The service stores the canonical JSON (Go `encoding/json` of the decoded spec, so key order and whitespace do not
   matter) and its SHA-256. A launch refers to that digest. A stored spec never changes.
 
 Creating a launch (`POST /launches`) or a dry run (`POST /launch-plans`) returns the resolved plan: spec digest,
 policy digest, target, profile version, mode, lifetime, `expires_at` (once queued), image, command, workdir, approval
 decision and reasons, effective permissions (network default, web protocols, DNS resolvers, read-only, writable,
-executable and denied trees, devices, signals, anonymous execute), mounts with their in-agent paths, brokered secrets
-(name, id, env, upstreams, header; never a value), `kernel_verified: false` and notices. The plan is stored with the
+executable and denied trees, devices, signals, anonymous execute, the broker endpoint), mounts with their in-agent
+paths, brokered secrets (name, id, env, upstreams, header, scheme, username, rules, `wildcard_rules`, extra headers,
+`base_url` and the host's `value_fingerprint`; never a value), the broker endpoint (`broker: {address, port, subnet,
+target_address}`), `kernel_verified: false` and notices. The plan is stored with the
 launch and never changes.
 
 ## Launch state machine
@@ -176,7 +181,9 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
   resync is bounded by the same nonce window and timestamp skew, and no older request becomes valid again because
   every request is also timestamp-bound.
 - **Poll** (`POST /hostd/poll`, `PollRequest`): the header, a heartbeat (`capabilities`, `running_launches`,
-  `agent_version`, `kernel_verified`, which must be false) and `max_jobs` (1 to 16). The reply (`PollResponse`) holds
+  `agent_version`, `kernel_verified`, which must be false, and `seal_key`, the host's signed seal key record of at
+  most 4 KiB) and `max_jobs` (1 to 16). The service stores a `seal_key` only when it verifies against the target's
+  approved host key, and serves it verbatim (see [Credentials](#credentials)). The reply (`PollResponse`) holds
   the server time, the poll interval, the accepted sequence and zero or more job envelopes in queue order. A job
   delivered without any event is re-sent after one minute, at most 5 times. A host that reports a launch the service
   considers ended receives a `stop` job.
@@ -191,10 +198,10 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
 | --- | --- | --- |
 | `provision` | none | `{images: [digest refs], reason: code}`: pull images, check the guard; starts nothing |
 | `apply-profile` | `policy_digest` = SHA-256 of `policy` | `{profile_id, profile_version, policy}`: stage and pre-check a policy |
-| `launch` | `launch_id`, `spec_digest` = SHA-256 of `spec`, `policy_digest` = SHA-256 of `policy` | `{spec, policy, expires_at_ms, heartbeat_seconds, mounts: [{name, source, mode, path}], secrets: [{ref, secret_id, env, upstreams, header}]}` |
+| `launch` | `launch_id`, `spec_digest` = SHA-256 of `spec`, `policy_digest` = SHA-256 of `policy` | `{spec, policy, expires_at_ms, heartbeat_seconds, mounts: [{name, source, mode, path}], secrets: [{ref, secret_id, env, upstreams, header, scheme, username, rules: [{methods, path, match}], extra_headers}]}`; with secrets, `policy.broker` is the launch's broker endpoint and `rules` holds 1 to 64 rules |
 | `stop` | launch and both digests | `{reason: code, grace_seconds: 0..300}`: stop, kill the domain, release enforcement, return the receipt |
 | `collect` | launch and both digests | `{reason: code}`: return the receipt without changing anything |
-| `secret-put` | none | `{secret_id, name, upstreams, header, ciphertext, ciphertext_sha256}` |
+| `secret-put` | none | `{secret_id, name, upstreams, header, ciphertext, ciphertext_sha256}`: `ciphertext` is `secretseal.Envelope.Encode()` sealed for this target and name; the success result carries `secret_receipt` |
 | `secret-delete` | none | `{secret_id, name}`: remove the value from the host |
 | `snapshot-mount` | `launch_id`, `spec_digest` | `{name, source, max_bytes: <=256 MiB, max_entries: <=20000}` |
 
@@ -228,12 +235,25 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
 The host returns, per launch (`hostproto.Receipt`, at most 128 KiB): the launch, target, spec and policy digests
 (which must equal the job's), object digests of every BPF program and the guard binary, the network and host-control
 evidence blocks that `pilot-network-diagnostic` already writes, mount identities (`dev:ino` of a live bind or
-`sha256:` of a snapshot), broker request counts per upstream (never bodies or secrets), start and end times, the exit
-code or reason, `domain_empty`, `enforcement_released`, and a `kernel_verified` flag. `kernel_verified` is never a
+`sha256:` of a snapshot), broker request counts per upstream (`broker_counts`, never bodies or secrets), the broker's
+evidence for a launch with secrets (`broker_evidence`, below), start and end times, the exit code or reason,
+`domain_empty`, `enforcement_released`, and a `kernel_verified` flag. `kernel_verified` is never a
 host-asserted value: protocol v1 carries no verification report, so the service rejects a receipt or heartbeat that
 claims `true`, and every launch and target record stores `false` (a database check constraint on launches). Setting
 it requires a future verification report signed by an authority key distinct from every host key and validated by the
 service; until that exists it is always `false`.
+
+`broker_evidence` (`agentgate.broker-evidence.v1`) is the host's summary of the launch broker's stats document after
+it checked the launch, target, configuration digest and endpoint: `config_sha256`, `listen`, `state`, `stop_reason`,
+`complete`, `started_at`, `updated_at`, `hardening` (uid, gid, not dumpable, core limit zero, no new privileges, no
+capabilities, memory locked), `connections` and `requests` counts, `denied` counts by fixed reason, per-route
+`{upstream, requests, forwarded, status, errors, bytes_in, bytes_out, redactions}`, and how many denials were recorded.
+It holds no path, header, query, body, client address or value. When the stats are missing or do not verify, only
+`version` and `missing` (`broker_stats`, `broker_stats_invalid`, `broker_evidence_unreadable`) are set. The receipt
+check requires `broker_counts` to equal the evidence's forwarded counts per upstream. On ingest the service refuses
+broker evidence for a launch without secrets, counts or routes for an upstream outside the plan, and a `listen` other
+than the plan's endpoint (`invalid_receipt`). A broker container or network that may remain is reported as
+`broker_cleanup_errors` in the network evidence.
 
 ## REST API (`/api/v1`)
 
@@ -259,8 +279,10 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/launches/{id}/stop` | POST | launcher | request a stop; idempotent |
 | `/launches/{id}/events` | GET | viewer | ordered events (`?after=`); `Accept: text/event-stream` streams them, resuming from `Last-Event-ID` |
 | `/launches/{id}/logs` | GET | viewer | bounded agent output (`?after=`) |
-| `/secrets` | GET, POST | admin | metadata only; POST carries a value sealed to the target's encryption key |
+| `/targets/{id}/seal-key` | GET | viewer | the host's signed seal key record, verbatim, with the host public key and fingerprint |
+| `/secrets` | GET, POST | admin | metadata only; POST carries a `secretseal` envelope sealed to the target's published seal key, and the broker settings |
 | `/secrets/{id}` | DELETE | admin | queue removal from the host (refused while a live launch uses it) |
+| `/secrets/{id}/receipt` | GET | admin | the host's receipt for the relayed envelope, for the sealing client to verify |
 | `/api-tokens` | GET, POST | any human (session) | list own tokens (admin: all); create one, shown once |
 | `/api-tokens/{id}` | DELETE | holder or admin | revoke |
 | `/hostd/enroll`, `/hostd/poll`, `/hostd/resync`, `/hostd/jobs/{id}/events` | POST | host key | enrollment, poll, resync, progress |
@@ -320,8 +342,8 @@ agentgate schema launch-spec | completion bash|zsh|fish | version
   locally to the latest version and sends nothing; a `dry_run` flag on the grants endpoint would replace that.
 - `secret set` reads the value from a hidden prompt or stdin, never argv or the environment. It requires a client-side
   pin of the target's approved `host_key_id` (`~/.config/agentgate/known-targets.json`, written by `target approve-key`,
-  `target pin` or `up`), fetches `GET /targets/{id}/seal-key` (the pending control plane request in
-  [BROKER.md](BROKER.md#integration-requests)), checks `hostproto.KeyID(host_public_key)` against the pin and the
+  `target pin` or `up`), fetches `GET /targets/{id}/seal-key` (see
+  [BROKER.md](BROKER.md#integration-status)), checks `hostproto.KeyID(host_public_key)` against the pin and the
   record's signature with `secretseal.VerifyKeyRecord`, and uploads `Envelope.Encode()` as `ciphertext`. Until the
   service serves the seal key it refuses; it never seals to an unsigned key. Broker rules (`--rule`,
   `--allow-any-path`), `--scheme Bearer|Basic` and `--extra-header` are sent when the service's OpenAPI `SecretInput`
@@ -365,13 +387,17 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
 ### Brokered use in a launch
 
 - `secrets[].expose.env` receives the route's base URL, `http://ADDRESS:PORT/REF` (for example
-  `ANTHROPIC_BASE_URL=http://172.30.7.2:8443/anthropic`), never a value. Optional `expose.placeholder_env` names a
-  variable the host sets to the fixed non-secret value `agentgate-brokered` for SDKs that refuse to start without a
-  key variable; the broker strips whatever the client sends.
+  `ANTHROPIC_BASE_URL=http://172.30.7.2:8443/anthropic`), never a value. A placeholder key variable for SDKs that
+  refuse to start without one (`expose.placeholder_env`) is proposed in BROKER.md but not implemented; the spec
+  validator refuses it.
 - Each route binds exactly one secret to exactly one origin (`https://host:port`) and a set of method and path rules.
   A secret with several upstreams becomes one route per origin (`REF`, `REF-2`, ...); `expose.env` names the first.
-  Secret metadata carries `scheme` (`""`, `Bearer`, `Basic`), `username` for Basic, `rules` and optional
-  `extra_headers`; without `rules` every path of the origin is allowed, which is the widest setting.
+  Secret metadata carries `scheme` (`""`, `Bearer`, `Basic`; `""` with an `authorization` header is stored as
+  `Bearer`), `username` for Basic, `rules` (1 to 64 of `{methods, path, match}`) and up to 8 `extra_headers`, all
+  checked by the broker's own validator when the secret is created. **Deny by default:** a secret without rules can be
+  stored, but no launch can use it (`secret_rules_missing`). Every method on every path of the upstreams needs the
+  explicit wildcard `rules: [{"methods":["*"],"path":"/"}]`, which is stored expanded with `wildcard_rules: true` and
+  flagged in every plan that uses it.
 - The broker routes by path only. A client `Host` must equal the broker's own address and never selects a destination.
   The broker resolves each upstream itself, refuses an answer containing any loopback, private, link-local (including
   `169.254.169.254`), CGNAT, multicast, documentation or reserved address (or the broker network, or the host's own
@@ -381,22 +407,54 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
   private range never carries the credential.
 - Request and response sizes, header sizes and counts, the request rate, concurrency and every timeout are capped; the
   broker exits at the launch deadline. It never logs headers, bodies, queries or secrets.
-- **Network exception.** The kernel network policy allows the broker's one exact endpoint (address, TCP, port) and
-  nothing else private. Today the guard supports one exact private endpoint per launch, which the taskboard also uses;
-  see the integration requests in BROKER.md.
+- **Network layout.** The service assigns each launch with secrets its own `/29` inside `172.30.0.0/16`, derived from
+  the launch id: `.1` the Docker gateway, `.2` the broker on port 8443, `.3` the target. The effective policy carries
+  `broker: {address: .2, protocol: "tcp", port: 8443}` (`pocpolicy`, mutually exclusive with `taskboard`), so the policy
+  digest and the approval cover the endpoint, and the guard allows that one exact endpoint and nothing else private:
+  not the gateway, not the other addresses of the `/29`, not another port. The target keeps its own network and joins
+  the internal broker network only after the guard is attached; the broker alone has an egress network. The host
+  refuses an endpoint outside its pool (`--broker-pool`) or a network that overlaps an existing one. Today the guard
+  holds one exact private endpoint, so a launch with secrets has no taskboard TCP endpoint.
 - **Evidence.** The broker writes a bounded stats document (`agentgate.broker-stats.v1`): per route the upstream,
   request, forwarded, status-class and error counts, bytes in and out, masked echoes; denial counts by fixed reason;
   the first denials as method, sanitized host and a two-segment path prefix; the configuration digest and the process
-  hardening achieved. The host derives `broker_counts` (forwarded requests per upstream) from it and attaches the
-  document to the receipt. It never holds a body, header value, query string or secret.
+  hardening achieved. The host derives `broker_counts` (forwarded requests per upstream) and `broker_evidence` (the
+  same without denial records) from it. Neither holds a body, header value, query string or secret.
 
-**Migration status.** `internal/secretseal` and `internal/broker` implement the above. The service and host protocol
-still carry the earlier `hostproto.SealSecret` format (X25519, HKDF-SHA256, AES-256-GCM with associated data of target
-and name only, no version or nonce, and a seal key the client cannot check against a pinned host signature), and
-`agentgate-hostd` refuses `secret-put` and launches with secrets. `expose.placeholder_env`, the secret `scheme`,
-`username`, `rules` and `extra_headers` fields, seal key publication, the receipt in the job result and
-`broker_evidence` in the receipt are contract additions that the spec validator, the service and the host agent do not
-accept yet. The exact changes are the integration requests in [BROKER.md](BROKER.md#integration-requests).
+### Flow, end to end
+
+1. **Seal key.** `agentgate-hostd` signs its X25519 enrollment key into a seal key record with its enrolled Ed25519 key
+   (30 days, re-signed a week before expiry) and sends it in every heartbeat. The service verifies and stores it and
+   serves it at `GET /targets/{id}/seal-key`.
+2. **Seal.** The client checks the record against the host key it pinned, seals the value (`secretseal.SealForTarget`)
+   and posts `{name, target, upstreams, header, scheme, username, rules, extra_headers, ciphertext, allowed_profiles,
+   allowed_launchers, reason}` to `/secrets`. The service checks the envelope's target, name and key id and the broker
+   settings, stores metadata, the envelope's SHA-256 and public context (format, key id, version, nonce), and queues
+   `secret-put`.
+3. **Store.** The host opens the envelope into `SECRET_ROOT/<target>/<name>` (default `/var/lib/agentgate/secrets`,
+   root, 0700 directories, 0600 files; refusing replay, rollback, stale envelopes and values the broker cannot
+   inject), binds the name to the secret id, and returns its receipt. The service checks that the receipt answers the
+   relayed envelope, records `value_fingerprint`, sets the secret `stored`, and serves the receipt at
+   `GET /secrets/{id}/receipt` for the client to verify.
+4. **Plan and approve.** A launch referencing the secret is planned with its rules, endpoint and base URLs, and waits
+   for approval by a different human.
+5. **Launch.** The host checks the signed endpoint against its pool and the secret's binding, version and fingerprint,
+   writes the broker configuration (root-owned 0600 in `STATE/brokers/<launch>/`, no value in it), starts the broker
+   container with exactly that launch's store files mounted read-only, and waits for its stats to say `running` for
+   this exact configuration. Only then does the launch runtime start the target, attach the guard, join the target to
+   the broker network and run the agent with the base URLs in its environment. Any broker failure ends the launch
+   before the agent starts and removes what was created.
+6. **Stop.** After the agent ends, the host stops the broker (SIGTERM, 5 seconds), verifies its final stats, removes
+   the container, the network and the configuration, proves they are gone, and returns the receipt with
+   `broker_counts` and `broker_evidence`. A restarted host agent does the same for a broker a crash left behind.
+7. **Delete.** `DELETE /secrets/{id}` (refused while a launch uses it) queues `secret-delete`; the host overwrites and
+   removes the value and keeps a tombstone of its version, so the old envelope cannot set it again.
+
+**Integration status.** Connected and tested in process (real service, host agent, host protocol and broker; a TLS
+fake upstream; Docker and the guard faked). Not exercised: Docker, the BPF LSM guard with a broker endpoint, real DNS
+and upstreams, systemd. Not implemented: `expose.placeholder_env`, a taskboard endpoint in a launch with secrets (needs
+a BPF change), brokers in the one-command appliance. The earlier `hostproto.SealSecret` format is removed. Details in
+[BROKER.md](BROKER.md#integration-status).
 
 ## Security invariants
 
@@ -486,14 +544,20 @@ curl -sS -X POST "$U/api/v1/launches/<id>/stop" -H "Authorization: Bearer $T" -H
 curl -sS "$U/api/v1/launches/<id>" -H "Authorization: Bearer $T"       # state, plan, policy, receipt, jobs
 ```
 
-Store a secret (admin). The client seals the value to the target's `encryption_key` with
-`hostproto.SealSecret(key, value, hostproto.SecretAAD(target_id, name))`; the service never sees the value:
+Store a secret (admin). The client fetches the seal key, verifies it against the host key it pinned and seals the
+value with `secretseal.SealForTarget(known, false, &record, hostPublicKey, targetID, name, value, now)`; `agentgate
+secret set` does all of this. The service never sees the value:
 
 ```sh
+curl -sS "$U/api/v1/targets/local/seal-key" -H "Authorization: Bearer $T"
+# -> {"target_id":"...","host_key_id":"ed25519:...","host_public_key":"...","host_key_fingerprint":"SHA256:...",
+#     "seal_key_id":"...","not_after":"...","record":{...}}
 curl -sS -X POST "$U/api/v1/secrets" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
   -d '{"name":"model-api","target":"local","upstreams":["api.model.example"],"header":"x-api-key",
-  "ciphertext":"<base64url sealed value>","allowed_profiles":["python-dev"],"allowed_launchers":["local:lin"],
+  "rules":[{"methods":["POST"],"path":"/v1/messages","match":"exact"}],
+  "ciphertext":"<Envelope.Encode()>","allowed_profiles":["python-dev"],"allowed_launchers":["local:lin"],
   "reason":"Model access for the coding agent"}'
+curl -sS "$U/api/v1/secrets/<id>/receipt" -H "Authorization: Bearer $T"   # verify with Sealed.VerifyReceipt
 curl -sS -X DELETE "$U/api/v1/secrets/<id>" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
   -d '{"reason":"Rotate"}'
 ```
@@ -512,8 +576,8 @@ curl -sS -X POST "$U/api/v1/targets/local/enrollment" -H "Authorization: Bearer 
 | --- | --- | --- |
 | This contract | `docs/PROVISIONING.md` | written |
 | Control plane: store, API, roles, job queue, audit | `internal/control`, `internal/access`, `internal/hostproto`, `cmd/community` | implemented and tested in the build sandbox (no BPF LSM kernel, no real host); see the cookbook |
-| Host agent and long-running launch runtime | `cmd/agentgate-hostd`, `internal/hostd`, `poc/ssh-diagnostic` | implemented and unit-tested with fakes; Docker, systemd and the BPF LSM kernel were not exercised. The launch runtime (`launch.py`) runs a verified job in the guarded-target path; the daemon enrolls, polls, verifies and runs jobs at most once, retries uploads from a durable outbox, enforces the lifetime and the lost-service grace, and reconciles after a crash. `agentgate-hostd provision` and the `provision` job wrap `appliance.py start`. `verify-kernel.sh` is the kernel verification kit |
-| Credential broker | `cmd/agentgate-broker`, `internal/broker`, `internal/secretseal` | broker, sealed relay and helpers implemented and tested in the build sandbox with fakes (no Docker, systemd, BPF LSM kernel, real DNS or real upstream); end-to-end use needs the guard, host agent and protocol changes listed in [BROKER.md](BROKER.md#integration-requests) |
+| Host agent and long-running launch runtime | `cmd/agentgate-hostd`, `internal/hostd`, `poc/ssh-diagnostic` | implemented and unit-tested with fakes; Docker, systemd and the BPF LSM kernel were not exercised. The launch runtime (`launch.py`) runs a verified job in the guarded-target path; the daemon enrolls, polls, verifies and runs jobs at most once, retries uploads from a durable outbox, enforces the lifetime and the lost-service grace, and reconciles after a crash. `agentgate-hostd provision` and the `provision` job wrap `appliance.py start`. `verify-kernel.sh` is the kernel verification kit. With `--broker-image` the host agent stores sealed secrets, runs a per-launch broker and reports `brokered-secrets`; its Docker commands were tested against a recorder only |
+| Credential broker | `cmd/agentgate-broker`, `internal/broker`, `internal/secretseal` | implemented and connected to the policy, service, host agent and launch runtime; tested end to end in process with a TLS fake upstream (no Docker, systemd, BPF LSM kernel, real DNS or real upstream); see [BROKER.md](BROKER.md#integration-status) |
 | CLI | `cmd/agentgate`, `internal/cli`, `docs/CLI.md` | implemented; tested against a fake service built from the OpenAPI document and end to end against the real service in process (with a fake host agent on the real host protocol). `up` was tested only with a fake command runner: Docker, systemd and a real `agentgate-hostd` were not exercised |
 | UI pages | `web/src` | not started |
 | Kernel verification on a BPF LSM host | `docs/QUALIFICATION.md` | not possible in the build sandbox |
