@@ -114,9 +114,11 @@ func systemInterfaces() ([]InterfaceAddr, error) {
 	return out, nil
 }
 
-// errListen is returned when the configured endpoint is not the launch's
-// private broker address.
-var errListen = errors.New("broker listen address is not the launch's private broker address")
+// ErrListen is returned when the configured endpoint is not the launch's
+// private broker address or cannot be bound exactly.
+var ErrListen = errors.New("broker listen address is not the launch's private broker address")
+
+var errListen = ErrListen
 
 // checkListenInterface requires exactly one up, non-loopback interface that
 // carries the configured address with exactly the configured subnet prefix.

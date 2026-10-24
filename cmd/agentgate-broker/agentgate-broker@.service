@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Dan Metcalf
+#
+# Sample unit for running one broker per launch directly on a host (without
+# Docker). The instance name is the launch id:
+#   systemctl start agentgate-broker@LAUNCH_ID
+# The host agent writes /etc/agentgate/broker/LAUNCH_ID.json (root-owned, not
+# group or world writable) whose listen address is the host side of the
+# launch's broker network, whose run_as names a dedicated unprivileged user,
+# and whose stats_path is under /var/lib/agentgate/broker/LAUNCH_ID/.
+# This sample has not been exercised under systemd in this repository.
+[Unit]
+Description=AgentGate credential broker for launch %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/agentgate/agentgate-broker run /etc/agentgate/broker/%i.json
+# Starts as root to read the root-owned secret and bind, then drops to run_as.
+User=root
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_SETPCAP
+AmbientCapabilities=
+NoNewPrivileges=yes
+LimitCORE=0
+LimitMEMLOCK=1M
+UMask=0077
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agentgate/broker/%i
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @setuid
+TasksMax=64
+MemoryMax=256M
+# The broker exits at its configured deadline; this is a backstop.
+RuntimeMaxSec=1d
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

@@ -20,8 +20,34 @@ const (
 	MaxSecretBytes = 8192
 )
 
-// errSecretCustody never carries a path's contents or the value.
-var errSecretCustody = errors.New("broker secret custody is invalid")
+// ErrSecretCustody never carries a path's contents or the value.
+var ErrSecretCustody = errors.New("broker secret custody is invalid")
+
+// errSecretCustody is the internal alias.
+var errSecretCustody = ErrSecretCustody
+
+// ValidSecret reports whether v can be injected as a credential: 8 to 8192
+// bytes of visible ASCII. The host agent can check a value at secret-put time.
+func ValidSecret(v []byte) bool { return validSecret(v) }
+
+// CheckSecrets loads and immediately wipes every file-backed secret of cfg
+// with the same custody checks as run. Descriptor-backed secrets belong to a
+// run invocation and are reported as unchecked.
+func CheckSecrets(cfg *Config) (unchecked []string, err error) {
+	for _, r := range cfg.Routes {
+		if r.Credential.SecretFile == "" {
+			unchecked = append(unchecked, r.Name)
+			continue
+		}
+		cred, err := loadCredential(r.Name, r.Credential, fileSource(r.Credential.SecretFile))
+		if err != nil {
+			return unchecked, err
+		}
+		cred.destroy()
+		cred.arena.release()
+	}
+	return unchecked, nil
+}
 
 // credential is one route's injection rule with its secret held in an arena.
 type credential struct {

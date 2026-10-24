@@ -46,7 +46,11 @@ func HardenProcess() Hardening {
 	return h
 }
 
-var errIdentity = errors.New("broker cannot assume its unprivileged identity")
+// ErrIdentity is returned when the broker cannot serve as its configured
+// unprivileged identity.
+var ErrIdentity = errors.New("broker cannot assume its unprivileged identity")
+
+var errIdentity = ErrIdentity
 
 // DropPrivileges switches every thread to uid:gid with no supplementary groups
 // and verifies the change cannot be undone. When the process is not root it
