@@ -324,8 +324,8 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
   keeps nothing it can decrypt: it relays the envelope in the `secret-put` job, then keeps only its SHA-256 and the
   host's fingerprint.
 - **Host acceptance.** The host refuses a different target or key, a version not newer than the stored one (replay or
-  rollback of a rotated secret), an envelope older than 24 hours or more than 5 minutes ahead, and a value the broker
-  cannot inject (8 to 8192 bytes of visible ASCII). It writes the value atomically to its 0600 file.
+  rollback of a rotated secret), an envelope older than 24 hours or more than 5 minutes ahead, and (with `Store.Validate` set to
+  `broker.ValidSecret`) a value the broker cannot inject (it needs 8 to 8192 bytes of visible ASCII). It writes the value atomically to its 0600 file.
 - **Receipt.** The job result carries `{target_id, name, version, key_id, nonce, fingerprint, tag}`. The fingerprint
   is a keyed hash (HMAC-SHA256 under a random key that never leaves the host, truncated to 128 bits), so a short or
   guessable secret cannot be recovered by guessing, and an unchanged value keeps its fingerprint. The tag is keyed by
