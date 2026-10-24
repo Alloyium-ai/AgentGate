@@ -76,6 +76,9 @@ func apiSchemas() map[string]any {
 		}
 	}
 	schemas["Evidence"].(map[string]any)["properties"].(map[string]any)["terminal"] = map[string]any{"type": []string{"object", "null"}, "description": "A missing terminal preserves incomplete execution evidence."}
+	for name, schema := range provisioningSchemas() {
+		schemas[name] = schema
+	}
 	return schemas
 }
 
@@ -83,6 +86,9 @@ func apiParameters(op apiOperation) []any {
 	params := []any{map[string]any{"name": "X-Request-ID", "in": "header", "schema": map[string]string{"type": "string"}}, map[string]any{"name": "X-Correlation-ID", "in": "header", "schema": map[string]string{"type": "string"}}}
 	if strings.Contains(op.path, "{id}") {
 		params = append(params, map[string]any{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}})
+	}
+	if strings.Contains(op.path, "{n}") {
+		params = append(params, map[string]any{"name": "n", "in": "path", "required": true, "schema": map[string]string{"type": "integer"}})
 	}
 	if op.method == "get" {
 		for _, name := range []string{"cursor", "actor", "resource", "version", "run", "action", "state", "after", "before", "agent", "verifier", "result"} {
@@ -148,5 +154,7 @@ func OpenAPI() map[string]any {
 		v[op.method] = apiDescription(op)
 		paths[path] = v
 	}
-	return map[string]any{"openapi": "3.1.0", "info": map[string]string{"title": "AgentGate policy control", "version": "0.2.6", "description": "Private prototype. Policy changes and execution evidence have separate trust boundaries. Machine mutations need a fresh signed proof even for an idempotent retry. Bodies have a four MiB limit."}, "paths": paths, "components": map[string]any{"schemas": apiSchemas(), "securitySchemes": map[string]any{"cookieSession": map[string]string{"type": "apiKey", "in": "cookie", "name": "__Host-enforcer-session"}, "signedServiceProof": map[string]string{"type": "apiKey", "in": "header", "name": "Authorization", "description": "Alloyium-Proof Ed25519 proof binds audience, receiver epoch, subject, method, URI, body digest, time and nonce."}}}}
+	api := map[string]any{"openapi": "3.1.0", "info": map[string]string{"title": "AgentGate policy control", "version": "0.2.6", "description": "Private prototype. Policy changes and execution evidence have separate trust boundaries. Machine mutations need a fresh signed proof even for an idempotent retry. Bodies have a four MiB limit."}, "paths": paths, "components": map[string]any{"schemas": apiSchemas(), "securitySchemes": map[string]any{"cookieSession": map[string]string{"type": "apiKey", "in": "cookie", "name": "__Host-enforcer-session"}, "signedServiceProof": map[string]string{"type": "apiKey", "in": "header", "name": "Authorization", "description": "Alloyium-Proof Ed25519 proof binds audience, receiver epoch, subject, method, URI, body digest, time and nonce."}}}}
+	addProvisioning(api)
+	return api
 }

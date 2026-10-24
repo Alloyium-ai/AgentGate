@@ -227,7 +227,7 @@ func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) error {
 func (a *Auth) roles(groups []string) []string {
 	out := []string{}
 	seen := map[string]bool{}
-	valid := map[string]bool{"viewer": true, "auditor": true, "editor": true, "approver": true, "admin": true}
+	valid := validRoles
 	cfg := a.Config
 	if a.CurrentConfig != nil {
 		var err error

@@ -73,8 +73,8 @@ func TestMigrationTwoPreservesExistingHistory(t *testing.T) {
 	defer s.DB.Close()
 	var version int
 	s.DB.QueryRow("PRAGMA user_version").Scan(&version)
-	if version != 4 {
-		t.Fatal("migration did not set schema four")
+	if version != SchemaVersion {
+		t.Fatal("migration did not set the current schema")
 	}
 	kept, err := versionFrom(s.DB, v.ID)
 	if err != nil || kept.Digest != v.Digest {

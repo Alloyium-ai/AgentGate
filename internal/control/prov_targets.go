@@ -1,0 +1,265 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Dan Metcalf
+package control
+
+import (
+	"crypto/subtle"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"alloyium.local/kernel-poc/internal/hostproto"
+)
+
+// Target is a host that runs agentgate-hostd.
+type Target struct {
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	State            string   `json:"state"`
+	Capabilities     []string `json:"capabilities"`
+	Hostname         string   `json:"hostname"`
+	AgentVersion     string   `json:"agent_version"`
+	HostKeyID        string   `json:"host_key_id"`
+	EncryptionKey    string   `json:"encryption_key"`
+	JobKeyID         string   `json:"job_key_id"`
+	LastSeen         string   `json:"last_seen_at,omitempty"`
+	Online           bool     `json:"online"`
+	HeartbeatSeconds int      `json:"heartbeat_seconds"`
+	Created          string   `json:"created_at"`
+	CreatedBy        string   `json:"created_by"`
+	Updated          string   `json:"updated_at"`
+	Revision         int      `json:"revision"`
+	KernelVerified   bool     `json:"kernel_verified"`
+	hostKey          string
+	lastSequence     uint64
+	lastSeenMS       int64
+}
+
+// TargetInput creates or renames a target.
+type TargetInput struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+const targetColumns = "id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision"
+
+func (s *Store) scanTarget(row rowScanner) (Target, error) {
+	var t Target
+	var caps string
+	err := row.Scan(&t.ID, &t.Name, &t.State, &caps, &t.Hostname, &t.AgentVersion, &t.hostKey, &t.HostKeyID, &t.EncryptionKey, &t.JobKeyID, &t.lastSequence, &t.lastSeenMS, &t.HeartbeatSeconds, &t.Created, &t.CreatedBy, &t.Updated, &t.Revision)
+	if err != nil {
+		return t, err
+	}
+	if err = json.Unmarshal([]byte(caps), &t.Capabilities); err != nil {
+		return t, err
+	}
+	if t.lastSeenMS > 0 {
+		t.LastSeen = time.UnixMilli(t.lastSeenMS).UTC().Format(time.RFC3339Nano)
+		limit := time.Duration(hostproto.MissedHeartbeatsLimit) * time.Duration(t.HeartbeatSeconds) * time.Second
+		t.Online = t.State == "active" && s.now().Sub(time.UnixMilli(t.lastSeenMS)) <= limit
+	}
+	return t, nil
+}
+
+// targetBy finds a live target by id, or by name among targets that are not retired.
+func (s *Store) targetBy(q queryer, ref string) (Target, error) {
+	t, err := s.scanTarget(q.QueryRow("SELECT "+targetColumns+" FROM targets WHERE id=?", ref))
+	if errors.Is(err, sql.ErrNoRows) {
+		t, err = s.scanTarget(q.QueryRow("SELECT "+targetColumns+" FROM targets WHERE name=? AND state<>'retired'", ref))
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return t, fail(404, "not_found", "The target does not exist.")
+	}
+	return t, err
+}
+
+// Targets lists every target, newest first.
+func (s *Store) Targets() ([]Target, error) {
+	rows, err := s.DB.Query("SELECT " + targetColumns + " FROM targets ORDER BY created DESC LIMIT 500")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Target{}
+	for rows.Next() {
+		t, err := s.scanTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// TargetDetail returns one target.
+func (s *Store) TargetDetail(ref string) (Target, error) { return s.targetBy(s.DB, ref) }
+
+func newEnrollmentToken() string { return "agtenr_" + randomToken() }
+
+func (s *Store) issueEnrollment(tx *sql.Tx, targetID string, actor Actor) (map[string]any, error) {
+	token := newEnrollmentToken()
+	expires := s.now().Add(hostproto.EnrollmentTokenTTL)
+	if _, err := tx.Exec("INSERT INTO enrollment_tokens VALUES(?,?,?,0,?,?)", digest([]byte(token)), targetID, expires.Unix(), stamp(), actor.Subject); err != nil {
+		return nil, err
+	}
+	return map[string]any{"token": token, "expires_at": expires.UTC().Format(time.RFC3339), "single_use": true, "enroll_path": hostproto.PathEnroll}, nil
+}
+
+// CreateTarget records a pending target and returns its one-time enrollment
+// token. The token is shown once and never stored for idempotent replay.
+func (s *Store) CreateTarget(op Operation, in TargetInput) (any, error) {
+	op.Action, op.Resource, op.Reason = "target.created", "target", safeReason(in.Reason)
+	op.Idempotency = ""
+	return s.Mutation(op, "targets:admin", true, func(tx *sql.Tx, operation *Operation) (any, error) {
+		if err := reasonValid(in.Reason); err != nil {
+			return nil, err
+		}
+		if !hostproto.NamePattern.MatchString(in.Name) {
+			return nil, fail(422, "invalid_target_name", "A target name matches ^[a-z0-9][a-z0-9-]{0,39}$.")
+		}
+		var count int
+		if err := tx.QueryRow("SELECT count(*) FROM targets WHERE state<>'retired'").Scan(&count); err != nil {
+			return nil, err
+		}
+		if count >= 256 {
+			return nil, fail(409, "target_limit", "Retire a target before adding another.")
+		}
+		id, now := newID(), stamp()
+		if _, err := tx.Exec("INSERT INTO targets VALUES(?,?,'pending','[]','','','','','','',0,0,?,?,?,?,1)", id, in.Name, int(s.Provisioning.pollInterval()/time.Second), now, operation.Actor.Subject, now); err != nil {
+			return nil, fail(409, "target_exists", "A live target already uses this name.")
+		}
+		enrollment, err := s.issueEnrollment(tx, id, operation.Actor)
+		if err != nil {
+			return nil, err
+		}
+		operation.Resource = "target:" + id
+		t, err := s.targetBy(tx, id)
+		return map[string]any{"target": t, "enrollment": enrollment}, err
+	})
+}
+
+// IssueEnrollment creates a fresh one-time token for an existing target, for
+// example after a job key rotation or a host reinstall. Enrolling again binds
+// the new host key and retires the old one.
+func (s *Store) IssueEnrollment(op Operation, ref string, in ReasonInput) (any, error) {
+	op.Action, op.Resource, op.Reason = "target.enrollment.issued", "target:"+ref, safeReason(in.Reason)
+	op.Idempotency = ""
+	return s.Mutation(op, "targets:admin", true, func(tx *sql.Tx, operation *Operation) (any, error) {
+		if err := reasonValid(in.Reason); err != nil {
+			return nil, err
+		}
+		t, err := s.targetBy(tx, ref)
+		if err != nil {
+			return nil, err
+		}
+		if t.State == "retired" {
+			return nil, fail(409, "target_retired", "A retired target cannot enroll.")
+		}
+		operation.Resource = "target:" + t.ID
+		enrollment, err := s.issueEnrollment(tx, t.ID, operation.Actor)
+		return map[string]any{"target": t, "enrollment": enrollment}, err
+	})
+}
+
+// RenameTarget changes a target's name.
+func (s *Store) RenameTarget(op Operation, ref string, in TargetInput) (any, error) {
+	op.Action, op.Resource, op.Reason = "target.renamed", "target:"+ref, safeReason(in.Reason)
+	return s.Mutation(op, "targets:admin", true, func(tx *sql.Tx, operation *Operation) (any, error) {
+		if err := reasonValid(in.Reason); err != nil {
+			return nil, err
+		}
+		if !hostproto.NamePattern.MatchString(in.Name) {
+			return nil, fail(422, "invalid_target_name", "A target name matches ^[a-z0-9][a-z0-9-]{0,39}$.")
+		}
+		t, err := s.targetBy(tx, ref)
+		if err != nil {
+			return nil, err
+		}
+		if t.State == "retired" {
+			return nil, fail(409, "target_retired", "A retired target cannot change.")
+		}
+		operation.Resource, operation.Before = "target:"+t.ID, map[string]string{"name": t.Name}
+		if _, err = tx.Exec("UPDATE targets SET name=?,updated=?,revision=revision+1 WHERE id=?", in.Name, stamp(), t.ID); err != nil {
+			return nil, fail(409, "target_exists", "A live target already uses this name.")
+		}
+		return s.targetBy(tx, t.ID)
+	})
+}
+
+// RetireTarget retires a target. It refuses while the target has a launch
+// that is not terminal, so no stop job is ever stranded on a retired host.
+// Retiring revokes the host key; later polls are rejected.
+func (s *Store) RetireTarget(op Operation, ref string, in ReasonInput) (any, error) {
+	op.Action, op.Resource, op.Reason = "target.retired", "target:"+ref, safeReason(in.Reason)
+	return s.Mutation(op, "targets:admin", true, func(tx *sql.Tx, operation *Operation) (any, error) {
+		if err := reasonValid(in.Reason); err != nil {
+			return nil, err
+		}
+		t, err := s.targetBy(tx, ref)
+		if err != nil {
+			return nil, err
+		}
+		operation.Resource = "target:" + t.ID
+		if t.State == "retired" {
+			return t, nil
+		}
+		var live int
+		if err = tx.QueryRow("SELECT count(*) FROM launches WHERE target_id=? AND state NOT IN ('stopped','expired','failed','rejected','cancelled')", t.ID).Scan(&live); err != nil {
+			return nil, err
+		}
+		if live != 0 {
+			return nil, fail(409, "launches_active", "Stop every launch on this target before retiring it.")
+		}
+		now := stamp()
+		if _, err = tx.Exec("UPDATE hostd_keys SET retired=? WHERE target_id=? AND retired=''", now, t.ID); err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec("UPDATE jobs SET state='cancelled',envelope='',completed=?,revision=revision+1 WHERE target_id=? AND state IN ('queued','delivered')", now, t.ID); err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec("UPDATE enrollment_tokens SET used=1 WHERE target_id=? AND used=0", t.ID); err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec("UPDATE secrets SET state='deleted',updated=?,revision=revision+1 WHERE target_id=? AND state<>'deleted'", now, t.ID); err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec("UPDATE targets SET state='retired',updated=?,revision=revision+1 WHERE id=?", now, t.ID); err != nil {
+			return nil, err
+		}
+		return s.targetBy(tx, t.ID)
+	})
+}
+
+// KeyApprovalInput approves the host key a target enrolled with.
+type KeyApprovalInput struct {
+	HostKeyID string `json:"host_key_id"`
+	Reason    string `json:"reason"`
+}
+
+// ApproveTargetKey activates an enrolled host key. The administrator types
+// the fingerprint the host printed; it must equal the key the service bound.
+func (s *Store) ApproveTargetKey(op Operation, ref string, in KeyApprovalInput) (any, error) {
+	op.Action, op.Resource, op.Reason = "target.key.approved", "target:"+ref, safeReason(in.Reason)
+	return s.Mutation(op, "targets:admin", true, func(tx *sql.Tx, operation *Operation) (any, error) {
+		if err := reasonValid(in.Reason); err != nil {
+			return nil, err
+		}
+		t, err := s.targetBy(tx, ref)
+		if err != nil {
+			return nil, err
+		}
+		operation.Resource = "target:" + t.ID
+		if t.State != "awaiting_key_approval" {
+			return nil, fail(409, "no_pending_key", "The target has no host key waiting for approval.")
+		}
+		if subtle.ConstantTimeCompare([]byte(in.HostKeyID), []byte(t.HostKeyID)) != 1 {
+			return nil, fail(409, "fingerprint_mismatch", "The fingerprint differs from the key the host presented. Do not approve; issue a new token.")
+		}
+		operation.Before = map[string]string{"state": t.State, "host_key_id": t.HostKeyID}
+		if _, err = tx.Exec("UPDATE targets SET state='active',last_seen=?,updated=?,revision=revision+1 WHERE id=? AND state='awaiting_key_approval'", s.now().UnixMilli(), stamp(), t.ID); err != nil {
+			return nil, err
+		}
+		return s.targetBy(tx, t.ID)
+	})
+}

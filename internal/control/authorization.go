@@ -19,6 +19,20 @@ func (s *Store) currentActor(tx *sql.Tx, op *Operation) error {
 	}
 	switch op.Actor.Kind {
 	case "human":
+		if op.TokenHash != "" {
+			actor, err := s.resolveToken(tx, op.TokenHash)
+			if err != nil {
+				return err
+			}
+			if actor.Subject != op.Actor.Subject {
+				return fail(401, "token_binding_failed", "The API token does not bind this actor.")
+			}
+			if _, err = tx.Exec("UPDATE api_tokens SET last_used=? WHERE token_hash=?", s.now().Unix(), op.TokenHash); err != nil {
+				return err
+			}
+			op.Actor = actor
+			return nil
+		}
 		if op.SessionHash == "" {
 			return fail(401, "session_required", "A current verified browser session is required.")
 		}

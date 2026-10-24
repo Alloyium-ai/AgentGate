@@ -20,6 +20,7 @@ type BackupManifest struct {
 	Authority   string `json:"authority"`
 	Created     string `json:"created_at"`
 	KeySHA      string `json:"authority_key_sha256,omitempty"`
+	JobKeySHA   string `json:"job_key_sha256,omitempty"`
 }
 
 func (s *Store) Backup(dir string) error {
@@ -50,6 +51,12 @@ func (s *Store) Backup(dir string) error {
 		return err
 	}
 	manifest := BackupManifest{Version: "control-backup-v2", DatabaseSHA: databaseSHA, Authority: EncodePublic(key.Public().(ed25519.PublicKey)), Created: stamp(), KeySHA: digest(key)}
+	if len(s.JobKey) == ed25519.PrivateKeySize {
+		if err = os.WriteFile(filepath.Join(dir, JobKeyFile), s.JobKey, 0600); err != nil {
+			return err
+		}
+		manifest.JobKeySHA = digest(s.JobKey)
+	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return err
@@ -100,6 +107,20 @@ func RestoreNew(backup, dest string) error {
 	if err = os.WriteFile(filepath.Join(dest, "authority.key"), key, 0600); err != nil {
 		return err
 	}
+	// A backup without a job key restores with a fresh one; every target then
+	// needs re-enrollment (see loadJobKey).
+	if m.JobKeySHA != "" {
+		jobKey, err := os.ReadFile(filepath.Join(backup, JobKeyFile))
+		if err != nil {
+			return err
+		}
+		if _, err = verifiedAuthority(jobKey); err != nil || digest(jobKey) != m.JobKeySHA {
+			return errors.New("backup job key differs from the manifest")
+		}
+		if err = writePrivateKey(filepath.Join(dest, JobKeyFile), jobKey); err != nil {
+			return err
+		}
+	}
 
 	s, err := OpenStore(dest)
 	if err != nil {
@@ -113,7 +134,12 @@ func RestoreNew(backup, dest string) error {
 			return nil, e
 		}
 		_, e = tx.Exec("DELETE FROM login_states")
-		return map[string]string{"sessions": "revoked", "login_states": "revoked", "authority": m.Authority}, e
+		if e != nil {
+			return nil, e
+		}
+		// API tokens are credentials like sessions: a restore revokes them.
+		_, e = tx.Exec("UPDATE api_tokens SET revoked=? WHERE revoked=''", stamp())
+		return map[string]string{"sessions": "revoked", "login_states": "revoked", "api_tokens": "revoked", "authority": m.Authority}, e
 	})
 	return err
 }

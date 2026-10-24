@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 const schema = `
@@ -58,6 +59,13 @@ type Store struct {
 	LoginAuthority     string
 	LocalIdentity      bool
 	CustomerPolicy     bool
+	// JobKey signs every host job. It is separate from Authority so it can be
+	// rotated without changing the application authority.
+	JobKey ed25519.PrivateKey
+	// Provisioning holds the job queue timing; zero values use the defaults.
+	Provisioning ProvisioningConfig
+	// Now is the clock; tests replace it.
+	Now func() time.Time
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -110,6 +118,10 @@ func OpenStore(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = s.loadJobKey(dir); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 func (s *Store) migrate() error {
@@ -117,10 +129,10 @@ func (s *Store) migrate() error {
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 4 {
+	if version > SchemaVersion {
 		return errors.New("unsupported database schema")
 	}
-	if version == 4 {
+	if version == SchemaVersion {
 		return nil
 	}
 	tx, err := s.DB.Begin()
@@ -128,22 +140,29 @@ func (s *Store) migrate() error {
 		return err
 	}
 	defer tx.Rollback()
-	if version == 0 {
-		if _, err = tx.Exec(schema); err != nil {
+	if version < 4 {
+		if version == 0 {
+			if _, err = tx.Exec(schema); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS audit_action_time ON audit(action,time,id); CREATE INDEX IF NOT EXISTS audit_time ON audit(time,id); CREATE INDEX IF NOT EXISTS audit_version_time ON audit(version,time,id); PRAGMA user_version=2;`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(localUserSchema + ` PRAGMA user_version=3;`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(targetReportSchema + documentVersionSchema + ` PRAGMA user_version=4;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 4", RequestID: "migration-4"}, "committed"); err != nil {
 			return err
 		}
 	}
-	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS audit_action_time ON audit(action,time,id); CREATE INDEX IF NOT EXISTS audit_time ON audit(time,id); CREATE INDEX IF NOT EXISTS audit_version_time ON audit(version,time,id); PRAGMA user_version=2;`); err != nil {
+	if _, err = tx.Exec(provisioningSchema + ` PRAGMA user_version=5;`); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(localUserSchema + ` PRAGMA user_version=3;`); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(targetReportSchema + documentVersionSchema + ` PRAGMA user_version=4;`); err != nil {
-		return err
-	}
-	_, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 4", RequestID: "migration-4"}, "committed")
-	if err != nil {
+	if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 5", RequestID: "migration-5"}, "committed"); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -177,7 +196,7 @@ func scrub(v any) any {
 				if !ok || (verdict != "VALID_COMPLETE" && verdict != "INCOMPLETE" && verdict != "TAMPERED" && verdict != "UNKNOWN_KEY") {
 					x[k] = "[redacted]"
 				}
-			case "grant", "client_secret", "private_key", "id_token", "access_token", "csrf_token", "pkce_verifier", "session", "proof", "password", "password_hash", "salt":
+			case "grant", "client_secret", "private_key", "id_token", "access_token", "csrf_token", "pkce_verifier", "session", "proof", "password", "password_hash", "salt", "token", "api_token", "enrollment_token", "ciphertext", "token_hash":
 				x[k] = "[redacted]"
 			default:
 				x[k] = scrub(val)

@@ -49,12 +49,12 @@ func (s Settings) Validate() error {
 	if !s.OIDCEnabled() && (s.Issuer != "" || s.ClientID != "") {
 		return errors.New("OIDC settings require explicit OIDC authentication")
 	}
-	valid := map[string]bool{"viewer": true, "editor": true, "approver": true, "auditor": true, "admin": true}
+	valid := map[string]bool{"viewer": true, "editor": true, "launcher": true, "approver": true, "auditor": true, "admin": true}
 	if len(s.GroupRoles) > 64 {
 		return errors.New("too many group mappings")
 	}
 	for name, roles := range s.GroupRoles {
-		if len(name) < 1 || len(name) > 128 || len(roles) < 1 || len(roles) > 5 {
+		if len(name) < 1 || len(name) > 128 || len(roles) < 1 || len(roles) > len(valid) {
 			return errors.New("invalid basic group mapping")
 		}
 		for _, role := range roles {

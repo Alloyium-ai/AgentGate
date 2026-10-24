@@ -17,6 +17,9 @@ import (
 const localUserSchema = `CREATE TABLE IF NOT EXISTS local_users(username TEXT PRIMARY KEY,name TEXT NOT NULL,roles TEXT NOT NULL,enabled INTEGER NOT NULL,password_hash BLOB NOT NULL,salt BLOB NOT NULL,revision INTEGER NOT NULL);`
 const passwordIterations = 600000
 
+// validRoles is every role the service grants. A role maps to scopes in Actor.Can.
+var validRoles = map[string]bool{"viewer": true, "auditor": true, "editor": true, "launcher": true, "approver": true, "admin": true}
+
 var localUsername = regexp.MustCompile(`^[a-z][a-z0-9_.-]{2,63}$`)
 
 type LocalUser struct {
@@ -37,12 +40,12 @@ type UserInput struct {
 }
 
 func validLocalUser(in UserInput) error {
-	if !localUsername.MatchString(in.Username) || len(strings.TrimSpace(in.Name)) < 1 || len(in.Name) > 128 || len(in.Roles) < 1 || len(in.Roles) > 5 {
+	if !localUsername.MatchString(in.Username) || len(strings.TrimSpace(in.Name)) < 1 || len(in.Name) > 128 || len(in.Roles) < 1 || len(in.Roles) > len(validRoles) {
 		return fail(422, "invalid_local_user", "Supply a username, display name and basic roles.")
 	}
 	seen := map[string]bool{}
 	for _, r := range in.Roles {
-		if seen[r] || (r != "admin" && r != "editor" && r != "approver" && r != "auditor" && r != "viewer") {
+		if seen[r] || !validRoles[r] {
 			return fail(422, "invalid_local_role", "Use distinct basic roles.")
 		}
 		seen[r] = true

@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
 		mux.HandleFunc(method+" /api/v1/", s.api)
 	}
+	mux.HandleFunc("POST /api/v1/hostd/", s.hostd)
 	mux.HandleFunc("GET /", s.static)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
@@ -176,7 +177,7 @@ func (s *Server) limited(key string) bool {
 	}
 	b.Count++
 	ceiling := 120
-	if strings.HasPrefix(key, "password:") {
+	if strings.HasPrefix(key, "password:") || strings.HasPrefix(key, "enroll:") {
 		ceiling = 10
 	}
 	if strings.HasPrefix(key, "ip:") {
@@ -203,6 +204,11 @@ func (s *Server) prepare(r *http.Request) (call, error) {
 	var err error
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Alloyium-Proof ") {
 		c.Actor, nonce, err = s.Auth.Machine(r, c.Body)
+	} else if _, ok := bearerToken(r); ok {
+		c.Actor, c.Operation.TokenHash, err = s.Auth.Token(r)
+		if err == nil && !tokenAllowed[apiArea(r.URL.Path)] {
+			err = fail(403, "token_scope", "API tokens cannot call this endpoint. Use a browser session.")
+		}
 	} else {
 		var session Session
 		session, err = s.Auth.Session(r)
@@ -264,7 +270,7 @@ func requireIdempotency(c call) error {
 	return nil
 }
 func (s *Server) api(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" || strings.TrimSuffix(r.URL.Path, "/") != "/api/v1/events" {
+	if (r.Method != "GET" || strings.TrimSuffix(r.URL.Path, "/") != "/api/v1/events") && !isLaunchStream(r) {
 		select {
 		case s.inflight <- struct{}{}:
 			defer func() { <-s.inflight }()
@@ -278,6 +284,9 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.problem(w, r, err, c.Operation, true)
 		return
 	}
+	if r.Method != "GET" && s.provisioning(w, r, c) {
+		return
+	}
 	if r.Method == "GET" {
 		if c.Operation.ProofNonce != "" {
 			actor, e := s.Store.UseReadProof(c.Operation)
@@ -286,6 +295,9 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			c.Actor = actor
+		}
+		if s.provisioning(w, r, c) {
+			return
 		}
 		value, status, e := s.read(w, r, c.Actor)
 		if e != nil {

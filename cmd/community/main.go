@@ -115,6 +115,9 @@ func run(args []string) error {
 		if err = config.PinAuthority(control.EncodePublic(store.Authority.Public().(ed25519.PublicKey))); err != nil {
 			return err
 		}
+		if err = config.PinJobKey(store.JobPublicKey(), false); err != nil {
+			return err
+		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"result": "initialized", "instance": record.Instance, "revision": record.Revision})
 	}
 	config, err := localconfig.Open(configDir, trust)
@@ -162,6 +165,25 @@ func run(args []string) error {
 	if err = config.VerifyAuthority(control.EncodePublic(store.Authority.Public().(ed25519.PublicKey))); err != nil {
 		return err
 	}
+	if len(args) == 2 && args[0] == "rotate-job-key" {
+		public, err := store.RotateJobKey(filepath.Join(state, "data"), args[1])
+		if err != nil {
+			return err
+		}
+		if err = config.PinJobKey(public, true); err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"result": "rotated", "job_key": public, "job_key_id": store.JobKeyID(), "next": "issue a new enrollment token for every target and enroll each host again"})
+	}
+	if err = config.VerifyJobKey(store.JobPublicKey()); errors.Is(err, os.ErrNotExist) {
+		// A deployment created before host job keys pins its first job key now.
+		if err = config.PinJobKey(store.JobPublicKey(), false); err != nil {
+			return err
+		}
+		slog.Info("Pinned the host job key", "job_key_id", store.JobKeyID())
+	} else if err != nil {
+		return fmt.Errorf("%w; run rotate-job-key to re-pin after a restore without a job key", err)
+	}
 	store.LocalIdentity = true
 	store.CustomerPolicy = true
 	if len(args) == 1 && args[0] == "first-admin" {
@@ -197,8 +219,11 @@ func run(args []string) error {
 		fmt.Println(control.EncodePublic(store.Authority.Public().(ed25519.PublicKey)))
 		return nil
 	}
+	if len(args) == 1 && args[0] == "job-key" {
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"job_key": store.JobPublicKey(), "job_key_id": store.JobKeyID()})
+	}
 	if len(args) != 0 && !(len(args) == 1 && args[0] == "serve") {
-		return errors.New("use init, first-admin, config, enroll, public-key, backup, restore or serve")
+		return errors.New("use init, first-admin, config, enroll, public-key, job-key, rotate-job-key, backup, restore or serve")
 	}
 	if record.Settings.LocalEnabled() {
 		users, err := store.Users()
@@ -253,8 +278,12 @@ func serve(store *control.Store, config *localconfig.Store, record localconfig.R
 	closed := make(chan os.Signal, 1)
 	signal.Notify(closed, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(closed)
+	sweep, stopSweep := context.WithCancel(context.Background())
+	defer stopSweep()
+	go store.RunSweeper(sweep, 0)
 	go func() {
 		<-closed
+		stopSweep()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
