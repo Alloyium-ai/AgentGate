@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -72,6 +73,11 @@ type receipt struct {
 	Events         []event                      `json:"events"`
 	Counters       counters                     `json:"counters"`
 	Host           *hostEvidence                `json:"host,omitempty"`
+	// A launch document also records its mode and lifetime, and aggregates its
+	// network stream instead of keeping every event.
+	Mode            string         `json:"mode,omitempty"`
+	LifetimeSeconds int            `json:"lifetime_seconds,omitempty"`
+	Network         *networkStream `json:"network,omitempty"`
 	// Stop is "signal" for a normal stop. Any other value marks the receipt incomplete.
 	Stop            string `json:"stop"`
 	CollectionError string `json:"collection_error,omitempty"`
@@ -128,6 +134,7 @@ func run() (err error) {
 	var ruleID string
 	var publicPort uint16
 	var document policy.Document
+	launch := false
 	if simpleMode {
 		simple, err = pocpolicy.Parse(raw)
 		if err != nil {
@@ -135,6 +142,7 @@ func run() (err error) {
 		}
 		digest = simple.Digest()
 		duration = simple.DurationSeconds
+		launch = simple.IsLaunch()
 		// A host-control policy without its objects, or objects without that
 		// policy, would silently run with less or more than the operator wrote.
 		if simple.HasHostControls() != hostObjects {
@@ -219,6 +227,14 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
+	if launch {
+		// A long launch drains continuously; a larger ring absorbs bursts.
+		ring := spec.Maps["net_events"]
+		if ring == nil || ring.Type != ebpf.RingBuf {
+			return errors.New("network object lacks ring buffer net_events")
+		}
+		ring.MaxEntries = launchNetworkRingBytes
+	}
 	collection, err := ebpf.NewCollection(spec)
 	if err != nil {
 		return err
@@ -254,6 +270,25 @@ func run() (err error) {
 		return err
 	}
 	defer reader.Close()
+	var network *networkTracker
+	networkStop := make(chan struct{})
+	networkDone := make(chan struct{})
+	stopNetwork := sync.OnceFunc(func() { close(networkStop); <-networkDone })
+	if launch {
+		network = newNetworkTracker(stat.Ino, now)
+		go func() {
+			defer close(networkDone)
+			drainNetwork(func(deadline time.Time) ([]byte, error) {
+				reader.SetDeadline(deadline)
+				record, readErr := reader.Read()
+				return record.RawSample, readErr
+			}, network, networkStop, func() uint64 { value, _ := kernel.MonotonicNS(); return value })
+		}()
+	} else {
+		close(networkDone)
+	}
+	// The reader closes only after the drain goroutine has returned.
+	defer stopNetwork()
 	pins, err := pinGuard(cgroup, collection, links)
 	if err != nil {
 		return err
@@ -285,14 +320,18 @@ func run() (err error) {
 		return err
 	}
 	out := receipt{Scope: "fixed-diagnostic-only; no normal admission", SourceRevision: source, BootID: strings.TrimSpace(string(boot)), PolicyDigest: digest, ObjectSHA256: hex.EncodeToString(objectDigest[:]), Target: measured, Domain: stat.Ino, DomainPath: cgroup, PinDir: pins.dir, RuleIDs: compiled.RuleIDs, MapDecisions: decisions, PublicHostname: hostname, PublicAddress: address, StartedMonoNS: now, DeadlineMonoNS: deadline, Events: []event{}}
+	if launch {
+		out.Mode, out.LifetimeSeconds = simple.Mode, simple.DurationSeconds
+	}
 	if err = os.WriteFile(readyPath, []byte("guard-attached\n"), 0600); err != nil {
 		return err
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	// The signed execution cutoff stays unchanged. This extra five seconds
-	// bounds diagnostic collection and is not a workload execution grant.
-	limit := time.NewTimer(time.Duration(duration)*time.Second + 5*time.Second)
+	// The signed execution cutoff stays unchanged. This extra bound (five
+	// seconds for an SSH command, longer for a launch's graceful stop) bounds
+	// diagnostic collection and is not a workload execution grant.
+	limit := time.NewTimer(time.Duration(duration)*time.Second + cleanupBound(launch))
 	defer limit.Stop()
 	stopReason := "signal"
 	select {
@@ -304,16 +343,30 @@ func run() (err error) {
 	signal.Stop(stop)
 	out.Stop = stopReason
 	out.FinishedMonoNS, _ = kernel.MonotonicNS()
-	reader.SetDeadline(time.Now().Add(200 * time.Millisecond))
 	var collectErr error
-	out.Events, collectErr = collectNetworkEvents(func() ([]byte, error) {
-		record, readErr := reader.Read()
-		return record.RawSample, readErr
-	}, maxNetworkEvents)
-	if countErr := collection.Maps["net_stats"].Lookup(uint32(0), &out.Counters); countErr != nil {
-		collectErr = errors.Join(collectErr, countErr)
+	if launch {
+		stopNetwork()
+		countErr := collection.Maps["net_stats"].Lookup(uint32(0), &out.Counters)
+		var stream networkStream
+		out.Events, stream = network.finish(out.Counters, countErr)
+		out.Network = &stream
+		if countErr != nil {
+			collectErr = countErr
+		}
+	} else {
+		reader.SetDeadline(time.Now().Add(200 * time.Millisecond))
+		out.Events, collectErr = collectNetworkEvents(func() ([]byte, error) {
+			record, readErr := reader.Read()
+			return record.RawSample, readErr
+		}, maxNetworkEvents)
+		if countErr := collection.Maps["net_stats"].Lookup(uint32(0), &out.Counters); countErr != nil {
+			collectErr = errors.Join(collectErr, countErr)
+		}
 	}
-	if simpleMode {
+	if launch {
+		out.Scope = "experimental-launch-poc-only; no normal admission"
+		out.Complete = out.Network.Complete
+	} else if simpleMode {
 		out.Scope = "experimental-network-poc-only; no normal admission"
 		if hostObjects {
 			out.Scope = "experimental-network-and-host-poc-only; no normal admission"
@@ -382,6 +435,14 @@ func collectNetworkEvents(read func() ([]byte, error), limit int) ([]event, erro
 	}
 }
 
+// cleanupBound is the guard's collection bound after the policy window.
+func cleanupBound(launch bool) time.Duration {
+	if launch {
+		return launchCleanupBound
+	}
+	return legacyCleanupBound
+}
+
 func main() {
 	operation := run
 	if len(os.Args) > 1 && (os.Args[1] == "policy" || os.Args[1] == "policy-digest") {
@@ -389,6 +450,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "network-info" {
 		operation = func() error { return networkPolicyCommand(os.Args[1:]) }
+	}
+	if command, ok := verifyCommands(os.Args[1:]); ok {
+		operation = command
 	}
 	if err := operation(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

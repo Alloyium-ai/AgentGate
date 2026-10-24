@@ -28,6 +28,9 @@ import (
 // complete evidence instead of every record: counts per operation, a digest of
 // the whole raw stream, and the first denials with their paths.
 const maxDenials = 2000
+
+// maxOperationKinds bounds the per-operation counters kept in memory.
+const maxOperationKinds = 64
 const hostRingBytes = 16 << 20
 
 type opCount struct {
@@ -116,7 +119,13 @@ func (e *ringTracker) consume(raw []byte) {
 		e.failure = err
 		return
 	}
-	count := e.Operations[operation]
+	count, known := e.Operations[operation]
+	if !known && len(e.Operations) >= maxOperationKinds {
+		// The operation names are a fixed set; an unbounded set means the
+		// stream differs, and evidence memory must stay constant over hours.
+		e.failure = errors.New("host event operation set exceeds its bound")
+		return
+	}
 	if allowed {
 		count.Allowed++
 	} else {

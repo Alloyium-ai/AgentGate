@@ -44,6 +44,10 @@ type Document struct {
 	Web             Web       `json:"web"`
 	Taskboard       Taskboard `json:"taskboard"`
 	DurationSeconds int       `json:"duration_seconds"`
+	// Mode is empty for the one-command SSH POC, whose window stays exactly 25
+	// seconds. A launch document names "oneshot" or "session"; duration_seconds
+	// is then the launch lifetime, the hard cap in the kernel policy expiry.
+	Mode string `json:"mode,omitempty"`
 	// Version two documents also carry the host controls below.
 	Filesystem *Filesystem `json:"filesystem,omitempty"`
 	Process    *Process    `json:"process,omitempty"`
@@ -114,8 +118,16 @@ func publicIPv4(raw string) bool {
 	return true
 }
 func (d Document) Validate() error {
-	if (d.Version != VersionV1 && d.Version != VersionV2) || d.Default != "deny" || d.IPv6 != "deny" || d.DurationSeconds != 25 {
+	if (d.Version != VersionV1 && d.Version != VersionV2) || d.Default != "deny" || d.IPv6 != "deny" || (d.Mode == "" && d.DurationSeconds != 25) {
 		return errors.New("network policy requires version " + VersionV1 + " or " + VersionV2 + ", deny defaults, and duration_seconds 25")
+	}
+	if d.Mode != "" {
+		if d.Version != VersionV2 {
+			return errors.New("a launch mode requires version " + VersionV2 + " with host controls")
+		}
+		if err := ValidateLifetime(d.Mode, d.DurationSeconds); err != nil {
+			return err
+		}
 	}
 	if err := d.validateHostControls(); err != nil {
 		return err
@@ -149,6 +161,57 @@ func (d Document) Validate() error {
 	}
 	return nil
 }
+
+// Launch modes and their lifetime bounds in seconds. The lifetime is the hard
+// cap: the kernel policy expires at it and the host kills the domain at it.
+const (
+	ModeOneshot        = "oneshot"
+	ModeSession        = "session"
+	OneshotMinSeconds  = 1
+	OneshotMaxSeconds  = 3600
+	SessionMinSeconds  = 60
+	SessionMaxSeconds  = 86400
+	legacyWindowSecond = 25
+)
+
+// ValidateLifetime checks one launch mode and lifetime against the contract.
+func ValidateLifetime(mode string, seconds int) error {
+	switch mode {
+	case ModeOneshot:
+		if seconds < OneshotMinSeconds || seconds > OneshotMaxSeconds {
+			return fmt.Errorf("a oneshot launch lifetime must be %d..%d seconds", OneshotMinSeconds, OneshotMaxSeconds)
+		}
+	case ModeSession:
+		if seconds < SessionMinSeconds || seconds > SessionMaxSeconds {
+			return fmt.Errorf("a session launch lifetime must be %d..%d seconds", SessionMinSeconds, SessionMaxSeconds)
+		}
+	default:
+		return errors.New("launch mode must be oneshot or session")
+	}
+	return nil
+}
+
+// IsLaunch reports whether the document is a launch document, not an SSH command policy.
+func (d Document) IsLaunch() bool { return d.Mode != "" }
+
+// ForLaunch returns the launch document for a stored profile document: the
+// same rules with the launch mode and lifetime. A document that already names
+// a mode must name exactly this one; nothing else changes.
+func (d Document) ForLaunch(mode string, seconds int) (Document, error) {
+	if err := ValidateLifetime(mode, seconds); err != nil {
+		return d, err
+	}
+	if d.Mode != "" && (d.Mode != mode || d.DurationSeconds != seconds) {
+		return d, errors.New("the policy names a different launch mode or lifetime than the launch")
+	}
+	if d.Mode == "" && d.DurationSeconds != legacyWindowSecond {
+		return d, errors.New("a profile document must carry duration_seconds 25 or the launch lifetime")
+	}
+	out := d
+	out.Mode, out.DurationSeconds = mode, seconds
+	return out, out.Validate()
+}
+
 func (d Document) Digest() string {
 	raw, _ := json.Marshal(d)
 	sum := sha256.Sum256(raw)
