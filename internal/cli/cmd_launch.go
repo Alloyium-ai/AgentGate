@@ -502,6 +502,13 @@ func (e *env) printPlanBrief(p LaunchPlan) {
 	e.p.fields("  ", [][2]string{{"target", targetLabel(p)}, {"access", profileLabel(p)}, {"mode", modeLabel(p, "")}, {"spec digest", p.SpecDigest}, {"policy digest", p.PolicyDigest}})
 }
 
+func nonEmpty(v string) []string {
+	if v == "" {
+		return nil
+	}
+	return []string{v}
+}
+
 func targetLabel(p LaunchPlan) string {
 	return p.Target["name"] + " (" + p.Target["id"] + ")"
 }
@@ -556,7 +563,7 @@ func (e *env) printPlan(p LaunchPlan, name, launchID string, dryRun bool) {
 		{"network", "default " + perm.Network + "; IPv6 " + perm.IPv6},
 		{"web", web},
 		{"dns", joinOr(perm.DNS, "none")},
-		{"taskboard", perm.Taskboard},
+		{"taskboard", joinOr(nonEmpty(perm.Taskboard), "none")},
 		{"read", joinOr(perm.ReadOnly, "nothing")},
 		{"write", joinOr(perm.Writable, "nothing")},
 		{"execute", joinOr(perm.Execute, "nothing")},
@@ -572,8 +579,25 @@ func (e *env) printPlan(p LaunchPlan, name, launchID string, dryRun bool) {
 	if len(p.Mounts) == 0 {
 		rows = append(rows, [2]string{"mounts", "none"})
 	}
+	if perm.Broker != "" {
+		rows = append(rows, [2]string{"broker", perm.Broker + " (the one private endpoint the agent may reach)"})
+	}
 	for _, s := range p.Secrets {
-		rows = append(rows, [2]string{"secret " + s.Ref, "$" + s.Env + " = broker for " + strings.Join(s.Upstreams, ", ") + " (header " + s.Header + "; the value never enters the sandbox)"})
+		where := "broker for " + strings.Join(s.Upstreams, ", ")
+		if s.BaseURL != "" {
+			where = s.BaseURL + " -> " + strings.Join(s.Upstreams, ", ")
+		}
+		how := "header " + strings.TrimSpace(s.Header+" "+s.Scheme)
+		if s.Wildcard {
+			how += "; WILDCARD: every method and path"
+		} else if len(s.Rules) > 0 {
+			rules := []string{}
+			for _, r := range s.Rules {
+				rules = append(rules, ruleText(r))
+			}
+			how += "; only " + strings.Join(rules, ", ")
+		}
+		rows = append(rows, [2]string{"secret " + s.Ref, "$" + s.Env + " = " + where + " (" + how + "; the value never enters the sandbox)"})
 	}
 	if len(p.Secrets) == 0 {
 		rows = append(rows, [2]string{"secrets", "none"})

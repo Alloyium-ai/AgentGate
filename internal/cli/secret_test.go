@@ -44,6 +44,7 @@ func newSealFixture(t *testing.T) *sealFixture {
 	if f.seal, err = secretseal.GenerateHostKey(f.target.ID, f.hostKey, h.now, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	h.api.reply("GET /api/v1/openapi.json", 200, openAPIWith(false))
 	h.api.handle("POST /api/v1/secrets", func(w http.ResponseWriter, r *http.Request, body []byte, _ []string) {
 		f.posted = append(f.posted, body)
 		var in control.SecretInput
@@ -270,3 +271,111 @@ func TestSecretSetDetectsAChangedCiphertext(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 }
+
+// openAPIWith is the service's document with the secret injection fields and
+// the receipt endpoint present (the control plane is adding them) or absent
+// (the service before that change), whichever version the build has.
+func openAPIWith(injection bool) map[string]any {
+	raw, _ := json.Marshal(control.OpenAPI())
+	var out map[string]any
+	json.Unmarshal(raw, &out)
+	props := out["components"].(map[string]any)["schemas"].(map[string]any)["SecretInput"].(map[string]any)["properties"].(map[string]any)
+	paths := out["paths"].(map[string]any)
+	for _, k := range []string{"scheme", "username", "rules", "extra_headers"} {
+		if injection {
+			props[k] = map[string]any{}
+		} else {
+			delete(props, k)
+		}
+	}
+	if injection {
+		paths["/api/v1/secrets/{id}/receipt"] = map[string]any{"get": map[string]any{}}
+	} else {
+		delete(paths, "/api/v1/secrets/{id}/receipt")
+	}
+	return out
+}
+
+func upcomingOpenAPI() map[string]any { return openAPIWith(true) }
+
+func TestSecretSetUsesTheServiceInjectionFieldsAndVerifiesTheReceipt(t *testing.T) {
+	f := newSealFixture(t)
+	f.pin()
+	f.serve(f.hostPub, f.seal.Published())
+	f.h.api.lenient = true
+	f.h.api.reply("GET /api/v1/openapi.json", 200, upcomingOpenAPI())
+	var receipt json.RawMessage
+	f.h.api.handle("GET /api/v1/secrets/{id}/receipt", func(w http.ResponseWriter, r *http.Request, _ []byte, _ []string) {
+		if receipt == nil {
+			var in control.SecretInput
+			json.Unmarshal(f.posted[len(f.posted)-1], &in)
+			env, _ := secretseal.DecodeEnvelope(in.Ciphertext)
+			opened, err := secretseal.Open(f.seal, env, 0, f.h.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt, _ = json.Marshal(opened.Receipt("sfp1_" + strings.Repeat("ab", 16)))
+			apiError(w, 404, "receipt_unavailable", "The host has not returned a receipt for this secret (state pending).")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"secret_id": "s1", "state": "stored", "value_fingerprint": "sfp1_" + strings.Repeat("ab", 16), "receipt": receipt})
+	})
+	f.h.api.reply("GET /api/v1/secrets", 200, map[string]any{"items": []control.Secret{{ID: "s1", Name: "anthropic", State: "pending"}}})
+	if r := f.set(plaintext+"\n", "--header", "Authorization", "--scheme", "Bearer"); r.code != ExitUsage || !strings.Contains(r.stderr, "forwards nothing by default") {
+		t.Fatalf("rules are required when the service enforces them: %v", r)
+	}
+	r := f.set(plaintext+"\n", "--header", "Authorization", "--scheme", "Bearer", "--rule", "POST:/v1/messages:exact", "--rule", "get,head:/v1/models:prefix", "--extra-header", "anthropic-version=2023-06-01", "--wait")
+	if r.code != 0 || !strings.Contains(r.stdout, "receipt verifies") || !strings.Contains(r.stdout, "sfp1_abab") {
+		t.Fatalf("%v", r)
+	}
+	assertNoSecret(t, f, r)
+	var body map[string]json.RawMessage
+	mustDecode(t, f.posted[len(f.posted)-1], &body)
+	if string(body["scheme"]) != `"Bearer"` || string(body["rules"]) != `[{"methods":["POST"],"path":"/v1/messages","match":"exact"},{"methods":["GET","HEAD"],"path":"/v1/models","match":"prefix"}]` || string(body["extra_headers"]) != `{"anthropic-version":"2023-06-01"}` {
+		t.Fatalf("%s", f.posted[len(f.posted)-1])
+	}
+	var in control.SecretInput
+	mustDecode(t, f.posted[len(f.posted)-1], &in)
+	env, _ := secretseal.DecodeEnvelope(in.Ciphertext)
+	opened, _ := secretseal.Open(f.seal, env, 0, f.h.now)
+	if string(opened.Value) != plaintext {
+		t.Fatal("with a scheme field the value is sent without a scheme prefix")
+	}
+
+	// A receipt for another envelope (a relay that swapped the ciphertext)
+	// fails verification.
+	receipt = nil
+	f.h.api.handle("GET /api/v1/secrets/{id}/receipt", func(w http.ResponseWriter, r *http.Request, _ []byte, _ []string) {
+		other, _ := secretseal.GenerateHostKey(f.target.ID, f.hostKey, f.h.now, time.Hour)
+		pub, _ := secretseal.VerifyKeyRecord(ptr(other.Published()), f.hostPub, secretseal.HostKeyFingerprint(f.hostPub), f.target.ID, f.h.now)
+		forged, _ := secretseal.SealAt(pub, f.target.ID, "anthropic", []byte("attacker-key"), f.h.now)
+		opened, _ := secretseal.Open(other, &forged.Envelope, 0, f.h.now)
+		raw, _ := json.Marshal(opened.Receipt("sfp1_" + strings.Repeat("cd", 16)))
+		writeJSON(w, 200, map[string]any{"secret_id": "s1", "state": "stored", "receipt": json.RawMessage(raw)})
+	})
+	if r = f.set(plaintext+"\n", "--allow-any-path", "--wait"); r.code != ExitTrust || !strings.Contains(r.stderr, "receipt_invalid") {
+		t.Fatalf("a receipt for another envelope must fail: %v", r)
+	}
+	mustDecode(t, f.posted[len(f.posted)-1], &body)
+	if string(body["rules"]) != `[{"methods":["*"],"path":"/"}]` {
+		t.Fatalf("the wildcard spelling: %s", body["rules"])
+	}
+}
+
+func TestSecretSetOnTheCurrentServiceRefusesUnsupportedFlags(t *testing.T) {
+	f := newSealFixture(t)
+	f.pin()
+	f.serve(f.hostPub, f.seal.Published())
+	for _, extra := range [][]string{{"--rule", "POST:/v1/messages"}, {"--allow-any-path"}, {"--extra-header", "x-v=1"}, {"--header", "Authorization", "--scheme", "Basic"}, {"--wait"}} {
+		if r := f.set(plaintext+"\n", extra...); r.code != ExitUsage || len(f.posted) != 0 {
+			t.Fatalf("%v: %v", extra, r)
+		}
+	}
+	for _, bad := range [][]string{{"--rule", "POST"}, {"--rule", "*:/"}, {"--basic-user", "u"}, {"--scheme", "Digest", "--header", "Authorization"}} {
+		if r := f.set(plaintext+"\n", bad...); r.code != ExitUsage {
+			t.Fatalf("%v: %v", bad, r)
+		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

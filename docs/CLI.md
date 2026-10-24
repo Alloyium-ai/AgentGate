@@ -96,7 +96,8 @@ agentgate secret set anthropic --target local --upstream api.anthropic.com --hea
   --allow-profile python-dev --allow-launcher local:lin < ~/anthropic.key
 ```
 
-Then see exactly what the agent will be allowed to do, and launch it:
+On a service that enforces broker rules, add the requests the broker may forward, for example
+`--rule POST:/v1/messages`. Then see exactly what the agent will be allowed to do, and launch it:
 
 ```sh
 agentgate launch --name repo-fixer --target local --mode session --lifetime 2h \
@@ -264,7 +265,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `stop ID [--wait] [--yes]` | `POST /launches/{id}/stop` | confirms for a running session |
 | `approve ID --reason R [--yes]`, `reject ID --reason R` | `POST /launches/{id}/approve`, `/reject` | approver; never your own launch |
 | `audit [--launch ID] [--since T] [--until T] [--actor A] [--action A] [--resource R] [--limit N]`, `audit catalog` | `GET /audit`, `GET /audit-catalog` | |
-| `secret set NAME --upstream HOST --allow-profile P [...]` | `GET /targets/{id}`, `POST /secrets` | see below |
+| `secret set NAME --upstream HOST --allow-profile P [...]` | `GET /openapi.json`, `GET /targets/{id}`, `GET /targets/{id}/seal-key`, `POST /secrets`, `GET /secrets/{id}/receipt` | see below |
 | `secret ls`, `secret rm NAME\|ID [--target T] [--yes]` | `GET /secrets`, `DELETE /secrets/{id}` | administrators |
 | `token create [--role R] [--expires D] [--name N] [--save]`, `token ls`, `token revoke ID` | `/api-tokens` | password sign-in each time: a token cannot mint, list or revoke tokens |
 | `schema launch-spec` | `GET /launch-spec-schema` | |
@@ -305,13 +306,30 @@ sends a complete `agentgate.launch.v1` document as it is and cannot be combined 
 ### secret set
 
 ```sh
-agentgate secret set NAME --upstream HOST [--upstream HOST] [--header x-api-key|Authorization] [--scheme Bearer] \
-  [--target local] --allow-profile PROFILE [--allow-launcher SUBJECT] [--reason R]
+agentgate secret set NAME --upstream HOST [--upstream HOST] [--header x-api-key|Authorization] \
+  [--scheme Bearer|Basic [--basic-user U]] [--rule METHODS:PATH[:exact|prefix]]... [--allow-any-path] \
+  [--extra-header NAME=VALUE]... [--target local] --allow-profile PROFILE [--allow-launcher SUBJECT] \
+  [--wait [--wait-timeout 2m]] [--reason R]
 ```
 
 The value is read from a hidden prompt (entered twice) on a terminal, or from standard input otherwise; never from
-arguments or the environment. `--scheme Bearer` (with `--header Authorization`) prefixes the value with `Bearer `
-before sealing, because the API carries no scheme field. `--allow-launcher` defaults to your own subject.
+arguments or the environment. `--allow-launcher` defaults to your own subject.
+
+How the broker uses the credential follows what the service accepts, which the CLI reads from the service's OpenAPI
+document (`GET /openapi.json`, the `SecretInput` schema) and never guesses:
+
+- A service with broker rules forwards nothing by default, so `secret set` needs at least one `--rule`, for example
+  `--rule POST:/v1/messages` or `--rule GET,HEAD:/v1/models:prefix`, or the explicit wildcard `--allow-any-path` (every
+  method and path of the upstreams; every plan that uses it says so and needs approval). `--scheme` (`Bearer` or
+  `Basic` with `--basic-user`) and `--extra-header` are sent as fields.
+- A service without them forwards every path of the upstreams; the CLI then refuses `--rule`, `--allow-any-path`,
+  `--extra-header` and `--scheme Basic`, and implements `--scheme Bearer` by sealing the value with a `Bearer `
+  prefix, because that API carries no scheme field.
+- `--wait` (only where the service relays receipts, `GET /secrets/{id}/receipt`) polls for the host's
+  `secretseal.Receipt` and verifies its tag with the sealing secret this run holds (`Sealed.VerifyReceipt`): only the
+  host that opened exactly this envelope can produce it, so a relay that swapped the ciphertext is detected (exit 13).
+  It then prints the host's keyed value fingerprint (`sfp1_...`). The sealing secret never leaves the process, so a
+  later run cannot verify the receipt.
 
 Before it reads the value, the CLI checks the target, and every failure is exit 13 with nothing read or sent:
 
@@ -341,4 +359,4 @@ ciphertext SHA-256 than the one sent, the CLI reports it with exit 13.
 - It does not touch Docker, cgroups, BPF or the appliance scripts itself: `up` delegates to `docker compose` and
   `agentgate-hostd` with argument vectors (never a shell string) and a minimal environment.
 - It does not manage users; the UI and `community first-admin` do.
-- It does not verify the host's secret receipt (`secretseal.Receipt`), because the service does not relay it yet.
+- It verifies the host's secret receipt only with `secret set --wait`, and only where the service relays it.

@@ -49,8 +49,31 @@ type sealPlan struct {
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
 	SealKeyID          string `json:"seal_key_id,omitempty"`
 	Verified           bool   `json:"host_signed"`
-	seal               func(name string, value []byte) (string, error)
+	seal               func(name string, value []byte) (*sealedValue, error)
 }
+
+// sealedValue is one sealed value plus the secret that verifies the host's
+// receipt. It stays in memory only; wipe clears it.
+type sealedValue struct {
+	ciphertext string
+	sealed     *secretseal.Sealed
+}
+
+// verify checks the host's receipt and returns the value fingerprint it
+// reports: only the host that opened exactly this envelope can produce it.
+func (v *sealedValue) verify(raw []byte) (string, error) {
+	r, err := secretseal.ParseReceipt(raw)
+	if err == nil {
+		var fp string
+		if fp, err = v.sealed.VerifyReceipt(r); err == nil {
+			return fp, nil
+		}
+	}
+	return "", trustError("receipt_invalid", "The host's receipt does not match the envelope this machine sealed: the service relayed a different ciphertext, or the receipt was altered.",
+		"Remove the secret (agentgate secret rm NAME) and do not store secrets through this service until you know why.")
+}
+
+func (v *sealedValue) wipe() { v.sealed.Wipe() }
 
 const sealMethodSigned = "secretseal-hpke"
 
@@ -106,12 +129,11 @@ func planSeal(pin *KnownTarget, t Target, sk *sealKeyAnswer, now time.Time) (*se
 		}
 		return nil, trustError("seal_key_unverified", msg, "Do not store secrets through this service until the host publishes a fresh signed seal key (restart agentgate-hostd).")
 	}
-	return &sealPlan{Method: sealMethodSigned, TargetID: t.ID, HostKeyID: pin.HostKeyID, HostKeyFingerprint: secretseal.HostKeyFingerprint(hostPub), SealKeyID: pub.KeyID(), Verified: true, seal: func(name string, value []byte) (string, error) {
+	return &sealPlan{Method: sealMethodSigned, TargetID: t.ID, HostKeyID: pin.HostKeyID, HostKeyFingerprint: secretseal.HostKeyFingerprint(hostPub), SealKeyID: pub.KeyID(), Verified: true, seal: func(name string, value []byte) (*sealedValue, error) {
 		sealed, err := secretseal.SealAt(pub, t.ID, name, value, now)
 		if err != nil {
-			return "", failure("cannot seal the value: %v", err)
+			return nil, failure("cannot seal the value: %v", err)
 		}
-		defer sealed.Wipe()
-		return sealed.Envelope.Encode(), nil
+		return &sealedValue{ciphertext: sealed.Envelope.Encode(), sealed: sealed}, nil
 	}}, nil
 }

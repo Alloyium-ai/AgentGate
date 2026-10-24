@@ -304,7 +304,7 @@ agentgate launch -f spec.json | --name N --target T --mode oneshot|session --lif
                  [--dry-run] [--wait [--until running|done]]
 agentgate ps | show ID | logs ID [-f] | events ID [-f] | stop ID [--wait] | approve ID | reject ID
 agentgate audit [--launch ID] [--since T] | audit catalog
-agentgate secret set NAME --upstream HOST --allow-profile P [--header H] [--scheme Bearer] | ls | rm NAME
+agentgate secret set NAME --upstream HOST --allow-profile P [--rule M:PATH] [--scheme S] [--wait] | ls | rm NAME
 agentgate token create [--save] | ls | revoke ID      (password sign-in: a token cannot manage tokens)
 agentgate schema launch-spec | completion bash|zsh|fish | version
 ```
@@ -323,8 +323,10 @@ agentgate schema launch-spec | completion bash|zsh|fish | version
   `target pin` or `up`), fetches `GET /targets/{id}/seal-key` (the pending control plane request in
   [BROKER.md](BROKER.md#integration-requests)), checks `hostproto.KeyID(host_public_key)` against the pin and the
   record's signature with `secretseal.VerifyKeyRecord`, and uploads `Envelope.Encode()` as `ciphertext`. Until the
-  service serves the seal key it refuses; it never seals to an unsigned key. It does not verify the host's
-  `secretseal.Receipt` yet: the service does not relay it.
+  service serves the seal key it refuses; it never seals to an unsigned key. Broker rules (`--rule`,
+  `--allow-any-path`), `--scheme Bearer|Basic` and `--extra-header` are sent when the service's OpenAPI `SecretInput`
+  has them (rules are then required: deny by default); `--wait` verifies the host's receipt from
+  `GET /secrets/{id}/receipt` with `Sealed.VerifyReceipt`.
 - `up` delegates every host-side action to `docker compose` (`control job-key`, `init`, `first-admin` with the
   password on stdin, `up -d`) and `agentgate-hostd` (`status`, `install --token-file`, `provision`) through argument
   vectors; each step checks the current state first, and the steps that need root refuse without it.

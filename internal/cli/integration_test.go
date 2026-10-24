@@ -314,7 +314,12 @@ func TestEndToEndAgainstTheRealService(t *testing.T) {
 	// A secret: the service does not publish the target's signed seal key
 	// yet, so secret set refuses before it reads the value.
 	secretArgs := []string{"secret", "set", "model-api", "--upstream", "api.model.example", "--allow-profile", "dev", "--allow-launcher", "local:ada"}
-	must(run("sk-e2e-value-0123456789\n", secretArgs...), ExitTrust, "seal_key_unpublished")
+	r := run("sk-e2e-value-0123456789\n", secretArgs...)
+	if r.code == ExitUsage && strings.Contains(r.stderr, "forwards nothing by default") {
+		// A service that enforces broker rules needs them first.
+		r = run("sk-e2e-value-0123456789\n", append(secretArgs, "--rule", "POST:/v1/messages")...)
+	}
+	must(r, ExitTrust, "seal_key_unpublished")
 	must(run("", "secret", "ls", "-q"), 0)
 	must(run("", "target", "retire", "local"), ExitUsage, "--yes")
 }

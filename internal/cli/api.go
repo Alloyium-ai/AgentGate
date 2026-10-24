@@ -97,6 +97,7 @@ type Permissions struct {
 	Web              []string `json:"web"`
 	DNS              []string `json:"dns_resolvers"`
 	Taskboard        string   `json:"taskboard"`
+	Broker           string   `json:"broker,omitempty"`
 	ReadOnly         []string `json:"read_only"`
 	Writable         []string `json:"writable"`
 	Execute          []string `json:"execute"`
@@ -106,13 +107,36 @@ type Permissions struct {
 	AnonymousExecute bool     `json:"anonymous_execute"`
 }
 
-// PlanSecret names one brokered secret; never a value.
+// BrokerRule allows methods on one path of a secret's upstreams.
+type BrokerRule struct {
+	Methods []string `json:"methods"`
+	Path    string   `json:"path"`
+	Match   string   `json:"match,omitempty"`
+}
+
+// PlanSecret names one brokered secret and how the broker uses it; never a
+// value. The injection fields appear once the service carries them.
 type PlanSecret struct {
-	Ref       string   `json:"ref"`
-	SecretID  string   `json:"secret_id"`
-	Env       string   `json:"env"`
-	Upstreams []string `json:"upstreams"`
-	Header    string   `json:"header"`
+	Ref              string            `json:"ref"`
+	SecretID         string            `json:"secret_id"`
+	Env              string            `json:"env"`
+	Upstreams        []string          `json:"upstreams"`
+	Header           string            `json:"header"`
+	Scheme           string            `json:"scheme,omitempty"`
+	Username         string            `json:"username,omitempty"`
+	Rules            []BrokerRule      `json:"rules,omitempty"`
+	Wildcard         bool              `json:"wildcard_rules,omitempty"`
+	ExtraHeaders     map[string]string `json:"extra_headers,omitempty"`
+	BaseURL          string            `json:"base_url,omitempty"`
+	ValueFingerprint string            `json:"value_fingerprint,omitempty"`
+}
+
+// PlanBroker is a launch's broker endpoint and network.
+type PlanBroker struct {
+	Address       string `json:"address"`
+	Port          int    `json:"port"`
+	Subnet        string `json:"subnet"`
+	TargetAddress string `json:"target_address"`
 }
 
 // LaunchPlan is the resolved, immutable plan of a launch.
@@ -133,6 +157,7 @@ type LaunchPlan struct {
 	Permissions     Permissions             `json:"permissions"`
 	Mounts          []hostproto.LaunchMount `json:"mounts"`
 	Secrets         []PlanSecret            `json:"secrets"`
+	Broker          *PlanBroker             `json:"broker,omitempty"`
 	KernelVerified  bool                    `json:"kernel_verified"`
 	Notices         []string                `json:"notices"`
 }
@@ -238,19 +263,46 @@ type LogPage struct {
 
 // Secret is secret metadata; the service never holds a value.
 type Secret struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	TargetID         string   `json:"target_id"`
-	Upstreams        []string `json:"upstreams"`
-	Header           string   `json:"header"`
-	Fingerprint      string   `json:"ciphertext_sha256"`
-	AllowedProfiles  []string `json:"allowed_profiles"`
-	AllowedLaunchers []string `json:"allowed_launchers"`
-	State            string   `json:"state"`
-	Created          string   `json:"created_at"`
-	CreatedBy        string   `json:"created_by"`
-	Updated          string   `json:"updated_at"`
-	Revision         int      `json:"revision"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	TargetID         string            `json:"target_id"`
+	Upstreams        []string          `json:"upstreams"`
+	Header           string            `json:"header"`
+	Scheme           string            `json:"scheme,omitempty"`
+	Username         string            `json:"username,omitempty"`
+	Rules            []BrokerRule      `json:"rules,omitempty"`
+	Wildcard         bool              `json:"wildcard_rules,omitempty"`
+	ExtraHeaders     map[string]string `json:"extra_headers,omitempty"`
+	Fingerprint      string            `json:"ciphertext_sha256"`
+	Envelope         *SecretEnvelope   `json:"envelope,omitempty"`
+	ValueFingerprint string            `json:"value_fingerprint,omitempty"`
+	Receipt          json.RawMessage   `json:"receipt,omitempty"`
+	AllowedProfiles  []string          `json:"allowed_profiles"`
+	AllowedLaunchers []string          `json:"allowed_launchers"`
+	State            string            `json:"state"`
+	Created          string            `json:"created_at"`
+	CreatedBy        string            `json:"created_by"`
+	Updated          string            `json:"updated_at"`
+	Revision         int               `json:"revision"`
+}
+
+// SecretEnvelope is the public context of a relayed sealed envelope.
+type SecretEnvelope struct {
+	Format  string `json:"format"`
+	KeyID   string `json:"key_id"`
+	Version uint64 `json:"version"`
+	Nonce   string `json:"nonce"`
+}
+
+// SecretReceiptAnswer is GET /secrets/{id}/receipt.
+type SecretReceiptAnswer struct {
+	SecretID         string          `json:"secret_id"`
+	TargetID         string          `json:"target_id"`
+	Name             string          `json:"name"`
+	State            string          `json:"state"`
+	Fingerprint      string          `json:"ciphertext_sha256"`
+	ValueFingerprint string          `json:"value_fingerprint"`
+	Receipt          json.RawMessage `json:"receipt"`
 }
 
 // APIToken is token metadata.

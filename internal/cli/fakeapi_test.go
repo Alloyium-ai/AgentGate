@@ -35,7 +35,10 @@ const testToken = "agt_" + "TESTTOKENtesttokenTESTTOKENtesttokenTESTTOK"
 // proposedOps are operations the CLI uses that the service does not publish
 // yet: the control plane integration requests in docs/BROKER.md. The CLI
 // treats their 404 as "not published" and fails closed.
-var proposedOps = []apiOp{{method: "GET", template: "/api/v1/targets/{id}/seal-key", re: regexp.MustCompile(`^/api/v1/targets/([^/]+)/seal-key$`)}}
+var proposedOps = []apiOp{
+	{method: "GET", template: "/api/v1/targets/{id}/seal-key", re: regexp.MustCompile(`^/api/v1/targets/([^/]+)/seal-key$`)},
+	{method: "GET", template: "/api/v1/secrets/{id}/receipt", re: regexp.MustCompile(`^/api/v1/secrets/([^/]+)/receipt$`)},
+}
 
 type apiOp struct {
 	method, template string
@@ -134,6 +137,8 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		t.Fatalf("OpenAPI document: %v", err)
 	}
 	f := &fakeAPI{t: t, ops: ops, routes: map[string]handlerFunc{}, token: testToken, health: 200}
+	// The fake serves the document it was built from, as the service does.
+	f.reply("GET /api/v1/openapi.json", 200, control.OpenAPI())
 	f.srv = httptest.NewUnstartedServer(http.HandlerFunc(f.serve))
 	f.srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	f.srv.StartTLS()
