@@ -81,17 +81,32 @@ Exit codes: 0 queued or running, 8 waiting for approval, 12 ended without reachi
 				return e.launch(ctx, f, args, tail)
 			}
 		}})
-	register(&command{name: "ps", summary: "List launches, newest first.",
-		help: "  --state STATE   only this state\n  --active        only launches that have not ended\n  --limit N       at most N (default 50, at most 200)",
+	register(&command{name: "ps", summary: "List launches, newest first; the service filters and pages them.",
+		help: `  --state STATE     only this state (a launch state, active or ended)
+  --active          only launches that have not ended (--state active)
+  --target NAME     only this target
+  --name TEXT       only launches whose name contains TEXT
+  --mine            only launches you requested
+  --requester SUBJ  only launches this human requested
+  --limit N         page size, 1 to 200 (default 50)
+  --cursor C        start at the page this cursor names (printed after a full page)
+  --all             follow every page (at most 10000 launches)`,
 		setup: func(fs *flag.FlagSet) runner {
-			state := fs.String("state", "", "")
-			active := fs.Bool("active", false, "")
-			limit := fs.Int("limit", 50, "")
+			var q psQuery
+			fs.StringVar(&q.state, "state", "", "")
+			fs.BoolVar(&q.active, "active", false, "")
+			fs.StringVar(&q.target, "target", "", "")
+			fs.StringVar(&q.name, "name", "", "")
+			fs.BoolVar(&q.mine, "mine", false, "")
+			fs.StringVar(&q.requester, "requester", "", "")
+			fs.IntVar(&q.limit, "limit", 50, "")
+			fs.StringVar(&q.cursor, "cursor", "", "")
+			fs.BoolVar(&q.all, "all", false, "")
 			return func(ctx context.Context, e *env, args, _ []string) error {
 				if len(args) != 0 {
 					return usageError("ps takes no arguments")
 				}
-				return e.ps(ctx, *state, *active, *limit)
+				return e.ps(ctx, q)
 			}
 		}})
 	register(&command{name: "show", args: "ID", summary: "Show a launch: state, plan, effective permissions, jobs and receipt.", setup: func(fs *flag.FlagSet) runner {
@@ -669,34 +684,79 @@ func (e *env) targetNames(ctx context.Context, c *Client) map[string]string {
 	return names
 }
 
-func (e *env) ps(ctx context.Context, state string, active bool, limit int) error {
-	if limit < 1 || limit > 200 {
+type psQuery struct {
+	state, target, name, requester, cursor string
+	active, mine, all                      bool
+	limit                                  int
+}
+
+// maxPsLaunches bounds ps --all.
+const maxPsLaunches = 10000
+
+// LaunchPage is one page of GET /launches.
+type LaunchPage struct {
+	Items      []Launch `json:"items"`
+	Limit      int      `json:"limit"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+}
+
+func (e *env) ps(ctx context.Context, f psQuery) error {
+	if f.limit < 1 || f.limit > 200 {
 		return usageError("--limit is 1 to 200")
+	}
+	if f.active {
+		if f.state != "" && f.state != "active" {
+			return usageError("--active is --state active; give one of them")
+		}
+		f.state = "active"
+	}
+	if f.mine && f.requester != "" {
+		return usageError("give --mine or --requester, not both")
+	}
+	if f.all && f.cursor != "" {
+		return usageError("--all starts at the first page; drop --cursor")
 	}
 	c, err := e.authed()
 	if err != nil {
 		return err
 	}
-	q := url.Values{"limit": {strconv.Itoa(limit)}}
-	if state != "" {
-		q.Set("state", state)
+	q := url.Values{"limit": {strconv.Itoa(f.limit)}}
+	for k, v := range map[string]string{"state": f.state, "target": f.target, "name": f.name, "requester": f.requester, "cursor": f.cursor} {
+		if v != "" {
+			q.Set(k, v)
+		}
 	}
-	var list items[Launch]
-	raw, err := c.get(ctx, apiPrefix+"/launches", q, &list)
-	if err != nil {
-		return err
+	if f.mine {
+		q.Set("mine", "true")
 	}
 	shown := []Launch{}
-	for _, l := range list.Items {
-		if !active || !terminalState(l.State) {
-			shown = append(shown, l)
+	next := ""
+	var raw []byte
+	for {
+		var page LaunchPage
+		if raw, err = c.get(ctx, apiPrefix+"/launches", q, &page); err != nil {
+			return err
 		}
+		shown = append(shown, page.Items...)
+		next = page.NextCursor
+		if !f.all || next == "" || len(page.Items) == 0 {
+			break
+		}
+		if len(shown) >= maxPsLaunches {
+			e.p.warn("stopped after %d launches; narrow the filters or page with --cursor", len(shown))
+			break
+		}
+		q.Set("cursor", next)
 	}
 	if e.g.json {
-		if !active {
+		if !f.all {
 			return e.p.rawJSON(raw)
 		}
-		return e.p.value(map[string]any{"items": shown})
+		out := map[string]any{"items": shown}
+		if next != "" {
+			out["next_cursor"] = next
+		}
+		return e.p.value(out)
 	}
 	if e.g.quiet {
 		for _, l := range shown {
@@ -719,6 +779,9 @@ func (e *env) ps(ctx context.Context, state string, active bool, limit int) erro
 		rows = append(rows, []string{l.ID, l.Name, target, l.Mode, e.p.state(l.State), l.RequestedBy, age(l.Created, now), expires})
 	}
 	e.p.table([]string{"ID", "NAME", "TARGET", "MODE", "STATE", "REQUESTED BY", "CREATED", "EXPIRES"}, rows)
+	if next != "" {
+		e.p.note("More launches match: agentgate ps --cursor %s (with the same filters), or --all.", next)
+	}
 	return nil
 }
 

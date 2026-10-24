@@ -408,7 +408,19 @@ func TestPsShowLogsAuditGolden(t *testing.T) {
 	running.StartedAt, running.QueuedAt, running.ExpiresAt = "2026-10-24T11:32:00Z", "2026-10-24T11:31:00Z", "2026-10-24T12:31:00Z"
 	ended := sampleLaunch("stopped")
 	ended.ID, ended.Name, ended.Mode = "11112222333344445555666677778888", "tests", "oneshot"
-	h.api.reply("GET /api/v1/launches", 200, map[string]any{"items": []control.Launch{running, ended}})
+	h.api.handle("GET /api/v1/launches", func(w http.ResponseWriter, r *http.Request, body []byte, p []string) {
+		q := r.URL.Query()
+		switch {
+		case q.Get("state") == "active":
+			writeJSON(w, 200, map[string]any{"items": []control.Launch{running}, "limit": 50})
+		case q.Get("cursor") == "page-2":
+			writeJSON(w, 200, map[string]any{"items": []control.Launch{ended}, "limit": 1})
+		case q.Get("limit") == "1":
+			writeJSON(w, 200, map[string]any{"items": []control.Launch{running}, "limit": 1, "next_cursor": "page-2"})
+		default:
+			writeJSON(w, 200, map[string]any{"items": []control.Launch{running, ended}, "limit": 50})
+		}
+	})
 	h.api.reply("GET /api/v1/targets", 200, map[string]any{"items": []control.Target{sampleTarget("active")}})
 	r := h.run("", "ps")
 	if r.code != 0 {
@@ -418,8 +430,26 @@ func TestPsShowLogsAuditGolden(t *testing.T) {
 	if r = h.run("", "ps", "--active", "-q"); r.code != 0 || strings.TrimSpace(r.stdout) != running.ID {
 		t.Fatalf("%v", r)
 	}
-	if r = h.run("", "ps", "--state", "running"); r.code != 0 || h.api.requestsTo("GET /api/v1/launches")[2].Query.Get("state") != "running" {
+	if r = h.run("", "ps", "--state", "running", "--target", "local", "--name", "fix", "--mine"); r.code != 0 {
 		t.Fatalf("%v", r)
+	}
+	q := h.api.requestsTo("GET /api/v1/launches")[2].Query
+	if q.Get("state") != "running" || q.Get("target") != "local" || q.Get("name") != "fix" || q.Get("mine") != "true" || q.Get("limit") != "50" {
+		t.Fatalf("filters sent: %v", q)
+	}
+	if r = h.run("", "ps", "--limit", "1"); r.code != 0 || !strings.Contains(r.stderr, "agentgate ps --cursor page-2") || strings.Contains(r.stdout, ended.ID) {
+		t.Fatalf("a full page names the next cursor: %v", r)
+	}
+	if r = h.run("", "ps", "--limit", "1", "--all", "-q"); r.code != 0 || strings.TrimSpace(r.stdout) != running.ID+"\n"+ended.ID {
+		t.Fatalf("--all follows the cursor: %v", r)
+	}
+	if r = h.run("", "ps", "--limit", "1", "--cursor", "page-2", "-q"); r.code != 0 || strings.TrimSpace(r.stdout) != ended.ID {
+		t.Fatalf("--cursor: %v", r)
+	}
+	for _, bad := range [][]string{{"ps", "--active", "--state", "stopped"}, {"ps", "--mine", "--requester", "local:ada"}, {"ps", "--all", "--cursor", "x"}, {"ps", "--limit", "500"}} {
+		if r = h.run("", bad...); r.code != ExitUsage {
+			t.Fatalf("%v: %v", bad, r)
+		}
 	}
 	exit := 0
 	rec, _ := json.Marshal(hostproto.Receipt{Version: hostproto.ReceiptVersion, LaunchID: ended.ID, BrokerCounts: map[string]uint64{"api.anthropic.com": 4}, ExitCode: &exit, Reason: "exited", DomainEmpty: true, EnforcementReleased: true})

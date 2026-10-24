@@ -127,12 +127,19 @@ func (s *Server) provisioningRead(w http.ResponseWriter, r *http.Request, a Acto
 	case area == "profiles" && n == 4 && tail[2] == "versions":
 		return s.Store.ProfileVersionDetail(tail[1], tail[3])
 	case area == "launches" && n == 1:
-		state := r.URL.Query().Get("state")
-		if state != "" && !TerminalState(state) && LaunchTransitions[state] == nil {
-			return nil, fail(422, "invalid_filter", "Unknown launch state.")
+		if len(r.URL.RawQuery) > 1024 {
+			return nil, fail(422, "invalid_filter", "The query exceeds 1024 bytes.")
 		}
-		v, err := s.Store.Launches(state, listParam(r, "limit", 100))
-		return map[string]any{"items": v}, err
+		q, err := ParseLaunchQuery(r.URL.Query(), a)
+		if err != nil {
+			return nil, err
+		}
+		return s.Store.LaunchPage(q)
+	case area == "launches" && n == 2 && tail[1] == "summary":
+		if r.URL.RawQuery != "" {
+			return nil, fail(422, "invalid_filter", "The summary takes no filters.")
+		}
+		return s.Store.LaunchSummary(a)
 	case area == "launches" && n == 2:
 		l, err := s.Store.LaunchDetail(tail[1])
 		if err != nil {

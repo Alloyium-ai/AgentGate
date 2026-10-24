@@ -4,10 +4,14 @@ package control
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"alloyium.local/kernel-poc/internal/access"
@@ -790,17 +794,135 @@ func launchJobDelivered(tx *sql.Tx, launchID string) (bool, error) {
 	return n > 0, err
 }
 
-// Launches lists launches, newest first, optionally filtered by state.
-func (s *Store) Launches(state string, limit int) ([]Launch, error) {
-	if limit < 1 || limit > 200 {
-		limit = 100
+// LaunchQuery filters and pages GET /launches. State is a launch state,
+// "active" (not terminal) or "ended" (terminal); Target is a target id or
+// name; Name matches a substring of the launch name; Requester is a human
+// subject. Pages are newest first by (created, id), which never changes for
+// a launch, so a cursor resumes exactly after the last launch it returned. A
+// cursor only says where a page starts; the filters and the caller's access
+// apply to every page, so an altered cursor can skip launches but never show
+// one the filters exclude.
+type LaunchQuery struct {
+	State, Target, Name, Requester string
+	Limit                          int
+	Cursor                         string
+}
+
+const (
+	defaultLaunchPage = 100
+	maxLaunchPage     = 200
+	maxCursorBytes    = 512
+)
+
+var launchNameFilter = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
+
+// ParseLaunchQuery reads and bounds the launch list filters.
+func ParseLaunchQuery(q url.Values, a Actor) (LaunchQuery, error) {
+	out := LaunchQuery{Limit: defaultLaunchPage}
+	for k, v := range q {
+		if len(v) > 1 {
+			return out, fail(422, "invalid_filter", "Give each filter at most once: "+k+".")
+		}
+		switch k {
+		case "state", "target", "name", "requester", "mine", "limit", "cursor":
+		default:
+			return out, fail(422, "invalid_filter", "Unknown launch filter "+strconv.Quote(k)+"; use state, target, name, requester, mine, limit or cursor.")
+		}
 	}
-	query := "SELECT " + launchColumns + " FROM launches ORDER BY created DESC LIMIT ?"
-	args := []any{limit}
-	if state != "" {
-		query = "SELECT " + launchColumns + " FROM launches WHERE state=? ORDER BY created DESC LIMIT ?"
-		args = []any{state, limit}
+	out.State, out.Target, out.Name, out.Requester, out.Cursor = q.Get("state"), q.Get("target"), q.Get("name"), q.Get("requester"), q.Get("cursor")
+	if out.State != "" && out.State != "active" && out.State != "ended" && !TerminalState(out.State) && LaunchTransitions[out.State] == nil {
+		return out, fail(422, "invalid_filter", "Unknown launch state; use a launch state, active or ended.")
 	}
+	if out.Target != "" && !hostproto.NamePattern.MatchString(out.Target) && !hexID.MatchString(out.Target) {
+		return out, fail(422, "invalid_filter", "target is a target name or id.")
+	}
+	if out.Name != "" && !launchNameFilter.MatchString(out.Name) {
+		return out, fail(422, "invalid_filter", "name is 1 to 40 of a-z, 0-9 and -.")
+	}
+	if out.Requester != "" && !safeMeta.MatchString(out.Requester) {
+		return out, fail(422, "invalid_filter", "requester is a subject such as local:alice.")
+	}
+	switch q.Get("mine") {
+	case "", "0", "false":
+	case "1", "true":
+		if out.Requester != "" && out.Requester != a.Subject {
+			return out, fail(422, "invalid_filter", "Use mine or requester, not both.")
+		}
+		out.Requester = a.Subject
+	default:
+		return out, fail(422, "invalid_filter", "mine is true or false.")
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxLaunchPage {
+			return out, fail(422, "invalid_filter", "limit is 1 to 200.")
+		}
+		out.Limit = n
+	}
+	if len(out.Cursor) > maxCursorBytes {
+		return out, fail(422, "invalid_cursor", "The cursor is not one this service issued.")
+	}
+	return out, nil
+}
+
+var hexID = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+type launchCursor struct {
+	Version int    `json:"v"`
+	Created string `json:"c"`
+	ID      string `json:"i"`
+	Filter  string `json:"f"`
+}
+
+// filterKey binds a cursor to the filters it was issued for.
+func (q LaunchQuery) filterKey(targetID string) string {
+	return digest([]byte(strings.Join([]string{q.State, targetID, q.Name, q.Requester}, "\x00")))[:16]
+}
+
+// LaunchPage lists one page of launches, newest first, without their plans
+// and receipts. next_cursor is present when more launches match.
+func (s *Store) LaunchPage(q LaunchQuery) (map[string]any, error) {
+	where, args := []string{}, []any{}
+	targetID := ""
+	if q.Target != "" {
+		t, err := s.targetBy(s.DB, q.Target)
+		if err != nil {
+			return nil, err
+		}
+		targetID = t.ID
+		where, args = append(where, "target_id=?"), append(args, t.ID)
+	}
+	switch q.State {
+	case "":
+	case "active":
+		where = append(where, "state NOT IN ('stopped','expired','failed','rejected','cancelled')")
+	case "ended":
+		where = append(where, "state IN ('stopped','expired','failed','rejected','cancelled')")
+	default:
+		where, args = append(where, "state=?"), append(args, q.State)
+	}
+	if q.Name != "" {
+		where, args = append(where, "instr(name,?)>0"), append(args, q.Name)
+	}
+	if q.Requester != "" {
+		where, args = append(where, "requested_by=?"), append(args, q.Requester)
+	}
+	key := q.filterKey(targetID)
+	if q.Cursor != "" {
+		raw, err := base64.RawURLEncoding.Strict().DecodeString(q.Cursor)
+		var c launchCursor
+		canonical := func() bool { again, _ := json.Marshal(c); return string(again) == string(raw) }
+		if err != nil || json.Unmarshal(raw, &c) != nil || !canonical() || c.Version != 1 || c.Filter != key || !hexID.MatchString(c.ID) || len(c.Created) != len(stamp()) {
+			return nil, fail(422, "invalid_cursor", "The cursor is not one this service issued for these filters; start again without it.")
+		}
+		where, args = append(where, "(created<? OR (created=? AND id<?))"), append(args, c.Created, c.Created, c.ID)
+	}
+	query := "SELECT " + launchColumns + " FROM launches"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY created DESC, id DESC LIMIT ?"
+	args = append(args, q.Limit+1)
 	rows, err := s.DB.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -815,8 +937,93 @@ func (s *Store) Launches(state string, limit int) ([]Launch, error) {
 		l.Plan, l.Receipt = nil, nil
 		out = append(out, l.Launch)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	page := map[string]any{"limit": q.Limit}
+	if len(out) > q.Limit {
+		out = out[:q.Limit]
+		last := out[len(out)-1]
+		raw, _ := json.Marshal(launchCursor{Version: 1, Created: last.Created, ID: last.ID, Filter: key})
+		page["next_cursor"] = base64.RawURLEncoding.EncodeToString(raw)
+	}
+	page["items"] = out
+	return page, nil
 }
+
+// expiringWindow is how soon a running launch's expiry counts as soon.
+const expiringWindow = 30 * time.Minute
+
+// LaunchSummary is GET /launches/summary: launch counts by state for every
+// launch, and the few launches that need this actor's attention (waiting for
+// a decision by someone other than their requester, or expiring soon).
+func (s *Store) LaunchSummary(a Actor) (map[string]any, error) {
+	counts := map[string]int{}
+	for _, state := range launchStateOrder {
+		counts[state] = 0
+	}
+	rows, err := s.DB.Query("SELECT state,count(*) FROM launches GROUP BY state")
+	if err != nil {
+		return nil, err
+	}
+	total, active := 0, 0
+	for rows.Next() {
+		var state string
+		var n int
+		if err = rows.Scan(&state, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		counts[state] = n
+		total += n
+		if !TerminalState(state) {
+			active += n
+		}
+	}
+	rows.Close()
+	list := func(query string, args ...any) ([]Launch, error) {
+		rows, err := s.DB.Query("SELECT "+launchColumns+" FROM launches WHERE "+query+" LIMIT 8", args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := []Launch{}
+		for rows.Next() {
+			l, err := scanLaunch(rows)
+			if err != nil {
+				return nil, err
+			}
+			l.Plan, l.Receipt = nil, nil
+			out = append(out, l.Launch)
+		}
+		return out, rows.Err()
+	}
+	awaiting := []Launch{}
+	var awaitingCount int
+	if a.Can("launch:approve") {
+		if err = s.DB.QueryRow("SELECT count(*) FROM launches WHERE state='approval_pending' AND requested_by<>?", a.Subject).Scan(&awaitingCount); err != nil {
+			return nil, err
+		}
+		if awaiting, err = list("state='approval_pending' AND requested_by<>? ORDER BY created", a.Subject); err != nil {
+			return nil, err
+		}
+	}
+	soon := s.now().Add(expiringWindow).UnixMilli()
+	var expiringCount int
+	if err = s.DB.QueryRow("SELECT count(*) FROM launches WHERE state NOT IN ('stopped','expired','failed','rejected','cancelled') AND expires_at>0 AND expires_at<=?", soon).Scan(&expiringCount); err != nil {
+		return nil, err
+	}
+	expiring, err := list("state NOT IN ('stopped','expired','failed','rejected','cancelled') AND expires_at>0 AND expires_at<=? ORDER BY expires_at", soon)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"counts": counts, "total": total, "active": active,
+		"awaiting_your_decision": map[string]any{"count": awaitingCount, "items": awaiting},
+		"expiring_soon":          map[string]any{"count": expiringCount, "window_seconds": int(expiringWindow / time.Second), "items": expiring}}, nil
+}
+
+// launchStateOrder lists every launch state in state machine order.
+var launchStateOrder = []string{StateRequested, StateApprovalPending, StateApproved, StateQueued, StateProvisioning, StateRunning, StateStopping, StateStopped, StateExpired, StateFailed, StateRejected, StateCancelled}
 
 // LaunchDetail returns one launch with its spec, plan, policy and receipt.
 func (s *Store) LaunchDetail(id string) (Launch, error) {

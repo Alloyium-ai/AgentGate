@@ -102,7 +102,8 @@ func provisioningOperations() []apiOperation {
 		{path: "profiles/{id}/versions/{n}", method: "get", scope: "policy:read"},
 		{path: "profiles/{id}/versions/{n}/grants", method: "post", scope: "policy:write (editor)", body: "GrantInput"},
 		{path: "access-presets", method: "get", scope: "policy:read"},
-		{path: "launches", method: "get", scope: "launch:read"},
+		{path: "launches", method: "get", scope: "launch:read; filters state (a state, active or ended), target, name (substring), requester, mine; limit 1..200 (default 100); cursor resumes after the last launch of a page (next_cursor), newest first"},
+		{path: "launches/summary", method: "get", scope: "launch:read; launch counts by state, launches waiting for this actor's decision and launches expiring within 30 minutes"},
 		{path: "launches", method: "post", scope: "launch:write (launcher)", body: "LaunchSpec"},
 		{path: "launch-plans", method: "post", scope: "launch:write (launcher)", body: "LaunchSpec"},
 		{path: "launches/{id}", method: "get", scope: "launch:read"},
@@ -127,6 +128,18 @@ func provisioningOperations() []apiOperation {
 	}
 }
 
+// provisioningQuery names the query parameters of provisioning reads beyond
+// the generic ones apiParameters lists.
+var provisioningQuery = map[string][]map[string]any{
+	"launches": {
+		{"name": "target", "in": "query", "schema": map[string]any{"type": "string"}, "description": "A target name or id."},
+		{"name": "name", "in": "query", "schema": map[string]any{"type": "string", "pattern": `^[a-z0-9-]{1,40}$`}, "description": "Launches whose name contains this text."},
+		{"name": "requester", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Launches requested by this subject."},
+		{"name": "mine", "in": "query", "schema": map[string]any{"type": "boolean"}, "description": "Launches requested by the caller."},
+	},
+	"targets/{id}/secrets": {{"name": "profile", "in": "query", "schema": map[string]any{"type": "string", "pattern": `^[a-z0-9][a-z0-9-]{0,39}$`}, "description": "Also answer whether this profile may use each secret."}},
+}
+
 // addProvisioning merges the provisioning API into an OpenAPI document.
 func addProvisioning(api map[string]any) {
 	paths := api["paths"].(map[string]any)
@@ -137,6 +150,13 @@ func addProvisioning(api map[string]any) {
 			v = map[string]any{}
 		}
 		d := apiDescription(op)
+		if extra := provisioningQuery[op.path]; op.method == "get" && len(extra) > 0 {
+			params := d["parameters"].([]any)
+			for _, p := range extra {
+				params = append(params, p)
+			}
+			d["parameters"] = params
+		}
 		if len(op.path) > 6 && op.path[:6] == "hostd/" {
 			d["security"] = []any{map[string]any{"hostSignature": []string{}}}
 		} else {

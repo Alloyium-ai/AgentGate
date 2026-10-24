@@ -125,8 +125,9 @@ after a plan and sends exactly the planned document; editing the form afterwards
 
 ### Approve, follow and stop (approver, launcher)
 
-**Launches** lists the newest launches with state, target, requester, lifetime and remaining time. The state filter is
-applied by the service; target, name and "only mine" filter the returned page.
+**Launches** lists launches newest first with state, target, requester, lifetime and remaining time. The service applies
+every filter (state, or not ended / ended; target; name contains; only mine) and pages the result 25 at a time with its
+cursor; Previous returns to exactly the page seen before.
 
 The launch page shows:
 
@@ -159,8 +160,9 @@ endpoints and cannot mint tokens.
 
 ### Overview
 
-The Overview adds targets online (with keys awaiting approval and targets needing re-enrollment), running launches,
-launches waiting for *your* approval, launches expiring within 30 minutes, launches by state, and links to each.
+The Overview adds targets online (with keys awaiting approval and targets needing re-enrollment) and, from
+`GET /launches/summary`, running launches, launches waiting for *your* approval, launches expiring within 30 minutes and
+launches by state over every launch, with links to each.
 
 ## Permissions
 
@@ -213,8 +215,8 @@ Pins differ by client: the CLI keeps `~/.config/agentgate/known-targets.json`; t
 - One-time tokens are shown in read-only fields with copy buttons and dropped from the page when their dialog closes.
 - Leaving a page aborts its requests. A 401 that means the session ended (`session_expired`, `authentication_required`,
   …) returns to the sign-in page, and a banner warns five minutes before the session expires.
-- Lists are bounded by the API (targets and secrets 500, launches 200, profile versions 200) and paged 25 per page in the
-  browser; the pager says when the API bound applies.
+- Lists are bounded by the API (targets and secrets 500, profile versions 200) and paged 25 per page in the browser; the
+  pager says when the API bound applies. Launches are paged by the service with a cursor.
 - Inputs have labels; tables have captions and header scopes; dialogs use the native modal `<dialog>` (focus stays inside
   and Escape closes); state changes and copy results are announced in polite live regions; badges, health and stream
   status always carry text, so color is never the only signal; layouts work at 390 px wide without horizontal scrolling.
@@ -257,7 +259,6 @@ The browser QA needs a build and Playwright's Chromium. Where the pinned Playwri
   today's service. Against today's service the dry run is refused before anything changes, and storing a secret stops
   at *Verify seal key* with "does not publish a signed seal key"; nothing is sent. The browser flows were tested against
   the fixture, and the sealing code against the Go package's vector and its `Open`, not against a running service.
-- Launch filters other than state, and the overview counts, cover only the newest 200 launches.
 - Logs are polled every 4 seconds while a launch runs.
 - Browser pins live in `localStorage`: a private window or cleared site data loses them, and the page then asks for the
   fingerprint again. They are not shared with the CLI.

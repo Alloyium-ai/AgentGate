@@ -131,7 +131,7 @@ with exit code 4.
 ### 7. Watch
 
 ```sh
-agentgate ps --active
+agentgate ps --active --mine
 agentgate events <launch id> -f        # Server-Sent Events, resumes after a disconnect without loss or repeats
 agentgate logs <launch id> -f
 agentgate show <launch id>             # state, plan, effective permissions, host jobs, evidence receipt
@@ -258,7 +258,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `preset ls` | `GET /access-presets` | presets, grant actions and revoke kinds |
 | `grant PROFILE ACTION [VALUE...] [--mode M] [--upgrade] [--dry-run]` | `POST /profiles/{id}/versions/{n}/grants` | actions below |
 | `launch (-f SPEC \| FLAGS) [--dry-run] [--wait] [--until running\|done] [--wait-timeout D] [-- CMD...]` | `POST /launch-plans`, `POST /launches`, events | flags below |
-| `ps [--state S] [--active] [--limit N]` | `GET /launches` | |
+| `ps [--state S\|--active] [--target T] [--name N] [--mine\|--requester S] [--limit N] [--cursor C\|--all]` | `GET /launches` | the service filters and pages (newest first); a full page prints the next `--cursor`; `--all` follows every page (at most 10000) |
 | `show ID` | `GET /launches/{id}` | |
 | `logs ID [-f] [--after N] [--stream stdout\|stderr]` | `GET /launches/{id}/logs` | `-f` polls the bounded log until the launch ends |
 | `events ID [-f] [--after N]` | `GET /launches/{id}/events` | `-f` streams with resume |

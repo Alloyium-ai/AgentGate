@@ -9,9 +9,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, Pause, Play, RotateCcw, Square } from "lucide-react";
 import { Actor, SESSION_ENDED, api, when } from "./api";
 import { Empty, ErrorBox, Loading, SectionTitle } from "./components";
-import { Items, Job, LAUNCH_STATES, Launch, LaunchEvent, LogPage, Target, isTerminal, permissions, roleText, targetName, useResource } from "./prov-api";
+import { Items, Job, LAUNCH_STATES, Launch, LaunchEvent, LaunchPage, LogPage, Target, isTerminal, permissions, roleText, targetName, useResource } from "./prov-api";
 import { CodeBlock, ConfirmDialog, CopyButton, Digest, Gate, KernelNotice, LiveRegion, ServerMessages, StateBadge } from "./prov-components";
-import { ClientPager, useClientPages } from "./prov-paging";
+import { CursorPager, useCursorPages } from "./prov-paging";
 import { PlanView } from "./launch-form";
 import { StreamStatus, followLaunch } from "./launch-stream";
 import { LogBuffer, TRUNCATION_MARKER, filterLines, toText, visible } from "./log-view";
@@ -25,20 +25,28 @@ function remaining(expires?: string, now = Date.now()) {
   return s <= 0 ? "lifetime reached" : `ends in ${lifetimeText(s > 3600 ? s - (s % 60) : s)}`;
 }
 
+const LAUNCH_PAGE = 25;
+const NAME_FILTER = /^[a-z0-9-]{1,40}$/;
+
 export function Launches({ actor, epoch, navigate }: { actor: Actor; epoch: number; navigate: (p: string) => void }) {
   const p = permissions(actor);
   const [state, setState] = useState("");
   const [target, setTarget] = useState("");
   const [name, setName] = useState("");
   const [mine, setMine] = useState(false);
-  const { data, error, loading } = useResource<Items<Launch>>(`launches?limit=200${state ? `&state=${state}` : ""}`, epoch);
+  const typed = name.trim().toLowerCase();
+  const nameIssue = typed && !NAME_FILTER.test(typed) ? "A name filter is 1 to 40 of a-z, 0-9 and -." : "";
+  const filters = new URLSearchParams({ limit: String(LAUNCH_PAGE) });
+  if (state) filters.set("state", state);
+  if (target) filters.set("target", target);
+  if (typed && !nameIssue) filters.set("name", typed);
+  if (mine) filters.set("mine", "true");
+  const key = filters.toString();
+  const pages = useCursorPages(key);
+  if (pages.cursor) filters.set("cursor", pages.cursor);
+  const { data, error, loading } = useResource<LaunchPage>(`launches?${filters.toString()}`, epoch);
   const targets = useResource<Items<Target>>("targets", epoch);
-  const items = useMemo(
-    () =>
-      (data?.items || []).filter((l) => (!target || l.target_id === target) && (!name || l.name.includes(name.trim().toLowerCase())) && (!mine || l.requested_by === actor.subject)),
-    [data, target, name, mine, actor.subject],
-  );
-  const pages = useClientPages(items, 25);
+  const items = data?.items || [];
   return (
     <>
       <SectionTitle
@@ -58,6 +66,8 @@ export function Launches({ actor, epoch, navigate }: { actor: Actor; epoch: numb
           State
           <select value={state} onChange={(e) => setState(e.target.value)}>
             <option value="">All states</option>
+            <option value="active">Not ended</option>
+            <option value="ended">Ended</option>
             {LAUNCH_STATES.map((s) => (
               <option key={s} value={s}>
                 {s.replaceAll("_", " ")}
@@ -78,14 +88,19 @@ export function Launches({ actor, epoch, navigate }: { actor: Actor; epoch: numb
         </label>
         <label>
           Name contains
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="repo-fixer" />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="repo-fixer" aria-describedby="name-filter-issue" />
         </label>
         <label className="check-row inline">
           <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} />
           <span>Only mine</span>
         </label>
       </form>
-      <p className="form-note">The state filter is applied by the service; target, name and "only mine" filter the newest 200 launches it returns.</p>
+      {nameIssue && (
+        <p className="field-issue" id="name-filter-issue">
+          {nameIssue}
+        </p>
+      )}
+      <p className="form-note">The service applies every filter and pages the newest launches first, {LAUNCH_PAGE} at a time.</p>
       {error ? (
         <ErrorBox error={error} />
       ) : loading ? (
@@ -107,7 +122,7 @@ export function Launches({ actor, epoch, navigate }: { actor: Actor; epoch: numb
               </tr>
             </thead>
             <tbody>
-              {pages.items.map((l) => (
+              {items.map((l) => (
                 <tr key={l.id}>
                   <td>
                     <button className="row-link" onClick={() => navigate(`launches/${l.id}`)}>
@@ -139,7 +154,7 @@ export function Launches({ actor, epoch, navigate }: { actor: Actor; epoch: numb
           </table>
         </div>
       )}
-      <ClientPager {...pages} bound={200} />
+      <CursorPager page={pages.page} size={LAUNCH_PAGE} shown={items.length} next={data?.next_cursor} onNext={pages.next} onPrevious={pages.previous} />
     </>
   );
 }

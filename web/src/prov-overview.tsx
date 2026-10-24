@@ -8,7 +8,7 @@ import React from "react";
 import { ArrowUpRight, Clock, Rocket, Server, UserCheck } from "lucide-react";
 import { Actor } from "./api";
 import { ErrorBox } from "./components";
-import { Items, LAUNCH_STATES, Launch, Target, isTerminal, permissions, targetName, useResource } from "./prov-api";
+import { Items, LAUNCH_STATES, LaunchSummary, Target, permissions, targetName, useResource } from "./prov-api";
 import { KernelNotice, StateBadge } from "./prov-components";
 import { lifetimeText } from "./launch-spec";
 
@@ -17,19 +17,17 @@ export const EXPIRING_WINDOW_MS = 30 * 60 * 1000;
 export function ProvisioningOverview({ actor, epoch, navigate }: { actor: Actor; epoch: number; navigate: (p: string) => void }) {
   const p = permissions(actor);
   const targets = useResource<Items<Target>>("targets", epoch);
-  const launches = useResource<Items<Launch>>("launches?limit=200", epoch);
+  const launches = useResource<LaunchSummary>("launches/summary", epoch);
   const t = (targets.data?.items || []).filter((x) => x.state !== "retired");
-  const l = launches.data?.items || [];
+  const sum = launches.data;
   const now = Date.now();
   const online = t.filter((x) => x.state === "active" && x.online).length;
   const offline = t.filter((x) => x.state === "active" && !x.online).length;
   const awaiting = t.filter((x) => x.state === "awaiting_key_approval").length;
   const rekey = t.filter((x) => x.state === "rekey_required").length;
-  const byState = LAUNCH_STATES.map((s) => ({ state: s, count: l.filter((x) => x.state === s).length })).filter((x) => x.count > 0);
-  const mine = p.approve ? l.filter((x) => x.state === "approval_pending" && x.requested_by !== actor.subject) : [];
-  const expiring = l
-    .filter((x) => !isTerminal(x.state) && x.expires_at && new Date(x.expires_at).getTime() - now < EXPIRING_WINDOW_MS)
-    .sort((a, b) => new Date(a.expires_at!).getTime() - new Date(b.expires_at!).getTime());
+  const byState = LAUNCH_STATES.map((s) => ({ state: s, count: sum?.counts[s] || 0 })).filter((x) => x.count > 0);
+  const mine = p.approve ? sum?.awaiting_your_decision.items || [] : [];
+  const expiring = sum?.expiring_soon.items || [];
   return (
     <section className="prov-overview" aria-label="Agent sandbox">
       {Boolean(targets.error || launches.error) && <ErrorBox error={targets.error || launches.error} />}
@@ -47,7 +45,7 @@ export function ProvisioningOverview({ actor, epoch, navigate }: { actor: Actor;
             <Rocket size={20} aria-hidden="true" />
             <ArrowUpRight size={17} aria-hidden="true" />
           </div>
-          <strong>{launches.data ? l.filter((x) => x.state === "running").length : "—"}</strong>
+          <strong>{sum ? sum.counts.running || 0 : "—"}</strong>
           <span>Launches running</span>
         </button>
         <button className="stat" onClick={() => navigate("launches")}>
@@ -55,7 +53,7 @@ export function ProvisioningOverview({ actor, epoch, navigate }: { actor: Actor;
             <UserCheck size={20} aria-hidden="true" />
             <ArrowUpRight size={17} aria-hidden="true" />
           </div>
-          <strong>{launches.data ? (p.approve ? mine.length : "—") : "—"}</strong>
+          <strong>{sum ? (p.approve ? sum.awaiting_your_decision.count : "—") : "—"}</strong>
           <span>{p.approve ? "Waiting for your approval" : "Approvals need the approver role"}</span>
         </button>
         <button className="stat" onClick={() => navigate("launches")}>
@@ -63,7 +61,7 @@ export function ProvisioningOverview({ actor, epoch, navigate }: { actor: Actor;
             <Clock size={20} aria-hidden="true" />
             <ArrowUpRight size={17} aria-hidden="true" />
           </div>
-          <strong>{launches.data ? expiring.length : "—"}</strong>
+          <strong>{sum ? sum.expiring_soon.count : "—"}</strong>
           <span>Expiring within 30 minutes</span>
         </button>
       </div>
@@ -83,13 +81,16 @@ export function ProvisioningOverview({ actor, epoch, navigate }: { actor: Actor;
           ) : (
             <p className="form-note">No launches yet.</p>
           )}
-          <p className="form-note">Counts cover the newest 200 launches.</p>
+          <p className="form-note">{sum ? `Counts cover all ${sum.total} launches (${sum.active} not ended).` : "Counts come from the service."}</p>
         </section>
         <section className="panel">
           <div className="panel-title">
             <h2>Needs attention</h2>
           </div>
           {!mine.length && !expiring.length && <p className="form-note">Nothing waits for you.</p>}
+          {sum && (sum.awaiting_your_decision.count > mine.length || sum.expiring_soon.count > expiring.length) && (
+            <p className="form-note">Showing the first {Math.max(mine.length, expiring.length)}; the Launches page filters the rest.</p>
+          )}
           <ul className="plain-list">
             {mine.slice(0, 8).map((x) => (
               <li key={x.id}>

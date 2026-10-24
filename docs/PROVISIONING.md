@@ -272,7 +272,8 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/profiles/{id}/versions/{n}` | GET | viewer | one version with its document and digest |
 | `/profiles/{id}/versions/{n}/grants` | POST | editor | 1 to 16 typed edits (read, write, exec, deny, allow-web, deny-web, dns, signal, anon-exec, mount, unmount, preset, revoke) on the latest version, producing a new version or a no-op; `"dry_run": true` answers the same (document, `from_digest`, `digest`, `changes`) and stores nothing |
 | `/access-presets` | GET | viewer | presets, edit actions and revoke kinds |
-| `/launches` | GET, POST | viewer, launcher | list (`?state=`); create from a spec (validates, returns the plan) |
+| `/launches` | GET, POST | viewer, launcher | list newest first with filters `state` (a state, `active` or `ended`), `target`, `name` (substring), `requester`, `mine`, pages of `limit` (1 to 200, default 100) and an opaque `cursor` (`next_cursor` of the previous page, bound to the same filters); create from a spec (validates, returns the plan) |
+| `/launches/summary` | GET | viewer | counts by state of every launch, and up to 8 launches waiting for this actor's decision and 8 expiring within 30 minutes, with their totals |
 | `/launch-plans` | POST | launcher | the plan for a spec, creating nothing (`agentgate launch --dry-run`) |
 | `/launches/{id}` | GET | viewer | state, spec, plan, policy, receipt, jobs |
 | `/launches/{id}/approve`, `/reject` | POST | approver | a different human than the requester |
@@ -325,7 +326,8 @@ agentgate grant PROFILE read|write|exec|deny PATH | web [allow|deny] PROTO... | 
 agentgate launch -f spec.json | --name N --target T --mode oneshot|session --lifetime D --profile P[@V]
                  --image I --mount SRC:NAME[:ro|snapshot|rw] --secret REF[:ENV] --env K=V -- CMD...
                  [--dry-run] [--wait [--until running|done]]
-agentgate ps | show ID | logs ID [-f] | events ID [-f] | stop ID [--wait] | approve ID | reject ID
+agentgate ps [--state S] [--target T] [--name N] [--mine] [--limit N] [--cursor C | --all] | show ID | logs ID [-f]
+agentgate events ID [-f] | stop ID [--wait] | approve ID | reject ID
 agentgate audit [--launch ID] [--since T] | audit catalog
 agentgate secret set NAME --upstream HOST --allow-profile P [--rule M:PATH] [--scheme S] [--wait] | ls | rm NAME
 agentgate token create [--save] | ls | revoke ID      (password sign-in: a token cannot manage tokens)

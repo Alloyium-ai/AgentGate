@@ -308,7 +308,45 @@ function api(method, path, query, input, headers) {
     return { dry_run: true, plan: out.plan, spec: input, policy: out.policy };
   }
   if (area === "launches") {
-    if (method === "GET" && !id) return { items: launches.filter((l) => !query.get("state") || l.state === query.get("state")).map(summary).reverse() };
+    if (method === "GET" && !id) {
+      const terminal = ["stopped", "expired", "failed", "rejected", "cancelled"];
+      const state = query.get("state") || "";
+      const t = query.get("target") ? findTarget(query.get("target")) : undefined;
+      if (query.get("target") && !t) throw new Fail(404, "not_found", "The target does not exist.");
+      const name = query.get("name") || "";
+      if (name && !/^[a-z0-9-]{1,40}$/.test(name)) throw new Fail(422, "invalid_filter", "name is 1 to 40 of a-z, 0-9 and -.");
+      const requester = query.get("mine") === "true" ? actors[who].subject : query.get("requester") || "";
+      const limit = Number(query.get("limit") || 100);
+      const key = JSON.stringify([state, t?.id || "", name, requester]);
+      let offset = 0;
+      if (query.get("cursor")) {
+        const c = JSON.parse(Buffer.from(query.get("cursor"), "base64url").toString());
+        if (c.k !== key) throw new Fail(422, "invalid_cursor", "The cursor is not one this service issued for these filters; start again without it.");
+        offset = c.o;
+      }
+      const all = launches
+        .filter((l) => !state || (state === "active" ? !terminal.includes(l.state) : state === "ended" ? terminal.includes(l.state) : l.state === state))
+        .filter((l) => (!t || l.target_id === t.id) && (!name || l.name.includes(name)) && (!requester || l.requested_by === requester))
+        .map(summary)
+        .reverse();
+      const items = all.slice(offset, offset + limit);
+      const page = { items, limit };
+      if (offset + limit < all.length) page.next_cursor = Buffer.from(JSON.stringify({ k: key, o: offset + limit })).toString("base64url");
+      return page;
+    }
+    if (method === "GET" && id === "summary") {
+      const counts = Object.fromEntries(["requested", "approval_pending", "approved", "queued", "provisioning", "running", "stopping", "stopped", "expired", "failed", "rejected", "cancelled"].map((s) => [s, launches.filter((l) => l.state === s).length]));
+      const terminal = ["stopped", "expired", "failed", "rejected", "cancelled"];
+      const awaiting = can("approver") ? launches.filter((l) => l.state === "approval_pending" && l.requested_by !== actors[who].subject) : [];
+      const soon = launches.filter((l) => !terminal.includes(l.state) && l.expires_at && new Date(l.expires_at).getTime() - Date.now() <= 1800000);
+      return {
+        counts,
+        total: launches.length,
+        active: launches.filter((l) => !terminal.includes(l.state)).length,
+        awaiting_your_decision: { count: awaiting.length, items: awaiting.slice(0, 8).map(summary) },
+        expiring_soon: { count: soon.length, window_seconds: 1800, items: soon.slice(0, 8).map(summary) },
+      };
+    }
     if (method === "POST" && !id) {
       const out = plan(input, actors[who].subject);
       const l = { id: newID(), name: input.name, spec_digest: out.plan.spec_digest, target_id: out.plan.target.id, policy_digest: out.plan.policy_digest, mode: input.mode, lifetime_seconds: input.lifetime_seconds, approval_required: out.plan.approval === "required", state: "requested", requested_by: actors[who].subject, kernel_verified: false, created_at: now(), updated_at: now(), revision: 1, plan: { ...out.plan, expires_at: undefined }, spec: input, policy: out.policy };
@@ -912,7 +950,48 @@ try {
     await page.getByRole("button", { name: "Approve or reject needs-bob" }).waitFor();
     await text("Targets online").waitFor();
     await page.locator(".state-counts").getByText("stopped").waitFor();
+    await text("Counts cover all").waitFor();
+    assert.ok(requests.some((r) => r.method === "GET" && r.path === "launches/summary"), "the overview reads the service's summary");
     await page.screenshot({ path: `${output}/overview-desktop.png`, fullPage: true });
+  });
+
+  await step("the launch list is filtered and paged by the service", async () => {
+    const t = findTarget("build-host");
+    for (let i = 0; i < 30; i++) {
+      const l = { id: newID(), name: `batch-${String(i).padStart(2, "0")}`, spec_digest: "e".repeat(64), target_id: t.id, policy_digest: "f".repeat(64), mode: "oneshot", lifetime_seconds: 60, approval_required: false, state: "stopped", requested_by: "local:bob", kernel_verified: false, created_at: new Date(Date.now() - 86400000 + i * 1000).toISOString(), updated_at: now(), revision: 4 };
+      events[l.id] = [];
+      logs[l.id] = [];
+      launches.unshift(l);
+    }
+    await go("launches", "alice");
+    const rows = page.locator("tbody tr");
+    await rows.first().waitFor();
+    assert.equal(await rows.count(), 25, "the first page holds 25 launches");
+    await text("Page 1 · 25 of at most 25 per page").waitFor();
+    await page.getByRole("button", { name: "Next" }).click();
+    await text("Page 2").waitFor();
+    const second = await rows.count();
+    assert.ok(second > 0 && second <= 25);
+    const paged = requests.filter((r) => r.method === "GET" && r.path === "launches" && r.url.includes("cursor="));
+    assert.ok(paged.length > 0, "the next page is asked for with the service's cursor");
+    await page.getByRole("button", { name: "Previous" }).click();
+    await text("Page 1 ·").waitFor();
+    await page.getByLabel("Name contains").fill("batch-1");
+    await page.getByRole("button", { name: "batch-19" }).waitFor();
+    assert.equal(await rows.count(), 10, "the service filters by name");
+    await page.getByLabel("Only mine").check();
+    await text("No launches match").waitFor();
+    const last = new URL(requests.filter((r) => r.method === "GET" && r.path === "launches").at(-1).url);
+    assert.equal(last.searchParams.get("mine"), "true");
+    assert.equal(last.searchParams.get("name"), "batch-1");
+    await page.getByLabel("Name contains").fill("Batch 1");
+    await text("A name filter is 1 to 40 of a-z, 0-9 and -.").waitFor();
+    await page.getByLabel("Only mine").uncheck();
+    await page.getByLabel("Name contains").fill("");
+    await pick("State").selectOption("active");
+    await page.getByRole("button", { name: "needs-bob" }).waitFor();
+    assert.equal(new URL(requests.filter((r) => r.method === "GET" && r.path === "launches").at(-1).url).searchParams.get("state"), "active");
+    await noHorizontalScroll("launches");
   });
 
   await step("a viewer sees disabled controls with reasons and no launch or secret pages", async () => {

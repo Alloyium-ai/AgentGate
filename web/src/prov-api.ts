@@ -268,6 +268,16 @@ export type APIToken = {
   last_used_at?: string;
 };
 export type Items<T> = { items: T[] };
+// LaunchPage is GET /launches: one page, newest first, with an opaque cursor
+// for the next page when more launches match the filters.
+export type LaunchPage = { items: Launch[]; limit: number; next_cursor?: string };
+export type LaunchSummary = {
+  counts: Record<string, number>;
+  total: number;
+  active: number;
+  awaiting_your_decision: { count: number; items: Launch[] };
+  expiring_soon: { count: number; window_seconds: number; items: Launch[] };
+};
 
 export const LAUNCH_STATES = [
   "requested",
