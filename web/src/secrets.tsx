@@ -291,7 +291,7 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
             <strong>This browser cannot seal secrets</strong>
             <p>
               It lacks {support.missing.join(", ")} in WebCrypto, which the host key check and the sealing need. Nothing falls back to sending the value. Use a current
-              Chrome, Edge, Firefox or Safari, or the CLI, which reads the value from standard input: <code>agentgate secret set NAME --target TARGET --upstream HOST</code>.
+              Chrome, Edge, Firefox or Safari, or the CLI, which reads the value from standard input: <code>agentgate secret set NAME --target TARGET --upstream HOST --allow-profile PROFILE</code>.
             </p>
           </div>
         </div>

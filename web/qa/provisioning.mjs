@@ -863,7 +863,7 @@ try {
     await d.getByRole("button", { name: "Create token" }).click();
     const token = await page.getByRole("textbox", { name: "API token", exact: true }).inputValue();
     assert.match(token, /^agt_[A-Za-z0-9_-]{43}$/);
-    await text("agentgate login").waitFor();
+    await text("--token-stdin").waitFor();
     await page.getByRole("button", { name: "I stored the token" }).click();
     await page.locator("dialog").waitFor({ state: "detached" });
     assert.ok(!(await page.content()).includes(token));

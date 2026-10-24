@@ -619,7 +619,10 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
               <RotateCcw size={15} aria-hidden="true" /> Launch again from this spec
             </button>
           )}
-          <CopyButton text={`agentgate logs ${l.id} -f\nagentgate stop ${l.id}\nagentgate approve ${l.id}`} label="Copy CLI commands" />
+          <CopyButton
+            text={`agentgate show ${l.id}\nagentgate events ${l.id} -f\nagentgate logs ${l.id} -f\nagentgate approve ${l.id} --reason "Reviewed the plan"\nagentgate stop ${l.id} --reason "Done" --wait`}
+            label="Copy CLI commands"
+          />
         </div>
       </section>
       <section className="panel" aria-labelledby="timeline-title">

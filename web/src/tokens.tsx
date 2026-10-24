@@ -40,7 +40,7 @@ function CreateToken({ actor, onClose, onDone }: { actor: Actor; onClose: () => 
     return (
       <Modal title="API token created" onClose={close}>
         <OneTimeSecret label="API token" value={created.token} note="Store it now; the service keeps only its hash. Anyone holding it acts as you with these roles until it expires or you revoke it." />
-        <CodeBlock label="Use it with the CLI" text={`agentgate login ${location.origin}\n# paste the token when asked; the CLI stores it with mode 0600`} />
+        <CodeBlock label="Use it with the CLI" text={`agentgate login ${location.origin} --token-stdin\n# paste the token on standard input and end it with Ctrl-D; the CLI stores it with mode 0600`} />
         <p className="form-note">
           Roles: {created.roles.join(", ")} · expires {when(created.expires_at)}. Each use is limited to the roles you still hold.
         </p>
