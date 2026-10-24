@@ -6,16 +6,19 @@ No BPF-LSM kernel, Docker or VM is available here, so every kernel-dependent
 step is a stand-in; these tests check the script's staging, refusals, verbatim
 reporting and that it never asserts kernel_verified itself.
 """
+import io
 import json
 import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / 'verify-kernel.sh'
+sys.path.insert(0, str(HERE))
 
 
 class VerifyKernelTest(unittest.TestCase):
@@ -163,6 +166,129 @@ class VerifyKernelTest(unittest.TestCase):
         self.run_script()
         after = set(Path(tempfile.gettempdir()).glob('agentgate-verify.*'))
         self.assertEqual(before, after)
+
+
+class ProbeJudgementTest(unittest.TestCase):
+    def setUp(self):
+        import verify_kernel
+        self.kit = verify_kernel
+        self.good = {name: ('0' if expected == 'allowed' else 'EPERM' if expected == 'permission' else 'ENOENT'
+                            if expected == 'unreadable' else 'EACCES') for name, expected, _ in verify_kernel.CHECKS}
+
+    def lines(self, outcomes):
+        return '\n'.join('%s %s' % item for item in outcomes.items()) + '\n'
+
+    def test_every_expectation_passes_with_the_right_outcomes(self):
+        verdict = self.kit.judge(self.lines(self.good), 'canary-value')
+        self.assertTrue(verdict['ok'], verdict)
+        names = {p['name'] for p in verdict['probes']}
+        for required in ('allow-create', 'deny-mkfifo', 'deny-unix-bind', 'allow-broker-endpoint', 'deny-broker-other-port',
+                         'deny-broker-gateway', 'deny-broker-neighbour', 'deny-secret-mount', 'deny-secret-store', 'secret-canary-absent'):
+            self.assertIn(required, names)
+
+    def test_wrong_outcomes_fail(self):
+        for name, value in (('allow-create', 'EACCES'), ('deny-mkfifo', '0'), ('deny-unix-bind', '0'),
+                            ('allow-broker-endpoint', 'EPERM'), ('deny-broker-other-port', 'ECONNREFUSED'),
+                            ('deny-broker-gateway', 'None'), ('deny-broker-neighbour', '0'), ('deny-secret-store', '0')):
+            outcomes = dict(self.good, **{name: value})
+            with self.subTest(name=name, value=value):
+                self.assertFalse(self.kit.judge(self.lines(outcomes), 'canary-value')['ok'])
+        missing = dict(self.good)
+        del missing['deny-mkfifo']
+        self.assertFalse(self.kit.judge(self.lines(missing), 'canary-value')['ok'])
+
+    def test_the_secret_canary_must_never_appear(self):
+        text = self.lines(self.good) + 'canary-value\n'
+        verdict = self.kit.judge(text, 'canary-value')
+        self.assertFalse(verdict['ok'])
+        self.assertFalse(next(p for p in verdict['probes'] if p['name'] == 'secret-canary-absent')['ok'])
+
+    def test_command_line(self):
+        out = io.StringIO()
+        self.assertEqual(self.kit.main(['checks'], stdout=out), 0)
+        self.assertTrue(any(item['name'] == 'deny-unix-bind' for item in json.loads(out.getvalue())))
+        out = io.StringIO()
+        self.assertEqual(self.kit.main(['judge', 'x' * 16], stdin=io.StringIO(self.lines(self.good)), stdout=out), 0)
+        self.assertTrue(json.loads(out.getvalue())['ok'])
+
+
+class ProbeDriverTest(unittest.TestCase):
+    """verify-probe.sh with Docker, the launch runtime and the guard faked: its wiring only."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name)
+        self.root, self.bin = self.base / 'instance', self.base / 'bin'
+        self.root.mkdir()
+        self.bin.mkdir()
+        self.store = self.base / 'secrets' / 'verify-probe'
+        self.docker_log = self.base / 'docker.log'
+        docker = self.bin / 'docker'
+        docker.write_text('#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\n' % self.docker_log)
+        docker.chmod(0o755)
+        guard = self.root / 'pilot-network-diagnostic'
+        guard.write_text('#!/bin/sh\nprintf \'{"digest":"%s","document":{}}\'\n' % ('ab' * 32))
+        guard.chmod(0o755)
+
+    def write_launch(self, outcomes, joined=True, leak=False):
+        receipt = {'broker': {'target_joined': joined}, 'evidence': {'host': {'filesystem': {'denials': [{'path': '/etc/shadow'}]}}}}
+        lines = ''.join('%s %s\n' % item for item in outcomes.items())
+        (self.root / 'launch.py').write_text(
+            'import json, pathlib, sys\n'
+            'root = pathlib.Path(%r)\n'
+            'if sys.argv[1] == "run":\n'
+            '    (root / "job.json").write_bytes(sys.stdin.buffer.read())\n'
+            'elif sys.argv[1] == "receipt":\n'
+            '    print(json.dumps(%r))\n'
+            'elif sys.argv[1] == "logs":\n'
+            '    sys.stdout.write(%r)\n'
+            '    if %r:\n'
+            '        sys.stdout.write((pathlib.Path(%r) / "probe").read_text())\n'
+            % (str(self.root), receipt, lines, leak, str(self.store)))
+
+    def run_probe(self):
+        env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'], AGENTGATE_VERIFY_PROBE_ROOT=str(self.root),
+                   AGENTGATE_VERIFY_PROBE_IMAGE='sha256:' + 'c' * 64, AGENTGATE_VERIFY_PROBE_STORE=str(self.store))
+        result = self.base / 'result.json'
+        done = subprocess.run(['/bin/bash', str(HERE / 'verify-probe.sh'), str(result)], capture_output=True, timeout=60, env=env)
+        return done, (json.loads(result.read_text()) if result.exists() else None)
+
+    def good(self):
+        import verify_kernel
+        return {name: ('0' if expected == 'allowed' else 'EPERM' if expected == 'permission' else 'ENOENT')
+                for name, expected, _ in verify_kernel.CHECKS}
+
+    def test_the_driver_builds_a_broker_launch_and_cleans_up(self):
+        self.write_launch(self.good())
+        done, result = self.run_probe()
+        self.assertEqual(done.returncode, 0, done.stderr.decode() + json.dumps(result))
+        self.assertTrue(result['ok'])
+        docker = self.docker_log.read_text()
+        self.assertIn('network create --internal --driver bridge --subnet 172.30.255.0/29 --gateway 172.30.255.1 '
+                      'agentgate-kernelverify00000000000000000000-broker', docker)
+        self.assertIn('--ip 172.30.255.2 --read-only --cap-drop ALL', docker)
+        self.assertIn('rm -f agentgate-verify-broker', docker)
+        self.assertIn('network rm agentgate-kernelverify00000000000000000000-broker', docker)
+        job = json.loads((self.root / 'job.json').read_text())
+        self.assertEqual(job['policy']['broker'], {'address': '172.30.255.2', 'protocol': 'tcp', 'port': 8443})
+        self.assertNotIn('taskboard', job['policy'])
+        self.assertEqual(job['policy_digest'], 'ab' * 32)
+        self.assertEqual(job['broker']['env'], {'PROBE_BROKER_URL': 'http://172.30.255.2:8443/probe'})
+        import launch_job
+        launch = launch_job.check_job(json.dumps(job).encode(), ['snapshots', 'live-mounts'])
+        self.assertEqual(launch['env']['PROBE_BROKER_URL'], 'http://172.30.255.2:8443/probe')
+        self.assertFalse(self.store.exists(), 'the canary store outlived the probe')
+
+    def test_a_leaked_canary_or_an_unjoined_target_fails(self):
+        self.write_launch(self.good(), leak=True)
+        done, result = self.run_probe()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertFalse(next(p for p in result['probes'] if p['name'] == 'secret-canary-absent')['ok'])
+        self.write_launch(self.good(), joined=False)
+        done, result = self.run_probe()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertFalse(next(p for p in result['probes'] if p['name'] == 'target-joined-broker-network')['ok'])
 
 
 if __name__ == '__main__':
