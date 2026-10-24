@@ -75,6 +75,11 @@ def effective_policy(root, data):
     return info
 
 
+def resolver_file(resolvers):
+    """The owned target's resolver file for the policy's exact resolvers."""
+    return ''.join('nameserver ' + ip + '\n' for ip in resolvers) + 'options timeout:2 attempts:3\n'
+
+
 def shell_assignments(values):
     """Render values for the trusted scripts' eval: fixed key names, every value quoted."""
     lines = []

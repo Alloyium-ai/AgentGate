@@ -39,13 +39,17 @@ start_ns=int(sys.argv[8]); policy_path=pathlib.Path(sys.argv[9])
 host_controls=sys.argv[10]=='1'; host_pins=sys.argv[11] if host_controls else ''
 sys.path.insert(0,str(root))
 # gateway.py holds the only link counts and the same check the gateway repeats.
-from gateway import HOST_LINKS,NETWORK_LINKS,pins_live,valid_host_mounts
+from gateway import HOST_LINKS,NETWORK_LINKS,command_deadline,pins_live,valid_host_mounts
 assert pins_live(sys.argv[12],NETWORK_LINKS),'network guard pins incomplete'
 assert not host_controls or pins_live(host_pins,HOST_LINKS),'host control pins incomplete'
 host_mounts=json.loads((root/'target.json').read_text()).get('host_mounts',[])
 assert valid_host_mounts(host_mounts) and (host_controls or not host_mounts),'host folder mounts require host controls'
-duration=int(json.loads(policy_path.read_text())['duration_seconds'])
-assert 1 <= duration <= 60
+document=json.loads(policy_path.read_text())
+# No mode: the SSH command window (1..60, capped at 25 s). A launch policy names
+# oneshot (1..3600 s) or session (60..86400 s); its lifetime is the deadline.
+mode=document.get('mode'); duration=document['duration_seconds']
+assert mode is None or host_controls,'a launch requires host controls'
+deadline_ns=command_deadline(mode,duration,start_ns,time.monotonic_ns())
 raw=pathlib.Path(f'/proc/{pid}/stat').read_text()
 ticks=int(raw.rsplit(')',1)[1].split()[19])
 target=json.loads(subprocess.check_output(['/usr/bin/docker','inspect',name]))[0]
@@ -56,12 +60,11 @@ config={'container':name,'container_id':target['Id'],'image_id':target['Image'],
         'runner_path':str(runner),
         'runner_sha256':hashlib.sha256(runner.read_bytes()).hexdigest(),
         'guard_pid':pid,'guard_start_ticks':ticks,'guard_ready':str(root/'guard-ready'),'guard_pins':str(pathlib.Path('/sys/fs/bpf')/('ag-mvp-net-'+pathlib.Path(domain).name)),
-                'deadline_ns':min(time.monotonic_ns()+25_000_000_000,start_ns+duration*1_000_000_000),
+        'deadline_ns':deadline_ns,
         'audit_path':str(root/'audit.jsonl'),
         'source_revision':source,'policy_digest':policy,
         'host_controls':host_controls,'host_pins':host_pins,'host_mounts':host_mounts}
 path=root/'config.json'
-assert config['deadline_ns'] > time.monotonic_ns()+1_000_000_000
 fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
 with os.fdopen(fd,'w') as file:
     json.dump(config,file,sort_keys=True)

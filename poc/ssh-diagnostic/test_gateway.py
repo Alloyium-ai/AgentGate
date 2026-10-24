@@ -167,7 +167,11 @@ class GatewayCustodyTest(unittest.TestCase):
         self.assertIn('pins_live(host_pins,HOST_LINKS)', guard)
         operator = (pathlib.Path(__file__).with_name('operator-gateway.py')).read_text()
         self.assertNotIn('range(6)', operator)
-        self.assertIn('gateway.HOST_LINKS', operator)
+        # The orphaned-pin release moved to the shared custody module.
+        control = (pathlib.Path(__file__).with_name('domain_control.py')).read_text()
+        self.assertNotIn('range(6)', control)
+        self.assertIn('gateway.HOST_LINKS', control)
+        self.assertIn('Instance(ROOT, SETTINGS)', operator)
 
     def test_late_join_runs_the_command_only_after_joining(self):
         script = pathlib.Path(__file__).with_name('run-in-target.sh').read_text()

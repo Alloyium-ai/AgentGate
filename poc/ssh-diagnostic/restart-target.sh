@@ -4,6 +4,25 @@
 set -euo pipefail
 poc=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 eval "$(python3 "$poc/settings.py" "$poc/settings.json")"
+# No arguments: the SSH command target, exactly as before. A launch passes
+# --launch IMAGE_ID KEEPALIVE_SECONDS: its own immutable image, a container that
+# outlives its lifetime, and host folders from the launch's validated mount list.
+keep=(-c 'sleep 600')
+mount_source=("$root")
+case "$#" in
+0) ;;
+3)
+  test "$1" = --launch || exit 2
+  case "$2" in sha256:*) ;; *) exit 2 ;; esac
+  case "${2#sha256:}" in *[!a-f0-9]*) exit 2 ;; esac
+  test "${#2}" -eq 71 || exit 2
+  case "$3" in *[!0-9]*|'') exit 2 ;; esac
+  test "$3" -ge 60 && test "$3" -le 90000 || exit 2
+  target_image=$2
+  keep=(-c 'exec sleep "$1"' agentgate-keepalive "$3")
+  mount_source=(launch "$root") ;;
+*) exit 2 ;;
+esac
 test -d "$domain"
 grep -qx 'populated 0' "$domain/cgroup.events"
 test ! -e "$poc/guard-receipt.json"
@@ -16,7 +35,7 @@ install -d -o 0 -g 0 -m 0711 "$artifact"
 bridge_container_id=$(docker inspect "$bridge_container" --format '{{.Id}}')
 # Host folders come only from the validated, root-owned mounts file: one Docker
 # argument per line, refused unless the active policy controls file access.
-mount_lines=$(python3 "$poc/mounts.py" "$root")
+mount_lines=$(python3 "$poc/mounts.py" "${mount_source[@]}")
 host_mounts=()
 if test -n "$mount_lines"; then mapfile -t host_mounts <<<"$mount_lines"; fi
 docker run --pull never -d --name "$name" --no-healthcheck --init --network "$network" --read-only \
@@ -26,7 +45,7 @@ docker run --pull never -d --name "$name" --no-healthcheck --init --network "$ne
   --mount "type=bind,source=$artifact,target=/run/agentgate/streams" \
   --mount "type=volume,source=$bridge,target=/run/agentgate/taskboard,readonly" \
   "${host_mounts[@]}" \
-  --entrypoint /bin/sh "$image" -c 'sleep 600' >/dev/null
+  --entrypoint /bin/sh "$image" "${keep[@]}" >/dev/null
 python3 "$poc/prepare-resolver.py"
 container_id=$(docker inspect "$name" --format '{{.Id}}')
 workspace_source=$(docker volume inspect "$workspace" --format '{{.Mountpoint}}')

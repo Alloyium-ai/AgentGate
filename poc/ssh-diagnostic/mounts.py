@@ -211,15 +211,20 @@ def docker_argument(source, entry):
     return '--mount=' + value + (',readonly' if entry['read_only'] else '')
 
 
-def prepare(root):
+LAUNCH_MOUNTS = 'launch-mounts.json'
+
+
+def prepare(root, entries=None):
     """Validate the mounts for the next target and record the approved set.
 
     Prints one Docker argument per line and writes mounts-active.json for the
     target binding. Any doubt refuses the target instead of dropping a mount.
+    A launch passes its own validated entries; the SSH path reads mounts.json.
     """
     from settings import effective_policy, load_settings
     root = Path(root)
-    entries = load_entries(root)
+    if entries is None:
+        entries = load_entries(root)
     active = []
     arguments = []
     if entries:
@@ -312,7 +317,8 @@ def build_snapshot(source, output, max_bytes=SNAPSHOT_MAX_BYTES, max_entries=SNA
     return stats
 
 
-def install_snapshot(root, name, archive_path, max_bytes=SNAPSHOT_MAX_BYTES, max_entries=SNAPSHOT_MAX_ENTRIES):
+def install_snapshot(root, name, archive_path, max_bytes=SNAPSHOT_MAX_BYTES, max_entries=SNAPSHOT_MAX_ENTRIES,
+                     record=True):
     """Replace one read-only share from a snapshot archive. Run on the Docker host."""
     if not hasattr(tarfile, 'data_filter'):
         raise MountError('Python with tarfile extraction filters (3.12 or later) is required')
@@ -354,7 +360,9 @@ def install_snapshot(root, name, archive_path, max_bytes=SNAPSHOT_MAX_BYTES, max
     os.replace(staging, target)
     if previous.exists():
         shutil.rmtree(previous)
-    record_entry(root, {'name': name, 'kind': 'snapshot', 'read_only': True})
+    if record:
+        # A launch names its snapshots itself; only an operator share enters mounts.json.
+        record_entry(root, {'name': name, 'kind': 'snapshot', 'read_only': True})
     return {'files': sum(len(files) for _, _, files in os.walk(target)), 'bytes': total}
 
 
@@ -409,6 +417,11 @@ def main(argv):
         lines = prepare(argv[0])
         sys.stdout.write(''.join(line + '\n' for line in lines))
         return 0
+    if len(argv) == 2 and argv[0] == 'launch':
+        # The launch runtime writes this root-owned list; it is validated again here.
+        entries = parse_document(read_private(Path(argv[1]) / LAUNCH_MOUNTS))
+        sys.stdout.write(''.join(line + '\n' for line in prepare(argv[1], entries)))
+        return 0
     if len(argv) == 4 and argv[0] == 'install-snapshot':
         result = install_snapshot(argv[1], argv[2], argv[3])
         print(json.dumps(result, sort_keys=True))
@@ -416,7 +429,7 @@ def main(argv):
     if len(argv) == 3 and argv[0] == 'remove':
         print(json.dumps({'removed': remove(argv[1], argv[2])}))
         return 0
-    raise MountError('usage: mounts.py ROOT | install-snapshot ROOT NAME ARCHIVE | remove ROOT NAME')
+    raise MountError('usage: mounts.py ROOT | launch ROOT | install-snapshot ROOT NAME ARCHIVE | remove ROOT NAME')
 
 
 if __name__ == '__main__':

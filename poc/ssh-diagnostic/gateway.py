@@ -24,6 +24,34 @@ WORKSPACE_PATH = '/var/lib/agentgate/workspace'
 STREAMS_PATH = '/run/agentgate/streams'
 TASKBOARD_PATH = '/run/agentgate/taskboard'
 HOST_MOUNT_ROOT = '/var/lib/agentgate/mounts'
+# Command windows. A policy without a launch mode is the SSH command policy:
+# its window stays capped at 25 seconds. A launch policy names its mode, and
+# its duration_seconds is the launch lifetime, enforced here and in the kernel.
+SSH_WINDOW_S = 25
+LIFETIME_BOUNDS = {None: (1, 60), 'oneshot': (1, 3600), 'session': (60, 86400)}
+
+
+def command_deadline(mode, duration, start_ns, now_ns):
+    """Return the host deadline for one guarded command or launch.
+
+    start_ns is taken before the guard starts, so the host deadline is never
+    later than the kernel policy expiry the guard computes from its own start.
+    """
+    if mode not in LIFETIME_BOUNDS or type(duration) is not int:
+        raise ValueError('invalid command mode or lifetime')
+    low, high = LIFETIME_BOUNDS[mode]
+    if not low <= duration <= high:
+        raise ValueError('lifetime outside %d..%d seconds' % (low, high))
+    if mode is None:
+        deadline = min(now_ns + SSH_WINDOW_S * 1_000_000_000, start_ns + duration * 1_000_000_000)
+        # Unchanged SSH rule: at least one second must remain.
+        if deadline <= now_ns + 1_000_000_000:
+            raise ValueError('command window elapsed during setup')
+        return deadline
+    deadline = start_ns + duration * 1_000_000_000
+    if deadline <= now_ns + 200_000_000:
+        raise ValueError('launch lifetime elapsed during setup')
+    return deadline
 
 
 def read_root_file(path):
@@ -163,8 +191,13 @@ def append_audit(path, record):
         os.close(fd)
 
 
-def relay_process(process, session_alive, guard_alive, deadline_ns, output_fds=(1, 2)):
-    """Relay command output without letting a stalled SSH reader extend the cutoff."""
+def relay_process(process, session_alive, guard_alive, deadline_ns, output_fds=(1, 2), sinks=None,
+                  should_stop=None):
+    """Relay command output without letting a stalled SSH reader extend the cutoff.
+
+    With sinks (one callable per stream) output goes to bounded host logs
+    instead of descriptors; should_stop ends the relay with state 'stopped'.
+    """
     selector = selectors.DefaultSelector()
     streams = {'stdout': process.stdout, 'stderr': process.stderr}
     destinations = dict(zip(streams, output_fds))
@@ -173,10 +206,14 @@ def relay_process(process, session_alive, guard_alive, deadline_ns, output_fds=(
     lengths = {name: 0 for name in streams}
     for name, stream in streams.items():
         selector.register(stream, selectors.EVENT_READ, ('read', name))
-        os.set_blocking(destinations[name], False)
+        if sinks is None:
+            os.set_blocking(destinations[name], False)
     state = 'completed'
     try:
         while selector.get_map() or process.poll() is None:
+            if should_stop is not None and should_stop():
+                state = 'stopped'
+                break
             if not session_alive():
                 state = 'disconnected'
                 break
@@ -195,6 +232,9 @@ def relay_process(process, session_alive, guard_alive, deadline_ns, output_fds=(
                         continue
                     hashes[name].update(chunk)
                     lengths[name] += len(chunk)
+                    if sinks is not None:
+                        sinks[name](chunk)
+                        continue
                     if not pending[name]:
                         selector.register(destinations[name], selectors.EVENT_WRITE, ('write', name))
                     pending[name].extend(chunk)
@@ -231,6 +271,29 @@ def wait_empty_domain(path, timeout_ns=5_000_000_000):
         if time.monotonic_ns() - started >= timeout_ns:
             return False, time.monotonic_ns() - started
         time.sleep(0.05)
+
+
+def domain_members(path):
+    with open(os.path.join(path, 'cgroup.procs'), encoding='ascii') as source:
+        return [int(line) for line in source.read().split() if line.isdigit()][:4096]
+
+
+def graceful_stop(path, grace_ns, members=domain_members, kill=os.kill):
+    """Ask every domain member to exit, then wait up to grace_ns for an empty domain.
+
+    The cgroup kill always follows; this only gives the agent a chance to exit.
+    """
+    if grace_ns <= 0:
+        return False
+    try:
+        for pid in members(path):
+            try:
+                kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+        return wait_empty_domain(path, grace_ns)[0]
+    except (OSError, ValueError):
+        return False
 
 
 def remove_target(name):
@@ -278,6 +341,17 @@ def cleanup_domain(config):
 
 def execute(config, command, target, guard_ok, session_alive, output_fds=(1, 2), stdin=None):
     """Run one command in the bound target. Cleanup and the audit always run."""
+    result = execute_detailed(config, command, target, guard_ok, session_alive, output_fds, stdin)
+    return result['returncode']
+
+
+def execute_detailed(config, command, target, guard_ok, session_alive, output_fds=(1, 2), stdin=None,
+                     sinks=None, should_stop=None, grace_ns=0, audit_extra=None):
+    """execute() with the full result: state, exit code, cleanup and output digests.
+
+    A launch passes log sinks, a stop request and a graceful-stop period; the
+    SSH path passes none of them and behaves exactly as before.
+    """
     host_controls = config['host_controls']
     started = time.monotonic_ns()
     hashes = {'stdout': hashlib.sha256(), 'stderr': hashlib.sha256()}
@@ -298,7 +372,10 @@ def execute(config, command, target, guard_ok, session_alive, output_fds=(1, 2),
                                    start_new_session=True, env={'PATH': '/usr/bin:/bin'}, close_fds=True)
         state = 'relay_error'
         state, hashes, lengths = relay_process(process, session_alive, guard_ok,
-                                               int(config['deadline_ns']), output_fds)
+                                               int(config['deadline_ns']), output_fds, sinks, should_stop)
+        grace = grace_ns(state) if callable(grace_ns) else grace_ns
+        if state in ('stopped', 'expired', 'disconnected') and grace > 0:
+            graceful_stop(config['domain'], grace)
         stop_process(process)
         exit_code = process.returncode if state == 'completed' else 1
     finally:
@@ -311,7 +388,7 @@ def execute(config, command, target, guard_ok, session_alive, output_fds=(1, 2),
             cleaned, cleanup_wait_ns, cleanup_errors = cleanup_domain(config)
             if not cleaned:
                 state = 'cleanup_incomplete'
-            append_audit(config['audit_path'], {
+            record = {
                 'scope': 'fixed-diagnostic-only; no normal admission',
                 'source_revision': config['source_revision'], 'policy_digest': config['policy_digest'],
                 'host_controls': host_controls,
@@ -323,22 +400,29 @@ def execute(config, command, target, guard_ok, session_alive, output_fds=(1, 2),
                 'started_mono_ns': started, 'finished_mono_ns': time.monotonic_ns(),
                 'state': state, 'exit_code': exit_code if cleaned else 1,
                 'domain_killed': cleaned, 'cleanup_wait_ns': cleanup_wait_ns,
-                'cleanup_errors': cleanup_errors})
-    return exit_code if cleaned and 0 <= exit_code < 256 else 1
+                'cleanup_errors': cleanup_errors}
+            record.update(audit_extra or {})
+            append_audit(config['audit_path'], record)
+    return {'returncode': exit_code if cleaned and 0 <= exit_code < 256 else 1, 'state': state,
+            'exit_code': exit_code if cleaned else 1, 'cleaned': cleaned, 'cleanup_errors': cleanup_errors,
+            'stdout_sha256': hashes['stdout'].hexdigest(), 'stderr_sha256': hashes['stderr'].hexdigest(),
+            'stdout_bytes': lengths['stdout'], 'stderr_bytes': lengths['stderr'],
+            'started_mono_ns': started, 'finished_mono_ns': time.monotonic_ns()}
 
 
-def main():
-    if len(sys.argv) != 2 or os.geteuid() != 0 or os.environ.get('SSH_TTY'):
-        raise ValueError('invalid SSH diagnostic transport')
-    command = os.environ.get('SSH_ORIGINAL_COMMAND', '')
-    if not command or '\x00' in command or len(command.encode()) > 16384:
-        raise ValueError('invalid SSH command')
-    config = json.loads(read_root_file(sys.argv[1]))
-    wanted = {'container', 'container_id', 'image_id', 'network', 'domain',
-              'runner_path', 'runner_sha256', 'guard_pid', 'guard_start_ticks',
-              'guard_ready', 'guard_pins', 'deadline_ns', 'audit_path',
-              'source_revision', 'policy_digest', 'host_controls', 'host_pins', 'host_mounts'}
-    if set(config) != wanted or not config['container'].startswith('ag-mvp-') or \
+BINDING_KEYS = {'container', 'container_id', 'image_id', 'network', 'domain',
+                'runner_path', 'runner_sha256', 'guard_pid', 'guard_start_ticks',
+                'guard_ready', 'guard_pins', 'deadline_ns', 'audit_path',
+                'source_revision', 'policy_digest', 'host_controls', 'host_pins', 'host_mounts'}
+
+
+def load_binding(path):
+    """Validate the guard binding; return (config, guard_ok, target).
+
+    The SSH gateway and the launch runtime share this check exactly.
+    """
+    config = json.loads(read_root_file(path))
+    if set(config) != BINDING_KEYS or not config['container'].startswith('ag-mvp-') or \
        not config['domain'].startswith('/sys/fs/cgroup/ag-mvp-') or \
        not config['runner_path'].startswith('/var/lib/agentgate-poc-') or \
        not config['guard_pins'].startswith('/sys/fs/bpf/ag-mvp-net-') or \
@@ -361,7 +445,16 @@ def main():
        read_root_file(config['guard_ready']) != b'guard-attached\n' or \
        time.monotonic_ns() >= int(config['deadline_ns']):
         raise ValueError('kernel guard unavailable')
-    target = inspect_target(config)
+    return config, guard_ok, inspect_target(config)
+
+
+def main():
+    if len(sys.argv) != 2 or os.geteuid() != 0 or os.environ.get('SSH_TTY'):
+        raise ValueError('invalid SSH diagnostic transport')
+    command = os.environ.get('SSH_ORIGINAL_COMMAND', '')
+    if not command or '\x00' in command or len(command.encode()) > 16384:
+        raise ValueError('invalid SSH command')
+    config, guard_ok, target = load_binding(sys.argv[1])
     parent = os.getppid()
     parent_ticks = start_ticks(parent)
     return execute(config, command, target, guard_ok, lambda: alive(parent, parent_ticks))
