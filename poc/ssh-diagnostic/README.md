@@ -343,8 +343,14 @@ sections. The guard then also attaches the BPF LSM filesystem component (`bpf/fs
   needs `"anonymous_execute": true`.
 - **Processes:** a command may signal only its own tree, and only the listed signals. Tracing (`ptrace` attach, `PTRACE_TRACEME`) is always
   denied. Signal 0 existence probes are denied.
-- **Sockets:** the filesystem component delegates socket I/O to the network guard, which is attached first. The command's stdin, stdout,
-  and stderr are pipes the gateway made outside the domain; the plan allows those and no pipe from another job.
+- **Sockets:** no socket LSM guard is attached. The filesystem component lets `read`/`write` on socket descriptors through (it never sees
+  `send`, `recv`, or other socket calls), and the only kernel control over sockets is the network guard's six cgroup hooks, which bound
+  IPv4 and IPv6 connect, UDP sendmsg, and IP packet egress and ingress by address. Nothing decides socket family or type, `bind`,
+  `listen`, `accept`, AF_UNIX connect (only file permissions on the socket node apply) and traffic, or AF_NETLINK traffic. The plan records this as the
+  socket mode `cgroup-network-guard-only`, and the receipt's `host` block reports `"sockets": "cgroup-network-guard-only"` and
+  `"socket_lsm_guard": false`. The guard selects that mode only after the kernel reports all six network hooks attached to the command's
+  cgroup, and checks again before it installs the plan; otherwise it refuses to start. The command's stdin, stdout, and stderr are pipes
+  the gateway made outside the domain; the plan allows those and no pipe from another job.
 
 To make this possible the runner joins the cgroup last. It opens `cgroup.procs` as root, enters the target namespaces, and the
 unprivileged shell writes its own PID, closes the descriptor, verifies its cgroup, and only then runs the command. A failed join exits 125
@@ -354,7 +360,8 @@ unless all 23 host links are pinned, and it stops the command if one disappears.
 
 **Verification status.** The Go planning, the shell join logic, and the evidence accounting have unit tests. The BPF objects compile
 cleanly, and their kernel-named structs and fields match a current kernel's BTF. **No BPF LSM kernel was available when this was
-written, so the verifier, the hooks, and the end-to-end behavior are not yet exercised.** Expect first-boot fixes.
+written, so the verifier, the hooks, and the end-to-end behavior are not yet exercised.** Expect first-boot fixes. The kernel read of
+the six network hooks (`fsrules.ObserveCgroupNetworkGuard`) has run against real cgroup links on a 6.18 kernel; no LSM program has.
 The `grant` engine, presets, mount validation, snapshot archives, and the gateway's cleanup paths have unit tests that run the real
 validator; the Docker-host mount path and the appliance's snapshot transfer have not run against Docker or the VM here. Known limits:
 
@@ -365,6 +372,12 @@ validator; the Docker-host mount path and the appliance's snapshot transfer have
   fails to load and the guard fails closed.
 - A denied `create` through `open(O_CREAT)` fails the open with EPERM, but the kernel has already made the empty file wherever file
   permissions allow it (for example `/dev/shm`). The denial is recorded with its path. Every other node type is refused before it exists.
+- Open work: attaching the socket LSM guard. `bpf/network_sockets.bpf.c` and `bpf/network_custody.bpf.c` exist, but only the unused
+  full-product path (`internal/enforcement`, through `fsrules.EnableSocketDelegation`) loads them. In this POC they would add policy
+  decisions on `socket_create` and `socket_post_create` (family, type, protocol), `socket_bind`, `socket_listen`, `socket_accept`,
+  `socket_sendmsg`, `socket_recvmsg`, `socket_getsockname`, `socket_getpeername`, `socket_shutdown`, `socket_setsockopt`,
+  `socket_getsockopt`, socket `file_permission`, their own cgroup ingress and egress hooks, and descriptor custody on `socket_sendmsg`
+  and `socket_recvmsg`. That is a separate change that needs its own kernel verification.
 - There is no syscall filter. The container keeps Docker's default seccomp profile. `setxattr`/`utimes` are not path-checked.
 - Every command loads and attaches the 23 hooks again; expect added start-up latency.
 - Policy covers a command's tree only from the moment it joins. The trusted helpers before that run unrestricted.

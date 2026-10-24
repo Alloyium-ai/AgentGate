@@ -110,7 +110,7 @@ func TestLaunchDocumentCompilesToItsLifetime(t *testing.T) {
 	if err != nil || compiled.Policy.ExpiresNS != deadline {
 		t.Fatalf("compile: %v %d", err, compiled.Policy.ExpiresNS)
 	}
-	plan, err := launch.FilesystemPlan(7, 1, deadline)
+	plan, err := launch.FilesystemPlan(7, 1, deadline, network(t, 7))
 	if err != nil {
 		t.Fatal(err)
 	}

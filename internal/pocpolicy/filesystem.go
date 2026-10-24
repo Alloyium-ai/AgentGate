@@ -270,9 +270,14 @@ func (f Filesystem) RuntimeSection(signals *Process) policy.Runtime {
 	return runtime
 }
 
-// FilesystemPlan compiles the filesystem section for one prepared domain. The
-// network guard separately governs sockets, so the plan delegates them to it.
-func (d Document) FilesystemPlan(domain, generation, deadline uint64) (fsrules.Plan, error) {
+// FilesystemPlan compiles the filesystem section for one prepared domain.
+//
+// The POC attaches no socket LSM guard. The plan therefore uses
+// fsrules.SocketsCgroupNetworkOnly: VFS reads and writes on socket descriptors
+// pass this component, and the only kernel control over sockets is the six
+// cgroup network hooks, which bound IP traffic by address. network must be live evidence of those hooks on
+// this domain (fsrules.ObserveCgroupNetworkGuard); without it the plan fails.
+func (d Document) FilesystemPlan(domain, generation, deadline uint64, network fsrules.CgroupNetworkGuard) (fsrules.Plan, error) {
 	if err := d.Validate(); err != nil {
 		return fsrules.Plan{}, err
 	}
@@ -288,7 +293,7 @@ func (d Document) FilesystemPlan(domain, generation, deadline uint64) (fsrules.P
 		return fsrules.Plan{}, err
 	}
 	// The gateway hands the command its stdio as pipes it created outside the domain.
-	return plan.WithMutationEnforcement().WithExternalSocketGuard().WithInheritedStdio(), nil
+	return plan.WithMutationEnforcement().WithInheritedStdio().WithCgroupNetworkGuardOnly(network)
 }
 
 // ProcessPlan compiles the signal and tracing restrictions for one domain.

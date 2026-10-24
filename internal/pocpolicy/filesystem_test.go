@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"alloyium.local/kernel-poc/internal/fsrules"
+	"github.com/cilium/ebpf"
 )
 
 func fullExample(t *testing.T) Document {
@@ -21,6 +22,20 @@ func fullExample(t *testing.T) Document {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// network is evidence that the six cgroup network hooks are attached to domain.
+func network(t *testing.T, domain uint64) fsrules.CgroupNetworkGuard {
+	t.Helper()
+	attached := []fsrules.CgroupProgram{}
+	for i, hook := range fsrules.CgroupNetworkHooks() {
+		attached = append(attached, fsrules.CgroupProgram{Attach: hook.Attach, ID: ebpf.ProgramID(i + 1), Name: hook.Program, Type: hook.Type})
+	}
+	guard, err := fsrules.NewCgroupNetworkGuard(domain, attached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return guard
 }
 
 func TestVersionOneNeverCarriesHostControls(t *testing.T) {
@@ -43,7 +58,7 @@ func TestVersionOneNeverCarriesHostControls(t *testing.T) {
 
 func TestFilesystemPlanDeniesByDefaultAndSeparatesOperations(t *testing.T) {
 	d := fullExample(t)
-	plan, err := d.FilesystemPlan(42, 1, 1_000_000)
+	plan, err := d.FilesystemPlan(42, 1, 1_000_000, network(t, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +95,9 @@ func TestFilesystemPlanDeniesByDefaultAndSeparatesOperations(t *testing.T) {
 			t.Errorf("%s %s: got %s want %s", c.operation, c.path, got, c.want)
 		}
 	}
-	if plan.State().SocketGeneration != plan.State().Generation {
-		t.Fatal("sockets were not delegated to the mandatory network guard")
+	// No socket LSM guard exists in the POC; the plan must say so.
+	if plan.State().SocketGeneration != plan.State().Generation || plan.SocketMode() != fsrules.SocketsCgroupNetworkOnly || plan.SocketLSMGuard() {
+		t.Fatalf("socket mode differs: %s lsm=%v", plan.SocketMode(), plan.SocketLSMGuard())
 	}
 	if plan.State().Pipes != 1|2|4|fsrules.InheritedStdio {
 		t.Fatalf("pipe rights differ: %b", plan.State().Pipes)
@@ -91,9 +107,26 @@ func TestFilesystemPlanDeniesByDefaultAndSeparatesOperations(t *testing.T) {
 	}
 }
 
+func TestFilesystemPlanRequiresLiveNetworkEvidenceForItsDomain(t *testing.T) {
+	d := fullExample(t)
+	if _, err := d.FilesystemPlan(42, 1, 1_000_000, fsrules.CgroupNetworkGuard{}); err == nil {
+		t.Fatal("a plan let socket I/O through without network guard evidence")
+	}
+	if _, err := d.FilesystemPlan(42, 1, 1_000_000, network(t, 43)); err == nil {
+		t.Fatal("a plan accepted network guard evidence for another domain")
+	}
+	plan, err := d.FilesystemPlan(42, 1, 1_000_000, network(t, 42))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Domain() != 42 || plan.CheckAccess(42, 500) != nil {
+		t.Fatal("the evidenced plan does not install on its own domain")
+	}
+}
+
 func TestMemoryExecuteRequiresExplicitOptIn(t *testing.T) {
 	d := fullExample(t)
-	plan, err := d.FilesystemPlan(42, 1, 1_000_000)
+	plan, err := d.FilesystemPlan(42, 1, 1_000_000, network(t, 42))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +134,7 @@ func TestMemoryExecuteRequiresExplicitOptIn(t *testing.T) {
 		t.Fatalf("default anonymous memory rights differ: %b", plan.State().Memory)
 	}
 	d.Filesystem.Memory.AnonymousExecute = true
-	plan, err = d.FilesystemPlan(42, 1, 1_000_000)
+	plan, err = d.FilesystemPlan(42, 1, 1_000_000, network(t, 42))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -50,6 +50,9 @@ func validateAccessInstallCoupled(plan Plan, domain, now, current uint64, anonym
 	if plan.domain != domain || plan.state.Generation <= current || plan.state.ExpiresNS <= now || plan.digest == "" || plan.digest != planDigest(plan) {
 		return errors.New("file access binding, generation, digest, or deadline differs")
 	}
+	if err := checkSocketMode(plan); err != nil {
+		return err
+	}
 	for _, operation := range plan.allowOperations {
 		switch operation {
 		case "read", "write", "execute", "mmap", "map_execute", "mprotect", "descriptor_receive":
@@ -109,6 +112,12 @@ func installAccess(r *kernel.Runtime, plan Plan, anonymous *kernel.Runtime) erro
 		}
 		if err = validateAccessInstallCoupled(plan, r.ID, now, current.Generation, anonymous != nil); err != nil {
 			return err
+		}
+		if plan.sockets == SocketsCgroupNetworkOnly {
+			// The evidence the plan was built with must still hold on this domain.
+			if _, err = ObserveCgroupNetworkGuard(r.Domain, r.ID); err != nil {
+				return fmt.Errorf("cgroup-only socket mode: %w", err)
+			}
 		}
 		inserted := []openrules.Key{}
 		rollback := func() {

@@ -50,6 +50,7 @@ type Plan struct {
 	reference       [OperationCount]openrules.Plan
 	allowOperations []string
 	mutation        bool
+	sockets         SocketMode
 }
 
 // WithAnonymousGuard selects a separate mandatory guard. It grants no right.
@@ -254,6 +255,11 @@ func planDigest(plan Plan) string {
 	if plan.mutation {
 		// Appended only when set, so every unmarked plan keeps its digest.
 		h.Write([]byte("mutation-enforcement.v1"))
+	}
+	if plan.sockets == SocketsCgroupNetworkOnly {
+		// Appended only for this mode; SocketsLSMGuard is already bound by the
+		// state's socket generation, so delegated product plans keep their digest.
+		h.Write([]byte("sockets-cgroup-network-guard-only.v1"))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

@@ -74,7 +74,11 @@ type ringTracker struct {
 type hostEvidence struct {
 	Filesystem ringEvidence `json:"filesystem"`
 	Process    ringEvidence `json:"process"`
-	Complete   bool         `json:"complete"`
+	// Sockets is the filesystem plan's socket mode. No socket LSM guard is
+	// attached: only the cgroup network hooks bound IP traffic by address.
+	Sockets        fsrules.SocketMode `json:"sockets"`
+	SocketLSMGuard bool               `json:"socket_lsm_guard"`
+	Complete       bool               `json:"complete"`
 }
 
 type fsEvent struct {
@@ -151,6 +155,8 @@ type hostGuard struct {
 	stopOnce    sync.Once
 	closeOnce   sync.Once
 	pins        *guardPins
+	sockets     fsrules.SocketMode
+	socketLSM   bool
 }
 
 // drainBound limits how long a reader keeps draining after stop while records
@@ -192,10 +198,16 @@ func attachHost(document pocpolicy.Document, cgroup string, inode, deadline uint
 			host.close()
 		}
 	}()
-	fsPlan, err := document.FilesystemPlan(inode, 1, deadline)
+	// The plan lets socket I/O through only with live evidence of the network links.
+	network, err := fsrules.ObserveCgroupNetworkGuard(cgroup, inode)
 	if err != nil {
 		return nil, err
 	}
+	fsPlan, err := document.FilesystemPlan(inode, 1, deadline, network)
+	if err != nil {
+		return nil, err
+	}
+	host.sockets, host.socketLSM = fsPlan.SocketMode(), fsPlan.SocketLSMGuard()
 	processPlan, err := document.ProcessPlan(inode, 1, deadline)
 	if err != nil {
 		return nil, err
@@ -365,7 +377,7 @@ func (h *hostGuard) release() error {
 func (h *hostGuard) finish() hostEvidence {
 	h.stop()
 	h.done.Wait()
-	out := hostEvidence{Complete: true}
+	out := hostEvidence{Sockets: h.sockets, SocketLSMGuard: h.socketLSM, Complete: true}
 	for index, evidence := range []*ringTracker{h.fs, h.process} {
 		var counts struct{ Decisions, Lost uint64 }
 		countErr := h.counters[index].Lookup(uint32(0), &counts)

@@ -305,8 +305,9 @@ func run() (err error) {
 		}
 	}()
 	if hostObjects {
-		// The network links above must already be live: the filesystem policy
-		// delegates socket I/O to them. Policies install before any hook attaches.
+		// The network links above must already be live: the filesystem plan lets
+		// socket I/O through only after the kernel reports them on this cgroup.
+		// No socket LSM guard is attached. Policies install before any hook attaches.
 		if host, err = attachHost(simple, cgroup, stat.Ino, deadline, os.Args[10], os.Args[11]); err != nil {
 			return err
 		}
