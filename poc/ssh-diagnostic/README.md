@@ -332,8 +332,11 @@ sections. The guard then also attaches the BPF LSM filesystem component (`bpf/fs
 - **Filesystem:** every path is denied unless a list names it. `workspace` and `scratch` trees are writable (read, write, create, mkdir,
   delete, rename, symlink, chmod/chown) and never executable. `read_only` trees can be read and mapped. `execute` trees can also run
   programs and map code. `devices` is a subset of `/dev/{null,zero,full,random,urandom,tty}`. `deny` trees refuse everything and
-  override a broader allowance. Hard links are never allowed, device nodes cannot be created, and `ioctl` is limited to five
-  descriptor queries. Ancestor directories of allowed trees get an exact-path read so `stat` works.
+  override a broader allowance. Hard links are never allowed, and `ioctl` is limited to five descriptor queries. A new regular file
+  can be made only by `open(O_CREAT)`; its `create` right is checked when the new file is opened (see the limits below). FIFOs
+  (`mkfifo`), socket nodes (`bind()` of an AF_UNIX socket to a pathname), device nodes, and regular files made by `mknod` are never
+  allowed, in any tree: they fail with EPERM. Abstract AF_UNIX sockets, `socketpair`, and pipes make no node and are not affected.
+  Ancestor directories of allowed trees get an exact-path read so `stat` works.
 - **Executables:** `execute` entries are the program allowlist. A writable tree may not also be executable; the policy refuses that
   overlap. A binary a command writes cannot be run.
 - **Memory:** anonymous mappings may be read, written, and re-protected. Executable anonymous memory (a JIT or libffi closure)
@@ -355,8 +358,13 @@ written, so the verifier, the hooks, and the end-to-end behavior are not yet exe
 The `grant` engine, presets, mount validation, snapshot archives, and the gateway's cleanup paths have unit tests that run the real
 validator; the Docker-host mount path and the appliance's snapshot transfer have not run against Docker or the VM here. Known limits:
 
-- The path-building hooks (`path_mknod`, `path_mkdir`, `path_unlink`, `path_rmdir`, `path_rename`, `path_symlink`) rely on `bpf_d_path`
-  being allowed for those hooks. If a kernel refuses one, the object fails to load and the guard fails closed.
+- `bpf_d_path` is called only from hooks in the 6.8 kernel's sleepable LSM hook set, the only hooks where it is allowed (`file_open`,
+  `file_receive`, `bprm_check_security`, `inode_getattr`, `mmap_file`, `path_mkdir`, `path_unlink`, `path_rmdir`, `path_rename`,
+  `path_symlink`, `path_chmod`, `path_chown`, `path_truncate`). A Go test in `internal/fsrules` fails if a call becomes reachable from
+  any other hook. `path_mknod` is not in that set, so it never resolves a path. If a kernel still refuses a program, the whole object
+  fails to load and the guard fails closed.
+- A denied `create` through `open(O_CREAT)` fails the open with EPERM, but the kernel has already made the empty file wherever file
+  permissions allow it (for example `/dev/shm`). The denial is recorded with its path. Every other node type is refused before it exists.
 - There is no syscall filter. The container keeps Docker's default seccomp profile. `setxattr`/`utimes` are not path-checked.
 - Every command loads and attaches the 23 hooks again; expect added start-up latency.
 - Policy covers a command's tree only from the moment it joins. The trusted helpers before that run unrestricted.

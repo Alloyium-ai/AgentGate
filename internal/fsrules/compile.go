@@ -23,6 +23,15 @@ const AnonymousDelegation = uint64(1) << 63
 // the explicit pipe read and write rights, and it grants no pathname right.
 const InheritedStdio = uint64(1) << 62
 
+// operations are the file component's decisions, by index in bpf/fs_access.bpf.c.
+// "create" is a new regular file made by open(O_CREAT). The first kernel hook to
+// see that creation (path_mknod) has no path, so the decision is made when the
+// new file is opened, on its path: a denied create fails the open, but the kernel
+// has already made the empty file. No rule can allow a FIFO, a socket node
+// (AF_UNIX bind to a pathname), a device node or a regular file made by mknod(2);
+// the kernel component always denies those. "mkdir", "delete", "rename",
+// "symlink" and "metadata" are decided on the affected path before the change.
+// "hardlink" is never allowed.
 var operations = [OperationCount]string{"read", "write", "create", "mkdir", "delete", "rename", "hardlink", "symlink", "metadata", "mmap", "descriptor_receive", "execute", "map_execute", "mprotect"}
 
 type State struct {

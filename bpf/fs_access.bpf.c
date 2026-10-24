@@ -10,6 +10,7 @@
 #define OPERATIONS 14
 #define READ 0
 #define WRITE 1
+#define CREATE 2
 #define MMAP 9
 #define RECEIVE 10
 #define EXECUTE 11
@@ -32,7 +33,8 @@ struct dentry {struct inode *d_inode;struct qstr d_name;} __attribute__((preserv
 struct path {struct vfsmount *mnt;struct dentry *dentry;} __attribute__((preserve_access_index));
 struct file {struct inode *f_inode;struct path f_path;unsigned int f_mode,f_flags;} __attribute__((preserve_access_index));
 struct linux_binprm {struct file *file;} __attribute__((preserve_access_index));
-struct task_struct {__u64 start_boottime;} __attribute__((preserve_access_index));
+struct nameidata;
+struct task_struct {__u64 start_boottime;struct nameidata *nameidata;} __attribute__((preserve_access_index));
 struct vm_area_struct {struct file *vm_file;} __attribute__((preserve_access_index));
 struct action {__u32 effect,rule;};
 struct node {__u32 id;struct action sub_read,sub_write,exact_read,exact_write;};
@@ -153,10 +155,15 @@ SEC("lsm/file_alloc_security") int BPF_PROG(fs_alloc,struct file *file,int ret)
 {if(ret)return ret;__u64 domain=bpf_get_current_ancestor_cgroup_id(1);if(cookie(file,1))return 0;return bpf_map_lookup_elem(&owned,&domain)?-1:0;}
 SEC("lsm/file_free_security") int BPF_PROG(fs_free,struct file *file)
 {struct bootstrap_key held={bpf_get_current_ancestor_cgroup_id(1),bpf_get_current_pid_tgid()>>32,0};struct bootstrap_binding *role=bpf_map_lookup_elem(&bootstrap,&held);if(role && BPF_CORE_READ(file,f_inode,i_sb,s_magic)==0x50495045UL && BPF_CORE_READ(file,f_inode,i_ino)==role->pipe_ino)bpf_map_delete_elem(&bootstrap,&held);__u64 key=(__u64)file;struct file_key *grant=bpf_map_lookup_elem(&file_grant_keys,&key);if(grant)bpf_map_delete_elem(&file_grants,grant);bpf_map_delete_elem(&file_grant_keys,&key);bpf_map_delete_elem(&file_cookies,&key);return 0;}
+// FMODE_CREATED (include/linux/fs.h, 6.8): this open(O_CREAT) made the file.
+// lookup_open() sets it after ->create() and before security_file_open().
+#define FMODE_CREATED_ 0x100000
 SEC("lsm/file_open") int BPF_PROG(fs_open,struct file *file,int ret)
 {
     if(ret)return ret;__u32 mode=BPF_CORE_READ(file,f_mode),flags=BPF_CORE_READ(file,f_flags);
     if(!(mode&(1|2|32))){__u64 domain=bpf_get_current_ancestor_cgroup_id(1);return bpf_map_lookup_elem(&owned,&domain)?emit(domain,0,READ,0,0,8,0):0;}
+    // CREATE for open(O_CREAT) is decided here, on the new file's path; see fs_create.
+    if((mode&FMODE_CREATED_) && check_path(&file->f_path,CREATE))return -1;
     if((mode&1) && check_path(&file->f_path,READ))return -1;
     if(((mode&2)||(flags&512)) && check_path(&file->f_path,WRITE))return -1;
     if((mode&32) && check_path(&file->f_path,EXECUTE))return -1;
@@ -236,9 +243,10 @@ SEC("lsm/file_mprotect") int BPF_PROG(fs_mprotect,struct vm_area_struct *vma,uns
 // Hooks that only expose a parent directory and a dentry name build the child
 // path in the shared scratch buffer, then use the same walker as file opens.
 // Anything that cannot be resolved to one bounded absolute path is denied.
+// bpf_d_path is used only from hooks in the kernel's sleepable LSM hook set;
+// fsrules' TestDPathOnlyFromSleepableHooks enforces that for this file.
 #define S_IFMT_ 0170000
-#define S_IFCHR_ 0020000
-#define S_IFBLK_ 0060000
+#define S_IFREG_ 0100000
 #define PATH_TAIL (PATH_BYTES-NAME_BYTES-2)
 static __always_inline int mutation_denied(__u64 domain,struct state *p,__u32 operation,__u32 reason)
 {return emit(domain,p?p->generation:0,operation,0,0,reason,0);}
@@ -290,17 +298,29 @@ static __always_inline int rename_check(struct path *old_dir,struct dentry *old_
     __sync_lock_test_and_set(&s->busy,0);return result;
 }
 struct inode;struct mnt_idmap;struct iattr;
-// Regular files, directories, FIFOs and sockets are created under CREATE or
-// MKDIR. Device nodes can never be created by a managed domain.
+// path_mknod is not in the kernel's sleepable LSM hook set, so the verifier
+// refuses bpf_d_path here, and with it the whole object. This hook therefore
+// never resolves a path. The kernel calls it from exactly three places:
+//   may_o_create()   open(O_CREAT) of a missing name. The mode is S_IFREG and
+//                    the open's path walk is live, so current->nameidata is set.
+//   do_mknodat()     mknod(2)/mknodat(2) of any kind, after the walk has ended.
+//   unix_bind_bsd()  AF_UNIX bind() to a pathname (S_IFSOCK), after the walk.
+// Only the first proceeds, and only as far as file_open, which decides CREATE on
+// the new file's path (FMODE_CREATED) and fails the open when it is denied. The
+// kernel has created the empty file by then; the denial is recorded with its
+// path. Every other node is denied: device nodes, FIFOs, socket nodes and
+// regular files made by mknod, because no hook with a path sees them first.
 SEC("lsm/path_mknod") int BPF_PROG(fs_create,struct path *dir,struct dentry *dentry,unsigned short mode,unsigned int dev,int ret)
 {
     if(ret)return ret;
-    unsigned short kind=mode&S_IFMT_;
-    if(kind==S_IFCHR_ || kind==S_IFBLK_){
-        __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
-        return bpf_map_lookup_elem(&owned,&domain)?mutation_denied(domain,0,2,7):0;
-    }
-    return child_check(dir,dentry,2);
+    __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
+    if(!bpf_map_lookup_elem(&owned,&domain))return 0;
+    struct state *p=bpf_map_lookup_elem(&policies,&domain);
+    if(!p || !p->generation)return mutation_denied(domain,p,CREATE,1);
+    if(bpf_ktime_get_ns()>=p->expires_ns)return mutation_denied(domain,p,CREATE,2);
+    struct task_struct *task=(void *)bpf_get_current_task_btf();
+    if((mode&S_IFMT_)==S_IFREG_ && !dev && BPF_CORE_READ(task,nameidata))return 0;
+    return mutation_denied(domain,p,CREATE,7);
 }
 SEC("lsm/path_mkdir") int BPF_PROG(fs_mkdir,struct path *dir,struct dentry *dentry,unsigned short mode,int ret){return ret?ret:child_check(dir,dentry,3);}
 SEC("lsm/path_unlink") int BPF_PROG(fs_unlink,struct path *dir,struct dentry *dentry,int ret){return ret?ret:child_check(dir,dentry,4);}
