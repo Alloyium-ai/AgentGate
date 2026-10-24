@@ -317,6 +317,27 @@ type Secret struct {
 	Revision         int               `json:"revision"`
 }
 
+// LauncherSecret is what GET /targets/{id}/secrets shows a launcher.
+type LauncherSecret struct {
+	Name            string   `json:"name"`
+	State           string   `json:"state"`
+	Upstreams       []string `json:"upstreams"`
+	RuleCount       int      `json:"rule_count"`
+	WildcardRules   bool     `json:"wildcard_rules"`
+	LauncherAllowed bool     `json:"launcher_allowed"`
+	ProfileAllowed  *bool    `json:"profile_allowed,omitempty"`
+	Usable          bool     `json:"usable"`
+	Reason          string   `json:"reason,omitempty"`
+}
+
+// TargetSecrets is the answer to GET /targets/{id}/secrets.
+type TargetSecrets struct {
+	TargetID string           `json:"target_id"`
+	Target   string           `json:"target"`
+	Profile  string           `json:"profile,omitempty"`
+	Items    []LauncherSecret `json:"items"`
+}
+
 // SecretEnvelope is the public context of a relayed sealed envelope.
 type SecretEnvelope struct {
 	Format  string `json:"format"`

@@ -172,5 +172,16 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	delete(request, "dry_run")
 	applied := w.call("POST", "/api/v1/profiles/"+p.ID+"/versions/1/grants", editor, request, 200)
 	w.record("grant-applied.json", map[string]any{"parent": parent, "request": request, "response": applied})
+
+	// A target with a stored secret, as a launcher sees it.
+	h, target := f.enrolledTarget()
+	h.poll()
+	f.profile("dev", false)
+	launcher := f.token(f.launcher(), "launcher")
+	f.storeSecret(h, secretInput("model-api", f.sealTo(h, "local", "model-api", "synthetic-credential-0123456789"), "python-dev"), nil)
+	bare := secretInput("bare-key", f.sealTo(h, "local", "bare-key", "synthetic-credential-0123456789"), "python-dev")
+	bare.Rules = nil
+	f.storeSecret(h, bare, nil)
+	w.record("target-secrets.json", w.call("GET", "/api/v1/targets/"+target.ID+"/secrets?profile=python-dev", launcher, nil, 200))
 	w.finish()
 }

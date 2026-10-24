@@ -92,6 +92,7 @@ func provisioningOperations() []apiOperation {
 		{path: "targets/{id}/enrollment", method: "post", scope: "targets:admin (human admin)", body: "ReasonInput"},
 		{path: "targets/{id}/approve-key", method: "post", scope: "targets:admin (human admin)", body: "KeyApprovalInput"},
 		{path: "targets/{id}/seal-key", method: "get", scope: "target:read; the host-signed seal key record, served verbatim"},
+		{path: "targets/{id}/secrets", method: "get", scope: "launch:write (launcher); ?profile=NAME; names, states, upstreams and a rule summary of the target's secrets, and whether this human and profile may reference each"},
 		{path: "profiles", method: "get", scope: "policy:read"},
 		{path: "profiles", method: "post", scope: "policy:write (editor)", body: "ProfileInput"},
 		{path: "profiles/{id}", method: "get", scope: "policy:read"},

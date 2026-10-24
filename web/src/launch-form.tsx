@@ -10,7 +10,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FileUp, Plus, Rocket, Trash2 } from "lucide-react";
 import { Actor, ApiError, api } from "./api";
 import { ErrorBox, Loading, Modal, SectionTitle } from "./components";
-import { Items, Launch, LaunchPlan, PolicyDocument, Profile, ProfileVersion, Secret, Target, isApiError, permissions, roleText, useResource } from "./prov-api";
+import { Items, Launch, LaunchPlan, PolicyDocument, Profile, ProfileVersion, Target, TargetSecrets, permissions, roleText, useResource } from "./prov-api";
 import { AccessSummary, Capabilities, CodeBlock, CopyButton, Digest, Gate, Issues, KernelNotice, LiveRegion, ServerMessages } from "./prov-components";
 import { LIFETIME, LaunchForm, MountMode, buildSpec, cliCommands, emptyForm, envNameIssue, lifetimeText, parseSpec, predictApproval, specJSON } from "./launch-spec";
 import { webOf } from "./access-model";
@@ -258,7 +258,6 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
   const p = permissions(actor);
   const targets = useResource<Items<Target>>("targets");
   const profiles = useResource<Items<Profile>>("profiles");
-  const secrets = useResource<Items<Secret>>("secrets");
   const source = useResource<{ launch: Launch }>(from ? `launches/${encodeURIComponent(from)}` : null);
   const [form, setForm] = useState<LaunchForm>(emptyForm);
   const [unit, setUnit] = useState(60);
@@ -288,6 +287,7 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
     }
   }, [source.data]);
   const target = targets.data?.items.find((t) => t.name === form.target);
+  const secrets = useResource<TargetSecrets>(target && target.state === "active" ? `targets/${encodeURIComponent(target.id)}/secrets${profileName ? `?profile=${encodeURIComponent(profileName)}` : ""}` : null);
   const activeTargets = (targets.data?.items || []).filter((t) => t.state === "active");
   const profile = profiles.data?.items.find((x) => x.name === profileName);
   const version = versions.data?.items.find((v) => form.access.kind === "profile" && v.number === form.access.version);
@@ -304,7 +304,7 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
   const caps = target?.capabilities || [];
   const live = caps.includes("live-mounts");
   const snap = caps.includes("snapshot-mounts");
-  const targetSecrets = (secrets.data?.items || []).filter((s) => s.target_id === target?.id && s.state !== "deleted");
+  const targetSecrets = secrets.data?.target_id === target?.id ? secrets.data?.items || [] : [];
   const reasons = predictApproval(form, profile?.require_approval, version ? webOf(version.document).length > 0 : undefined);
   const commands = cliCommands(built.spec);
   const issues = touched ? built.issues : [];
@@ -610,22 +610,24 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
             The agent never sees a secret value. It receives only the broker's address in the variable you name; the broker on the host adds the credential to
             requests for the secret's upstreams. Each secret is scoped to profiles and people.
           </p>
-          {isApiError(secrets.error) && secrets.error.status === 403 ? (
-            <p className="form-note">Your roles cannot list secrets (an administrator manages them). Type the secret name you were given; the plan checks that it exists on the target and is scoped to you and this profile.</p>
+          {secrets.error ? (
+            <p className="form-note">
+              The service did not list this target's secrets ({secrets.error instanceof ApiError ? `${secrets.error.code}: ${secrets.error.message}` : "unavailable"}). Type the secret name you were given;
+              the plan checks that it exists on the target and is scoped to you and this profile.
+            </p>
           ) : (
             target && (
               <ul className="plain-list">
                 {targetSecrets.length ? (
                   targetSecrets.map((s) => {
                     const chosen = form.secrets.findIndex((x) => x.ref === s.name);
-                    const outOfScope = (profileName && !s.allowed_profiles.includes(profileName)) || !s.allowed_launchers.includes(actor.subject);
                     return (
-                      <li key={s.id}>
+                      <li key={s.name}>
                         <label className="check-row">
                           <input
                             type="checkbox"
                             checked={chosen >= 0}
-                            disabled={s.state !== "stored"}
+                            disabled={s.state !== "stored" && chosen < 0}
                             onChange={(e) =>
                               set(
                                 "secrets",
@@ -634,18 +636,19 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
                             }
                           />
                           <span>
-                            <strong>{s.name}</strong> → {s.upstreams.join(", ")} via header <code>{s.header}</code> {s.state !== "stored" && <span className="badge pending">{s.state}</span>}
+                            <strong>{s.name}</strong> → {s.upstreams.join(", ")} {s.state !== "stored" && <span className="badge pending">{s.state}</span>}
                             <small>
-                              Profiles: {s.allowed_profiles.join(", ")} · launchers: {s.allowed_launchers.join(", ")}
+                              {s.wildcard_rules ? "Wildcard broker rules: every method and path of the upstreams." : `${s.rule_count} broker rule${s.rule_count === 1 ? "" : "s"}.`}{" "}
+                              {s.usable ? `Usable by you${profileName ? ` with ${profileName}` : ""}.` : ""}
                             </small>
-                            {outOfScope && <small className="field-issue">Not scoped to {profileName && !s.allowed_profiles.includes(profileName) ? `profile ${profileName}` : `you (${actor.subject})`}; the plan will refuse it.</small>}
+                            {!s.usable && <small className="field-issue">Not usable: {s.reason}. The plan will refuse it.</small>}
                           </span>
                         </label>
                       </li>
                     );
                   })
                 ) : (
-                  <li className="muted">No secrets are stored on {target.name}.</li>
+                  <li className="muted">{secrets.loading ? "Loading the target's secrets…" : `No secrets are stored on ${target.name}.`}</li>
                 )}
               </ul>
             )
@@ -665,7 +668,7 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
               </button>
             </div>
           ))}
-          {isApiError(secrets.error) && secrets.error.status === 403 && (
+          {Boolean(secrets.error) && (
             <button type="button" className="secondary" disabled={form.secrets.length >= 8} onClick={() => set("secrets", [...form.secrets, { ref: "", env: "" }])}>
               <Plus size={15} aria-hidden="true" /> Add a secret by name
             </button>

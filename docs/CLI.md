@@ -266,7 +266,8 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `approve ID --reason R [--yes]`, `reject ID --reason R` | `POST /launches/{id}/approve`, `/reject` | approver; never your own launch |
 | `audit [--launch ID] [--since T] [--until T] [--actor A] [--action A] [--resource R] [--limit N]`, `audit catalog` | `GET /audit`, `GET /audit-catalog` | |
 | `secret set NAME --upstream HOST --allow-profile P [...]` | `GET /openapi.json`, `GET /targets/{id}`, `GET /targets/{id}/seal-key`, `POST /secrets`, `GET /secrets/{id}/receipt` | see below |
-| `secret ls`, `secret rm NAME\|ID [--target T] [--yes]` | `GET /secrets`, `DELETE /secrets/{id}` | administrators |
+| `secret ls [--target T] [--profile P] [--for-launch]` | `GET /secrets` (administrators), `GET /targets/{id}/secrets` (launchers) | administrators see all metadata; everyone else (or `--for-launch`, `--profile`) sees the names a launch may use and why not; `-q` prints the usable names |
+| `secret rm NAME\|ID [--target T] [--yes]` | `DELETE /secrets/{id}` | administrators |
 | `token create [--role R] [--expires D] [--name N] [--save]`, `token ls`, `token revoke ID` | `/api-tokens` | password sign-in each time: a token cannot mint, list or revoke tokens |
 | `schema launch-spec` | `GET /launch-spec-schema` | |
 | `completion bash\|zsh\|fish` | none | `source <(agentgate completion bash)` |
@@ -300,7 +301,9 @@ service returned.
 which needs a command after `--`), `--lifetime` (default 10m for oneshot, 1h for session; `90s`, `30m`, `2h`, `1d` or
 seconds), `--profile NAME[@VERSION]` (default: the latest version, which the CLI looks up and prints),
 `--image NAME@sha256:DIGEST`, `--mount SRC:NAME[:ro|snapshot|rw]` (default `ro`, a live read-only bind), `--secret
-REF[:ENV]` (default `ENV` is `REF_BASE_URL` in upper case), `--env K=V`, `--workdir DIR` (default
+REF[:ENV]` (default `ENV` is `REF_BASE_URL` in upper case; the CLI checks each REF against
+`GET /targets/{id}/secrets` for the target, you and the profile before it plans, and the shell completion offers the
+usable names), `--env K=V`, `--workdir DIR` (default
 `/var/lib/agentgate/workspace`), `--approval auto|required`, then `-- COMMAND...`. The service validates the spec and
 rejects, for example, environment names that look like credentials; its message is shown verbatim. `-f FILE` (or `-`)
 sends a complete `agentgate.launch.v1` document as it is and cannot be combined with these flags.

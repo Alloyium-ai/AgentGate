@@ -162,6 +162,75 @@ func (s *Store) Secrets() ([]Secret, error) {
 	return out, rows.Err()
 }
 
+// LauncherSecret is what a launcher may see of a secret on a target to build
+// a launch spec: its name, state, upstream hosts, a summary of its broker
+// rules, and whether this actor (and, when given, this profile) may reference
+// it. It carries no fingerprint, envelope, receipt, rule path or scope list.
+type LauncherSecret struct {
+	Name            string   `json:"name"`
+	State           string   `json:"state"`
+	Upstreams       []string `json:"upstreams"`
+	RuleCount       int      `json:"rule_count"`
+	WildcardRules   bool     `json:"wildcard_rules"`
+	LauncherAllowed bool     `json:"launcher_allowed"`
+	ProfileAllowed  *bool    `json:"profile_allowed,omitempty"`
+	Usable          bool     `json:"usable"`
+	Reason          string   `json:"reason,omitempty"`
+}
+
+// TargetSecrets is GET /targets/{id}/secrets for launch:write: the secrets
+// a launch on this target could reference (pending and stored ones), with
+// whether the requesting human and the optional ?profile= may use each. The
+// plan checks the same scope again; this only helps build the spec.
+func (s *Store) TargetSecrets(a Actor, ref, profile string) (map[string]any, error) {
+	if profile != "" && !hostproto.NamePattern.MatchString(profile) {
+		return nil, fail(422, "invalid_filter", "profile is a profile name matching ^[a-z0-9][a-z0-9-]{0,39}$.")
+	}
+	t, err := s.targetBy(s.DB, ref)
+	if err != nil {
+		return nil, err
+	}
+	if t.State != "active" {
+		return nil, fail(409, "target_unavailable", "The target is not enrolled and active.")
+	}
+	rows, err := s.DB.Query("SELECT "+secretColumns+" FROM secrets WHERE target_id=? AND state IN ('pending','stored') ORDER BY name LIMIT 500", t.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LauncherSecret{}
+	for rows.Next() {
+		sec, err := scanSecret(rows)
+		if err != nil {
+			return nil, err
+		}
+		item := LauncherSecret{Name: sec.Name, State: sec.State, Upstreams: sec.Upstreams, RuleCount: len(sec.Rules), WildcardRules: sec.Wildcard,
+			LauncherAllowed: contains(sec.AllowedLaunchers, a.Subject)}
+		if profile != "" {
+			allowed := contains(sec.AllowedProfiles, profile)
+			item.ProfileAllowed = &allowed
+		}
+		switch {
+		case sec.State != "stored":
+			item.Reason = "the host has not confirmed it yet (" + sec.State + ")"
+		case item.RuleCount == 0:
+			item.Reason = "it has no broker rules, so no launch can use it (secret_rules_missing)"
+		case !item.LauncherAllowed:
+			item.Reason = "it is not scoped to you"
+		case item.ProfileAllowed != nil && !*item.ProfileAllowed:
+			item.Reason = "it is not scoped to profile " + profile
+		default:
+			item.Usable = true
+		}
+		items = append(items, item)
+	}
+	out := map[string]any{"target_id": t.ID, "target": t.Name, "items": items}
+	if profile != "" {
+		out["profile"] = profile
+	}
+	return out, rows.Err()
+}
+
 // SecretReceipt is GET /secrets/{id}/receipt: the host's receipt for the
 // envelope the service relayed, for the sealing client to verify. The service
 // cannot verify its tag; only the client that sealed the value can.

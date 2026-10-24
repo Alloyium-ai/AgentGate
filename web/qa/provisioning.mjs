@@ -235,6 +235,25 @@ function api(method, path, query, input, headers) {
       if (sealMode === "substituted") return { record: makeRecord(attacker.signingKey, attacker.hostPub, attacker.sealPub, t.id, nb, na), host_public_key: attacker.hostPub.toString("base64url"), host_key_fingerprint: hostFingerprint(attacker.hostPub) };
       if (sealMode === "forged") return { record: makeRecord(attacker.signingKey, attacker.hostPub, attacker.sealPub, t.id, nb, na), host_public_key: host.hostPub.toString("base64url"), host_key_fingerprint: hostFingerprint(host.hostPub) };
     }
+    if (method === "GET" && sub === "secrets") {
+      need("launcher");
+      if (t.state !== "active") throw new Fail(409, "target_unavailable", "The target is not enrolled and active.");
+      const profile = query.get("profile") || "";
+      const items = secrets
+        .filter((x) => x.target_id === t.id && ["pending", "stored"].includes(x.state))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((x) => {
+          const item = { name: x.name, state: x.state, upstreams: x.upstreams, rule_count: x.rules ? x.rules.length : 0, wildcard_rules: Boolean(x.wildcard_rules), launcher_allowed: x.allowed_launchers.includes(actors[who].subject), usable: false };
+          if (profile) item.profile_allowed = x.allowed_profiles.includes(profile);
+          if (x.state !== "stored") item.reason = `the host has not confirmed it yet (${x.state})`;
+          else if (!item.rule_count) item.reason = "it has no broker rules, so no launch can use it (secret_rules_missing)";
+          else if (!item.launcher_allowed) item.reason = "it is not scoped to you";
+          else if (item.profile_allowed === false) item.reason = "it is not scoped to profile " + profile;
+          else item.usable = true;
+          return item;
+        });
+      return { target_id: t.id, target: t.name, ...(profile ? { profile } : {}), items };
+    }
     if (method === "POST" && sub === "approve-key") {
       need("admin");
       if (t.state !== "awaiting_key_approval") throw new Fail(409, "no_pending_key", "The target has no host key waiting for approval.");
@@ -836,6 +855,7 @@ try {
     assert.equal(await page.getByLabel("Launch name").inputValue(), "repo-fixer");
     await page.getByLabel(/model-api/).check();
     await text("The agent never sees a secret value").waitFor();
+    assert.ok(requests.some((r) => r.method === "GET" && r.path === `targets/${findTarget("build-host").id}/secrets` && r.url.includes("profile=python-dev")), "the form lists the target's secrets for launchers");
     await page.getByRole("button", { name: "Review & plan" }).click();
     await page.locator(".plan").getByText("brokered secrets model-api").waitFor();
     await page.locator(".plan").getByRole("cell", { name: "MODEL_API_BASE_URL" }).waitFor();

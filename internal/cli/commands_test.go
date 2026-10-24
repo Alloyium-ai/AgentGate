@@ -327,6 +327,29 @@ func TestLaunchFromFlagsBuildsTheSpec(t *testing.T) {
 	h := newHarness(t)
 	h.login("local:lin", "launcher")
 	h.api.reply("GET /api/v1/profiles/{id}", 200, control.Profile{ID: "p1", Name: "python-dev", LatestVersion: 3, RequireApproval: true})
+	h.api.reply("GET /api/v1/targets/{id}", 200, control.Target{ID: strings.Repeat("7", 32), Name: "local", State: "active"})
+	usable := func(name string) control.LauncherSecret {
+		yes := true
+		return control.LauncherSecret{Name: name, State: "stored", Upstreams: []string{"api.example.com"}, RuleCount: 1, LauncherAllowed: true, ProfileAllowed: &yes, Usable: true}
+	}
+	no := false
+	h.api.reply("GET /api/v1/targets/{id}/secrets", 200, map[string]any{"target_id": strings.Repeat("7", 32), "target": "local", "profile": "python-dev", "items": []control.LauncherSecret{usable("anthropic"), usable("gh"),
+		{Name: "ops-key", State: "stored", Upstreams: []string{"api.example.com"}, RuleCount: 1, LauncherAllowed: false, ProfileAllowed: &no, Reason: "it is not scoped to you"}}})
+	for _, c := range []struct {
+		secret string
+		code   int
+		text   string
+	}{{"missing", ExitUsage, "holds no secret of that name (usable: anthropic, gh)"}, {"ops-key", ExitForbidden, "not scoped to you"}} {
+		if r := h.run("", "launch", "--profile", "python-dev", "--image", imageRef, "--secret", c.secret, "--", "true"); r.code != c.code || !strings.Contains(r.stderr, c.text) {
+			t.Fatalf("--secret %s: %v", c.secret, r)
+		}
+	}
+	if len(h.api.requestsTo("POST /api/v1/launches")) != 0 || len(h.api.requestsTo("POST /api/v1/launch-plans")) != 0 {
+		t.Fatal("a launch with an unusable --secret was sent")
+	}
+	if q := h.api.requestsTo("GET /api/v1/targets/{id}/secrets")[0].Query.Get("profile"); q != "python-dev" {
+		t.Fatalf("the secret check asked about profile %q", q)
+	}
 	created := sampleLaunch("approval_pending")
 	h.api.reply("POST /api/v1/launches", 200, map[string]any{"launch": created, "plan": samplePlan()})
 	r := h.run("", "launch", "--name", "repo-fixer", "--mode", "session", "--lifetime", "2h", "--profile", "python-dev", "--image", imageRef,
@@ -534,5 +557,25 @@ func TestGrantPreviewNeedsTheServicesDryRun(t *testing.T) {
 func TestGrantBoundsMatchTheAccessEngine(t *testing.T) {
 	if strings.Join(grantRevokeKinds, " ") != strings.Join(access.RevokeKinds, " ") || maxGrantValues != access.MaxValues {
 		t.Fatalf("the CLI's grant bounds drifted from internal/access: %v %d", grantRevokeKinds, maxGrantValues)
+	}
+}
+
+func TestSecretListForLaunchers(t *testing.T) {
+	h := newHarness(t)
+	h.login("local:lin", "launcher")
+	h.api.reply("GET /api/v1/targets/{id}", 200, sampleTarget("active"))
+	yes := true
+	h.api.reply("GET /api/v1/targets/{id}/secrets", 200, map[string]any{"target_id": sampleTarget("active").ID, "target": "local", "items": []control.LauncherSecret{
+		{Name: "model-api", State: "stored", Upstreams: []string{"api.model.example"}, RuleCount: 2, LauncherAllowed: true, ProfileAllowed: &yes, Usable: true},
+		{Name: "bare-key", State: "stored", Upstreams: []string{"api.model.example"}, LauncherAllowed: true, Reason: "it has no broker rules, so no launch can use it (secret_rules_missing)"}}})
+	r := h.run("", "secret", "ls")
+	if r.code != 0 || !strings.Contains(r.stdout, "model-api") || !strings.Contains(r.stdout, "no: it has no broker rules") || len(h.api.requestsTo("GET /api/v1/secrets")) != 0 {
+		t.Fatalf("%v", r)
+	}
+	if r = h.run("", "secret", "ls", "-q", "--profile", "dev"); r.code != 0 || strings.TrimSpace(r.stdout) != "model-api" {
+		t.Fatalf("-q lists the usable names: %v", r)
+	}
+	if q := h.api.requestsTo("GET /api/v1/targets/{id}/secrets"); q[len(q)-1].Query.Get("profile") != "dev" {
+		t.Fatal("--profile was not sent")
 	}
 }

@@ -280,6 +280,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/launches/{id}/events` | GET | viewer | ordered events (`?after=`); `Accept: text/event-stream` streams them, resuming from `Last-Event-ID` |
 | `/launches/{id}/logs` | GET | viewer | bounded agent output (`?after=`) |
 | `/targets/{id}/seal-key` | GET | viewer | the host's signed seal key record, verbatim, with the host public key and fingerprint |
+| `/targets/{id}/secrets` | GET | launcher | what a launch spec needs (`?profile=`): each pending or stored secret's name, state, upstream hosts, rule count and wildcard flag, and whether this human and profile may use it; no fingerprint, envelope, rule path or scope list |
 | `/secrets` | GET, POST | admin | metadata only; POST carries a `secretseal` envelope sealed to the target's published seal key, and the broker settings |
 | `/secrets/{id}` | DELETE | admin | queue removal from the host (refused while a live launch uses it) |
 | `/secrets/{id}/receipt` | GET | admin | the host's receipt for the relayed envelope, for the sealing client to verify |

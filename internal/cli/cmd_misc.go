@@ -168,7 +168,9 @@ func completion(shell string) (string, error) {
 	switch shell {
 	case "bash":
 		var b strings.Builder
-		b.WriteString("# bash completion for agentgate: source <(agentgate completion bash)\n_agentgate() {\n  local cur=\"${COMP_WORDS[COMP_CWORD]}\" first=\"${COMP_WORDS[1]}\"\n  if [ \"$COMP_CWORD\" -eq 1 ]; then\n    COMPREPLY=($(compgen -W \"" + strings.Join(top, " ") + "\" -- \"$cur\")); return\n  fi\n  case \"$first\" in\n")
+		b.WriteString("# bash completion for agentgate: source <(agentgate completion bash)\n_agentgate() {\n  local cur=\"${COMP_WORDS[COMP_CWORD]}\" first=\"${COMP_WORDS[1]}\" prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n  if [ \"$COMP_CWORD\" -eq 1 ]; then\n    COMPREPLY=($(compgen -W \"" + strings.Join(top, " ") + "\" -- \"$cur\")); return\n  fi\n" +
+			"  if [ \"$first\" = launch ] && [ \"$prev\" = --secret ]; then\n    local t=local i\n    for ((i=2; i<COMP_CWORD; i++)); do [ \"${COMP_WORDS[i]}\" = --target ] && t=\"${COMP_WORDS[i+1]}\"; done\n" +
+			"    COMPREPLY=($(compgen -W \"$(agentgate secret ls --for-launch -q --target \"$t\" 2>/dev/null)\" -- \"$cur\")); return\n  fi\n  case \"$first\" in\n")
 		names := make([]string, 0, len(grp))
 		for g := range grp {
 			names = append(names, g)
@@ -181,7 +183,9 @@ func completion(shell string) (string, error) {
 		return b.String(), nil
 	case "zsh":
 		var b strings.Builder
-		b.WriteString("#compdef agentgate\n# zsh completion for agentgate: agentgate completion zsh > \"${fpath[1]}/_agentgate\"\n_agentgate() {\n  if (( CURRENT == 2 )); then\n    compadd -- " + strings.Join(top, " ") + "\n    return\n  fi\n  case $words[2] in\n")
+		b.WriteString("#compdef agentgate\n# zsh completion for agentgate: agentgate completion zsh > \"${fpath[1]}/_agentgate\"\n_agentgate() {\n  if (( CURRENT == 2 )); then\n    compadd -- " + strings.Join(top, " ") + "\n    return\n  fi\n" +
+			"  if [[ $words[2] == launch && $words[CURRENT-1] == --secret ]]; then\n    local t=local i\n    for (( i = 3; i < CURRENT; i++ )); do [[ $words[i] == --target ]] && t=$words[i+1]; done\n" +
+			"    compadd -- ${(f)\"$(agentgate secret ls --for-launch -q --target $t 2>/dev/null)\"}\n    return\n  fi\n  case $words[2] in\n")
 		names := make([]string, 0, len(grp))
 		for g := range grp {
 			names = append(names, g)
@@ -205,6 +209,7 @@ func completion(shell string) (string, error) {
 			fmt.Fprintf(&b, "complete -c agentgate -f -n '__fish_seen_subcommand_from %s' -a '%s'\n", g, strings.Join(grp[g], " "))
 		}
 		b.WriteString("complete -c agentgate -f -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'\n")
+		b.WriteString("complete -c agentgate -f -n '__fish_seen_subcommand_from launch' -l secret -x -a '(agentgate secret ls --for-launch -q 2>/dev/null)'\n")
 		for _, f := range strings.Fields(globals) {
 			fmt.Fprintf(&b, "complete -c agentgate -l %s\n", strings.TrimPrefix(f, "--"))
 		}

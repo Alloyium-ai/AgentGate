@@ -106,9 +106,10 @@ the CLI command; nothing falls back to plaintext or to the unsigned `hostproto.S
 4. *Host folders*: name, host folder and mode. Modes the target does not advertise are disabled (`live-mounts` for
    read-only and read-write, `snapshot-mounts` for snapshot). Protected trees, credential stores, home directories and
    overlaps are flagged as you type; the service and the host check again.
-5. *Brokered secrets*: an administrator sees the target's secrets with their upstreams, header and scope and a warning
-   when the chosen profile or the requester is out of scope; other launchers type the name. Each secret gets the
-   variable that receives the broker address. The agent never sees the value.
+5. *Brokered secrets*: every launcher sees the target's pending and stored secrets from `GET /targets/{id}/secrets`
+   (name, state, upstream hosts, rule count or wildcard, and whether they and the chosen profile may use it, with the
+   reason when not); no fingerprint, envelope or scope list reaches the page. Each secret gets the variable that
+   receives the broker address. The agent never sees the value.
 6. *Approval*: automatic when allowed, or always required, with the reasons the form can predict.
 
 **Review & plan** is mandatory. It calls `POST /launch-plans` (creates nothing) and shows the spec digest, policy
@@ -262,7 +263,6 @@ The browser QA needs a build and Playwright's Chromium. Where the pinned Playwri
   fingerprint again. They are not shared with the CLI.
 - The receipt check only works while the dialog that sealed the secret is open, because the browser keeps the receipt
   secret in memory only.
-- A launcher who is not an administrator cannot list secrets and types secret names.
 
 ## Backend requests
 

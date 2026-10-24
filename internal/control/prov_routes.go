@@ -107,6 +107,15 @@ func (s *Server) provisioningRead(w http.ResponseWriter, r *http.Request, a Acto
 		return s.Store.TargetDetail(tail[1])
 	case area == "targets" && n == 3 && tail[2] == "seal-key":
 		return s.Store.TargetSealKey(tail[1])
+	case area == "targets" && n == 3 && tail[2] == "secrets":
+		if err := require(a, "launch:write", false); err != nil {
+			return nil, err
+		}
+		q := r.URL.Query()
+		if len(q["profile"]) > 1 || len(r.URL.RawQuery) > 256 {
+			return nil, fail(422, "invalid_filter", "Give at most one profile.")
+		}
+		return s.Store.TargetSecrets(a, tail[1], q.Get("profile"))
 	case area == "profiles" && n == 1:
 		v, err := s.Store.Profiles()
 		return map[string]any{"items": v}, err

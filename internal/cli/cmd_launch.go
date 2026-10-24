@@ -47,6 +47,7 @@ or flags:
   --image REF@sha256:DIGEST immutable image reference
   --mount SRC:NAME[:ro|snapshot|rw]   host folder at /var/lib/agentgate/mounts/NAME (default ro)
   --secret REF[:ENV]        brokered secret; ENV (default REF_BASE_URL) receives the broker address
+                            (checked against agentgate secret ls --for-launch before planning)
   --env K=V                 environment (never secrets: the service rejects credential-like names)
   --workdir DIR             working directory (default /var/lib/agentgate/workspace)
   --approval auto|required  ask for a second human even when nothing else requires it
@@ -255,7 +256,42 @@ func (e *env) buildSpec(ctx context.Context, c *Client, f launchFlags, tail []st
 		}
 		spec.Secrets = append(spec.Secrets, hostproto.SpecSecret{Ref: ref, Expose: hostproto.SecretExpose{Env: envName}})
 	}
+	if len(spec.Secrets) > 0 {
+		if err := e.checkSecretRefs(ctx, c, spec.Target, name, spec.Secrets); err != nil {
+			return nil, err
+		}
+	}
 	return json.Marshal(spec)
+}
+
+// checkSecretRefs refuses a --secret the target does not hold or that this
+// human and profile may not use, before anything is planned. The service
+// checks the same scope again when it plans and when it queues the launch.
+func (e *env) checkSecretRefs(ctx context.Context, c *Client, target, profile string, refs []hostproto.SpecSecret) error {
+	list, _, err := e.targetSecrets(ctx, c, target, profile)
+	if err != nil {
+		return err
+	}
+	usable := []string{}
+	byName := map[string]LauncherSecret{}
+	for _, s := range list.Items {
+		byName[s.Name] = s
+		if s.Usable {
+			usable = append(usable, s.Name)
+		}
+	}
+	for _, ref := range refs {
+		s, ok := byName[ref.Ref]
+		switch {
+		case !ok:
+			return usageError("--secret %s: target %s holds no secret of that name (usable: %s)", ref.Ref, list.Target, joinOr(usable, "none"))
+		case s.State != "stored":
+			return &Error{Exit: ExitConflict, Code: "secret_unavailable", Message: "Secret " + s.Name + " on target " + list.Target + " is not usable yet: " + s.Reason + ".", Hint: "agentgate secret ls --target " + list.Target + " --profile " + profile}
+		case !s.Usable:
+			return &Error{Exit: ExitForbidden, Code: "secret_scope", Message: "Secret " + s.Name + " on target " + list.Target + " is not usable: " + s.Reason + ".", Hint: "An administrator scopes it with agentgate secret set; agentgate secret ls --target " + list.Target + " --profile " + profile + " lists what you may use."}
+		}
+	}
+	return nil
 }
 
 func (e *env) launchSpec(ctx context.Context, c *Client, f launchFlags, args, tail []string) ([]byte, error) {

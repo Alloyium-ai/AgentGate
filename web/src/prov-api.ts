@@ -243,6 +243,20 @@ export type Secret = {
   updated_at: string;
   revision: number;
 };
+// LauncherSecret is GET /targets/{id}/secrets for launchers: what a launch
+// spec needs, never a fingerprint, envelope, rule path or scope list.
+export type LauncherSecret = {
+  name: string;
+  state: string;
+  upstreams: string[];
+  rule_count: number;
+  wildcard_rules: boolean;
+  launcher_allowed: boolean;
+  profile_allowed?: boolean;
+  usable: boolean;
+  reason?: string;
+};
+export type TargetSecrets = { target_id: string; target: string; profile?: string; items: LauncherSecret[] };
 export type APIToken = {
   id: string;
   subject: string;

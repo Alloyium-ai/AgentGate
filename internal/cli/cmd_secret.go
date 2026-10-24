@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -69,9 +71,25 @@ with echo off; otherwise it is read from standard input (one trailing newline is
 				return e.secretSet(ctx, args[0], f)
 			}
 		}})
-	register(&command{name: "secret ls", summary: "List secret metadata (admin); values never leave their host.", setup: func(fs *flag.FlagSet) runner {
-		return func(ctx context.Context, e *env, args, _ []string) error { return e.secretList(ctx) }
-	}})
+	register(&command{name: "secret ls", summary: "List secrets: full metadata for administrators, or the names a launch may use; values never leave their host.",
+		help: `  --target NAME     only this target (the launcher view needs one; default local)
+  --profile NAME    the launcher view: whether this profile may use each secret
+  --for-launch      the launcher view even for an administrator
+Administrators see every secret's metadata (GET /secrets). Everyone else, or --for-launch and
+--profile, sees what a launch spec needs (GET /targets/{id}/secrets): names, states, upstream
+hosts, a rule summary and whether you (and the profile) may reference each. -q prints only the
+names usable now.`,
+		setup: func(fs *flag.FlagSet) runner {
+			target := fs.String("target", "", "")
+			profile := fs.String("profile", "", "")
+			forLaunch := fs.Bool("for-launch", false, "")
+			return func(ctx context.Context, e *env, args, _ []string) error {
+				if len(args) != 0 {
+					return usageError("secret ls takes no arguments")
+				}
+				return e.secretList(ctx, *target, *profile, *forLaunch)
+			}
+		}})
 	register(&command{name: "secret rm", args: "NAME|ID", summary: "Remove a secret from its host (admin; confirms).",
 		help: "  --target NAME   target of a secret named by name (default local)\n  --reason TEXT\n  --yes           confirm without a prompt",
 		setup: func(fs *flag.FlagSet) runner {
@@ -422,15 +440,41 @@ func (e *env) sealKey(ctx context.Context, c *Client, t Target) (*sealKeyAnswer,
 	return &sk, nil
 }
 
-func (e *env) secretList(ctx context.Context) error {
+func (e *env) secretList(ctx context.Context, target, profile string, forLaunch bool) error {
 	c, err := e.authed()
 	if err != nil {
 		return err
 	}
+	if forLaunch || profile != "" || (e.ctx != nil && len(e.ctx.Roles) > 0 && !containsString(e.ctx.Roles, "admin")) {
+		return e.launcherSecrets(ctx, c, target, profile)
+	}
 	var list items[Secret]
 	raw, err := c.get(ctx, apiPrefix+"/secrets", nil, &list)
+	var ce *Error
+	if errors.As(err, &ce) && ce.Exit == ExitForbidden {
+		e.p.note("Only administrators list secret metadata; showing the secrets a launch on the target may use.")
+		return e.launcherSecrets(ctx, c, target, profile)
+	}
 	if err != nil {
 		return err
+	}
+	targetID := ""
+	if target != "" {
+		t, _, err := e.getTarget(ctx, c, target)
+		if err != nil {
+			return err
+		}
+		targetID = t.ID
+		kept := []Secret{}
+		for _, s := range list.Items {
+			if s.TargetID == targetID {
+				kept = append(kept, s)
+			}
+		}
+		list.Items = kept
+	}
+	if targetID != "" && e.g.json {
+		return e.p.value(map[string]any{"items": list.Items})
 	}
 	return e.emit(raw, func() error {
 		if e.g.quiet {
@@ -456,10 +500,68 @@ func (e *env) secretList(ctx context.Context) error {
 					texts = append(texts, ruleText(r))
 				}
 				rules = strings.Join(texts, "; ")
+			default:
+				rules = "none (unusable: secret_rules_missing)"
 			}
 			rows = append(rows, []string{s.Name, target, e.p.state(s.State), strings.Join(s.Upstreams, ","), strings.TrimSpace(s.Header + " " + s.Scheme), rules, strings.Join(s.AllowedProfiles, ","), strings.Join(s.AllowedLaunchers, ","), s.ValueFingerprint, short(s.ID)})
 		}
 		e.p.table([]string{"NAME", "TARGET", "STATE", "UPSTREAMS", "HEADER", "RULES", "PROFILES", "LAUNCHERS", "VALUE FINGERPRINT", "ID"}, rows)
+		return nil
+	})
+}
+
+// targetSecrets reads what a launcher may know of a target's secrets.
+func (e *env) targetSecrets(ctx context.Context, c *Client, target, profile string) (TargetSecrets, []byte, error) {
+	var out TargetSecrets
+	t, _, err := e.getTarget(ctx, c, target)
+	if err != nil {
+		return out, nil, err
+	}
+	q := url.Values{}
+	if profile != "" {
+		q.Set("profile", profile)
+	}
+	raw, err := c.get(ctx, apiPrefix+"/targets/"+pathEscape(t.ID)+"/secrets", q, &out)
+	return out, raw, err
+}
+
+func (e *env) launcherSecrets(ctx context.Context, c *Client, target, profile string) error {
+	if target == "" {
+		target = "local"
+	}
+	list, raw, err := e.targetSecrets(ctx, c, target, profile)
+	if err != nil {
+		return err
+	}
+	return e.emit(raw, func() error {
+		if e.g.quiet {
+			for _, s := range list.Items {
+				if s.Usable {
+					e.p.line("%s", s.Name)
+				}
+			}
+			return nil
+		}
+		rows := [][]string{}
+		for _, s := range list.Items {
+			rules := fmt.Sprintf("%d", s.RuleCount)
+			if s.WildcardRules {
+				rules = "WILDCARD"
+			}
+			usable := "yes"
+			if !s.Usable {
+				usable = "no: " + s.Reason
+			}
+			prof := "-"
+			if s.ProfileAllowed != nil {
+				prof = map[bool]string{true: "yes", false: "no"}[*s.ProfileAllowed]
+			}
+			rows = append(rows, []string{s.Name, e.p.state(s.State), strings.Join(s.Upstreams, ","), rules, map[bool]string{true: "yes", false: "no"}[s.LauncherAllowed], prof, clean(usable)})
+		}
+		e.p.table([]string{"NAME", "STATE", "UPSTREAMS", "RULES", "YOU", "PROFILE", "USABLE"}, rows)
+		if len(list.Items) > 0 {
+			e.p.note("Reference one with agentgate launch --target %s --secret NAME[:ENV]; the agent sees only the broker address.", list.Target)
+		}
 		return nil
 	})
 }
