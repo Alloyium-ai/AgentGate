@@ -17,7 +17,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
-import { hostFingerprint, hostKeyID, makeRecord, newHost, openEnvelope, rfc3339 } from "./hpke-node.mjs";
+import { hostFingerprint, hostKeyID, hostReceipt, makeRecord, newHost, openEnvelope, rfc3339 } from "./hpke-node.mjs";
 
 const output = process.env.QA_OUTPUT;
 if (!output) throw new Error("Set QA_OUTPUT to an owned artifact directory.");
@@ -354,10 +354,12 @@ function api(method, path, query, input, headers) {
       }
       const t = findTarget(input.target);
       if (envelope.target_id !== t.id || envelope.name !== input.name) throw new Fail(422, "invalid_ciphertext", "The envelope is for another target or name.");
-      opened.push(openEnvelope(host.sealPrivate, envelope).plaintext.toString());
+      const { plaintext, confirm } = openEnvelope(host.sealPrivate, envelope);
+      opened.push(plaintext.toString());
       const s = { id: newID(), name: input.name, target_id: t.id, upstreams: input.upstreams, header: input.header, ciphertext_sha256: sha(raw), allowed_profiles: input.allowed_profiles, allowed_launchers: input.allowed_launchers, state: "pending", created_at: now(), created_by: actors[who].subject, updated_at: now(), revision: 1 };
       secrets.push(s);
-      setTimeout(() => (s.state = "stored"), 1500);
+      // The host accepts the value and relays its receipt as raw JSON.
+      setTimeout(() => Object.assign(s, { state: "stored", receipt: JSON.stringify(hostReceipt(envelope, confirm, "sfp1_" + "ab".repeat(16))) }), 1500);
       return s;
     }
   }
@@ -800,8 +802,7 @@ try {
     const body = JSON.parse(post.body);
     assert.deepEqual(Object.keys(body).sort(), ["allowed_launchers", "allowed_profiles", "ciphertext", "header", "name", "reason", "target", "upstreams"]);
     assert.equal(JSON.parse(Buffer.from(body.ciphertext, "base64url")).format, "agentgate.secretseal.v1");
-    await page.waitForTimeout(3500);
-    await text("stored").waitFor();
+    await text("The host proved it opened exactly this envelope. Value fingerprint sfp1_" + "ab".repeat(16)).waitFor({ timeout: 10000 });
     await page.getByRole("button", { name: "Done" }).click();
     // The browser pinned the host key; a service that rewrites the target's
     // approved fingerprint to its own key is refused by the pin.

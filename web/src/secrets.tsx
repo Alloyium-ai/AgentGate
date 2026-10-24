@@ -44,7 +44,18 @@ const SUBJECT = /^[A-Za-z0-9_.:-]{1,100}$/;
 // request 2). host_key_fingerprint is the service's claim and is ignored: the
 // browser computes the fingerprint from host_public_key itself.
 type SealKey = { record: SignedKeyRecord; host_public_key: string; host_key_fingerprint?: string };
-type StoredSecret = Secret & { receipt?: SealReceipt };
+type StoredSecret = Secret & { receipt?: SealReceipt | string };
+
+// The receipt may be relayed as an object or as the raw JSON the host sent.
+function parseReceipt(r: SealReceipt | string | undefined): SealReceipt | undefined {
+  if (!r) return undefined;
+  if (typeof r !== "string") return r;
+  try {
+    return JSON.parse(r) as SealReceipt;
+  } catch {
+    return undefined;
+  }
+}
 type Verified = { target: Target; key: VerifiedKey; fingerprint: string; hostKeyID: string; pinned: boolean };
 
 const words = (s: string) => s.split(/[\s,]+/).filter(Boolean);
@@ -120,7 +131,12 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
   }, [stored?.id, stored?.state]);
   useEffect(() => {
     if (!stored?.receipt || !sealedRef.current) return;
-    verifyReceipt(sealedRef.current, stored.receipt)
+    const relayed = parseReceipt(stored.receipt);
+    if (!relayed) {
+      setReceipt({ ok: false, text: "The service relayed a receipt this page cannot read. Treat the stored secret as unverified." });
+      return;
+    }
+    verifyReceipt(sealedRef.current, relayed)
       .then((fp) => setReceipt({ ok: true, text: `The host proved it opened exactly this envelope. Value fingerprint ${fp}.` }))
       .catch(() => setReceipt({ ok: false, text: "The receipt does not authenticate: the host did not open the envelope this browser sealed. Treat the stored secret as untrusted and delete it." }))
       .finally(() => {
@@ -171,7 +187,9 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
           throw new ApiError(
             404,
             "seal_key_unavailable",
-            "This service does not publish a signed seal key for the target yet (GET /targets/{id}/seal-key), so this browser cannot verify the host key. Nothing was sealed or sent.",
+            cause.code === "seal_key_unavailable"
+              ? `${cause.message} This browser cannot verify the host key without it. Nothing was sealed or sent.`
+              : "This service does not publish a signed seal key for the target yet (GET /targets/{id}/seal-key), so this browser cannot verify the host key. Nothing was sealed or sent.",
             cause.requestID,
           );
         throw cause;

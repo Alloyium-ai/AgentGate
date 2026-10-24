@@ -89,8 +89,7 @@ sets, the profiles and people (subjects) that may use it, and a reason. Then:
 The value lives only in one uncontrolled password field: never in React state, the URL, storage, the console or error
 text. The field is cleared before sealing starts, the value's bytes are zeroed after sealing, and the receipt secret is
 wiped when the dialog closes. A browser without Ed25519 or X25519 in WebCrypto gets an unsupported-browser message and
-the CLI command; nothing falls back to plaintext or to the unsigned `hostproto.SealSecret` key (the CLI's
-`--allow-unsigned-key` has no UI equivalent).
+the CLI command; nothing falls back to plaintext or to the unsigned `hostproto.SealSecret` key.
 
 ### Launch an agent (launcher)
 
@@ -247,7 +246,7 @@ The browser QA needs a build and Playwright's Chromium. Where the pinned Playwri
   preset, dry run refused then accepted, grant, conflict shown verbatim, version diff; launch form rules, plan, stale
   plan, launch; requester cannot approve, another approver does; live updates and resume; stream failure to polling;
   logs as text; stop, receipt and evidence; `evidence_missing`; secret sealing with missing, substituted, forged and
-  rewritten keys refused and the value never sent, stored or logged; brokered secrets in a plan; strict import; API
+  rewritten keys refused, the value never sent, stored or logged, and the host's relayed receipt verified; brokered secrets in a plan; strict import; API
   tokens; overview; a viewer's disabled controls; session expiry; CSRF on every write; labelled inputs; 390 px layouts.
 
 ## Limits
@@ -274,14 +273,16 @@ These are needed for the UI to do everything above against a real service. None 
    version, audited as a plan (for example `profile.grants.planned`). A body field is fail-safe: today's service refuses
    the unknown field instead of applying the edit. The CLI simulates the dry run locally for the same reason.
 2. **Seal key publication.** `GET /api/v1/targets/{id}/seal-key` returns `{"host_public_key", "host_key_fingerprint",
-   "record"}` with `record` a `secretseal.SignedKeyRecord` relayed verbatim from the host, as in BROKER.md integration
-   request 2 (the heartbeat `seal_key` field is in progress in `internal/hostproto`). 404 while a target has not
-   published one.
+   "record", …}` with `record` a `secretseal.SignedKeyRecord` relayed verbatim from the host, as in BROKER.md integration
+   request 2, and 404 `seal_key_unavailable` while a target has not published one. An implementation of exactly this
+   shape (heartbeat `seal_key`, `TargetSealKey`) was in progress, uncommitted, in the shared tree when this page was
+   written; the UI reads `host_public_key` and `record` and ignores the service's `host_key_fingerprint`.
 3. **Envelope acceptance.** `POST /secrets` accepts `ciphertext` = `secretseal.Envelope.Encode()`, checks
    `DecodeEnvelope` with `target_id` equal to the target id and `name` equal to the secret name, and records
    `ciphertext_sha256` as the SHA-256 of the decoded envelope bytes (the UI compares it with what it sent).
 4. **Receipt relay.** When the host accepts a secret, the secret record returned by `GET /secrets` (and by the create
-   response if the service waits) carries the `secretseal.Receipt` as `receipt`, so the sealing client can verify it.
+   response if the service waits) carries the `secretseal.Receipt` as `receipt` (an object; raw JSON text is also
+   read), so the sealing client can verify it.
 5. **Secret names for launchers.** `GET /targets/{id}/secrets` for `launch:write`, returning name, upstreams, header,
    `allowed_profiles` and whether the caller is in `allowed_launchers` (no fingerprints, no values), so the launch form
    can offer a picker to non-administrators.
