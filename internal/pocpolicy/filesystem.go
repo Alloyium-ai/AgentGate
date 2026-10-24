@@ -23,7 +23,8 @@ const (
 
 // Filesystem lists every path a command may touch. Everything else is denied.
 // A path in more than one list receives the union of those rights, except that
-// a deny entry always overrides an allowance that is less specific.
+// a deny entry always overrides an allowance that is less specific. No
+// allowance may be listed at or below a deny entry: validation refuses it.
 type Filesystem struct {
 	// Workspace and Scratch are writable trees. They never grant execution.
 	Workspace string   `json:"workspace"`
@@ -114,6 +115,9 @@ func (f Filesystem) validate() error {
 		}
 		seen[device] = true
 	}
+	if err := f.validateDenyIsAbsolute(); err != nil {
+		return err
+	}
 	for _, writable := range append([]string{f.Workspace}, f.Scratch...) {
 		for _, protected := range protectedWrite {
 			if within(protected, writable) || within(writable, protected) {
@@ -125,6 +129,33 @@ func (f Filesystem) validate() error {
 		for _, writable := range append([]string{f.Workspace}, f.Scratch...) {
 			if within(writable, run) || within(run, writable) {
 				return fmt.Errorf("%s is both writable and executable; writable trees never run code", run)
+			}
+		}
+	}
+	return nil
+}
+
+// validateDenyIsAbsolute refuses an allowance at or below a deny entry. The
+// kernel walker weighs a deny against an allow only at the same path node, so a
+// more specific allowance below a deny would win (deny /etc with execute
+// /etc/tool runs /etc/tool). A deny below an allowance, such as /etc/shadow
+// under a readable /etc, is the intended shape and stays valid.
+func (f Filesystem) validateDenyIsAbsolute() error {
+	allowances := []struct {
+		name   string
+		values []string
+	}{{"workspace", []string{f.Workspace}}, {"scratch", f.Scratch}, {"read_only", f.ReadOnly}, {"execute", f.Execute}, {"devices", f.Devices}}
+	for _, deny := range f.Deny {
+		for _, list := range allowances {
+			for _, value := range list.values {
+				if !within(deny, value) {
+					continue
+				}
+				relation := "below"
+				if value == deny {
+					relation = "equal to"
+				}
+				return fmt.Errorf("filesystem.%s entry %s is %s filesystem.deny entry %s; a deny is absolute, so remove one of them", list.name, value, relation, deny)
 			}
 		}
 	}

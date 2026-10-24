@@ -3,7 +3,10 @@
 package pocpolicy
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -167,6 +170,107 @@ func TestFilesystemValidationRefusesDangerousShapes(t *testing.T) {
 		change(&d)
 		if d.Validate() == nil {
 			t.Errorf("%s: validation passed", name)
+		}
+	}
+}
+
+func TestDenyEntriesAreAbsolute(t *testing.T) {
+	cases := []struct {
+		name  string
+		edit  func(*Filesystem)
+		error string // empty means the document must validate
+	}{
+		{"deny below an allowance", func(f *Filesystem) { f.Deny = []string{"/etc/shadow"} }, ""},
+		{"read below a deny", func(f *Filesystem) {
+			f.Deny = []string{"/etc/secret"}
+			f.ReadOnly = append(f.ReadOnly, "/etc/secret/readable")
+		},
+			"filesystem.read_only entry /etc/secret/readable is below filesystem.deny entry /etc/secret"},
+		{"execute below a deny", func(f *Filesystem) { f.Deny = []string{"/opt"}; f.Execute = append(f.Execute, "/opt/tool") },
+			"filesystem.execute entry /opt/tool is below filesystem.deny entry /opt"},
+		{"execute equal to a deny", func(f *Filesystem) { f.Deny = []string{"/usr"} },
+			"filesystem.execute entry /usr is equal to filesystem.deny entry /usr"},
+		{"read equal to a deny", func(f *Filesystem) { f.Deny = []string{"/etc"} },
+			"filesystem.read_only entry /etc is equal to filesystem.deny entry /etc"},
+		{"workspace below a deny", func(f *Filesystem) { f.Deny = []string{"/var/lib"} },
+			"filesystem.workspace entry /var/lib/agentgate/workspace is below filesystem.deny entry /var/lib"},
+		{"scratch equal to a deny", func(f *Filesystem) { f.Deny = []string{"/tmp"} },
+			"filesystem.scratch entry /tmp is equal to filesystem.deny entry /tmp"},
+		{"scratch below a deny", func(f *Filesystem) { f.Scratch = []string{"/srv/data/out"}; f.Deny = []string{"/srv/data"} },
+			"filesystem.scratch entry /srv/data/out is below filesystem.deny entry /srv/data"},
+		{"device below a deny", func(f *Filesystem) { f.Deny = []string{"/dev"} },
+			"filesystem.devices entry /dev/null is below filesystem.deny entry /dev"},
+		{"device equal to a deny", func(f *Filesystem) { f.Deny = []string{"/dev/urandom"} },
+			"filesystem.devices entry /dev/urandom is equal to filesystem.deny entry /dev/urandom"},
+		// Component boundaries: a shared string prefix is not a parent.
+		{"sibling with a shared prefix", func(f *Filesystem) { f.Deny = []string{"/et"}; f.ReadOnly = append(f.ReadOnly, "/etcetera") }, ""},
+		{"deny with a longer sibling name", func(f *Filesystem) { f.Deny = []string{"/etcetera"} }, ""},
+		{"deny of a sibling tree", func(f *Filesystem) {
+			f.Deny = []string{"/usr2", "/proc/sys"}
+			f.ReadOnly = append(f.ReadOnly, "/usr2x")
+		}, ""},
+		{"deny of an ancestor's other child", func(f *Filesystem) { f.Deny = []string{"/var/log"} }, ""},
+	}
+	for _, c := range cases {
+		d := fullExample(t)
+		c.edit(d.Filesystem)
+		err := d.Validate()
+		switch {
+		case c.error == "" && err != nil:
+			t.Errorf("%s: %v", c.name, err)
+		case c.error != "" && err == nil:
+			t.Errorf("%s: validated, but the deny would not be absolute", c.name)
+		case c.error != "" && !strings.Contains(err.Error(), c.error):
+			t.Errorf("%s: error %q does not name %q", c.name, err, c.error)
+		}
+	}
+}
+
+// TestShippedDocumentsValidate runs every shipped preset and example through
+// the same validator, including the copies the access engine embeds.
+func TestShippedDocumentsValidate(t *testing.T) {
+	for _, dir := range []string{"../../poc/ssh-diagnostic", "../access"} {
+		raw, err := os.ReadFile(filepath.Join(dir, "policy.full.example.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		example, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("%s example: %v", dir, err)
+		}
+		raw, err = os.ReadFile(filepath.Join(dir, "presets.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var presets struct {
+			Presets map[string]struct {
+				Filesystem  json.RawMessage `json:"filesystem"`
+				Process     json.RawMessage `json:"process"`
+				FromExample string          `json:"from_example"`
+			} `json:"presets"`
+		}
+		if err = json.Unmarshal(raw, &presets); err != nil || len(presets.Presets) == 0 {
+			t.Fatalf("%s presets: %v", dir, err)
+		}
+		for name, preset := range presets.Presets {
+			if preset.FromExample != "" {
+				continue // the example itself validated above
+			}
+			d := example
+			d.Filesystem, d.Process = &Filesystem{}, &Process{}
+			for _, part := range []struct {
+				raw  json.RawMessage
+				into any
+			}{{preset.Filesystem, d.Filesystem}, {preset.Process, d.Process}} {
+				decoder := json.NewDecoder(bytes.NewReader(part.raw))
+				decoder.DisallowUnknownFields()
+				if err = decoder.Decode(part.into); err != nil {
+					t.Fatalf("%s preset %s: %v", dir, name, err)
+				}
+			}
+			if err = d.Validate(); err != nil {
+				t.Errorf("%s preset %s: %v", dir, name, err)
+			}
 		}
 	}
 }

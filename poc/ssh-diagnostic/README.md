@@ -332,11 +332,14 @@ sections. The guard then also attaches the BPF LSM filesystem component (`bpf/fs
 - **Filesystem:** every path is denied unless a list names it. `workspace` and `scratch` trees are writable (read, write, create, mkdir,
   delete, rename, symlink, chmod/chown) and never executable. `read_only` trees can be read and mapped. `execute` trees can also run
   programs and map code. `devices` is a subset of `/dev/{null,zero,full,random,urandom,tty}`. `deny` trees refuse everything and
-  override a broader allowance. Hard links are never allowed, and `ioctl` is limited to five descriptor queries. A new regular file
-  can be made only by `open(O_CREAT)`; its `create` right is checked when the new file is opened (see the limits below). FIFOs
-  (`mkfifo`), socket nodes (`bind()` of an AF_UNIX socket to a pathname), device nodes, and regular files made by `mknod` are never
-  allowed, in any tree: they fail with EPERM. Abstract AF_UNIX sockets, `socketpair`, and pipes make no node and are not affected.
-  Ancestor directories of allowed trees get an exact-path read so `stat` works.
+  override a broader allowance (`/etc/shadow` under a readable `/etc`). The validator refuses any `workspace`, `scratch`, `read_only`,
+  `execute`, or `devices` entry equal to or below a `deny` entry, because the kernel walker would let that more specific allowance
+  win; so `grant deny` over an allowed tree is rejected (exit 4) until that entry is revoked. Hard links are never allowed, and
+  `ioctl` is limited to five descriptor queries. A new regular file can be made only by `open(O_CREAT)`; its `create` right is checked
+  when the new file is opened (see the limits below). FIFOs (`mkfifo`), socket nodes (`bind()` of an AF_UNIX socket to a pathname),
+  device nodes, and regular files made by `mknod` are never allowed, in any tree: they fail with EPERM. Abstract AF_UNIX sockets,
+  `socketpair`, and pipes make no node and are not affected. Ancestor directories of allowed trees get an exact-path read so `stat`
+  works.
 - **Executables:** `execute` entries are the program allowlist. A writable tree may not also be executable; the policy refuses that
   overlap. A binary a command writes cannot be run.
 - **Memory:** anonymous mappings may be read, written, and re-protected. Executable anonymous memory (a JIT or libffi closure)
