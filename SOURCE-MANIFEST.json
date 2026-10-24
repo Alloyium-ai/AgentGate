@@ -1,7 +1,7 @@
 {
   "schema": "agentgate.community.source-preview.v1",
-  "source_id": "agentgate-community-sha256:b04e8e735ca37e8de420bc820372903aca1fe907437182118e786301f04ff938",
-  "source_sha256": "b04e8e735ca37e8de420bc820372903aca1fe907437182118e786301f04ff938",
+  "source_id": "agentgate-community-sha256:f8611393d55efaff98a788edeae56893cd41e3ca1c43770a7e9c58823d653ae3",
+  "source_sha256": "f8611393d55efaff98a788edeae56893cd41e3ca1c43770a7e9c58823d653ae3",
   "stage": "experimental-source-preview",
   "committed_bytes_verified": true,
   "qualification": "experimental; no complete workload qualification",
@@ -193,8 +193,8 @@
     },
     {
       "path": "COMPONENT-LICENSES.json",
-      "bytes": 78004,
-      "sha256": "51d4f099dd7d8cb7d5ee7e474981244b0e0dcdaa37a00b0bd5e1bef6f24c829f"
+      "bytes": 78115,
+      "sha256": "c5b50000fbeeca8135622ba26d2e8b0ba2a1660bdaad48efb30ef1704c0e6df6"
     },
     {
       "path": "compose.yaml",
@@ -235,6 +235,11 @@
       "path": "docs/NOTICE.md",
       "bytes": 1331,
       "sha256": "b193c7947107ddea28dc069377807368660acf3fe1b2d74f6a86824e435b72db"
+    },
+    {
+      "path": "docs/PROVISIONING.md",
+      "bytes": 10737,
+      "sha256": "37c8e217e477aa3ca81f037595a76a9d46756d354833fa1be74abe69d594507a"
     },
     {
       "path": "docs/QUALIFICATION.md",

@@ -3227,6 +3227,11 @@
       "path": "poc/ssh-diagnostic/test_grants.py",
       "kind": "code",
       "license": "Apache-2.0"
+    },
+    {
+      "path": "docs/PROVISIONING.md",
+      "kind": "documentation",
+      "license": "CC-BY-4.0"
     }
   ]
 }
