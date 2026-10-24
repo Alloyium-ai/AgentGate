@@ -96,12 +96,24 @@ let csrf = "";
 export function useCSRF(token: string) {
   csrf = token;
 }
+// SESSION_ENDED is dispatched on window when any API call reports that the
+// browser session is gone, so the shell can show the sign-in page instead of
+// a stale workspace. The server stays the authority; this only reacts to it.
+export const SESSION_ENDED = "agentgate:session-ended";
+const endedCodes = new Set([
+  "authentication_required",
+  "session_expired",
+  "session_required",
+  "session_binding_failed",
+  "login_authority_changed",
+]);
 export async function api<T>(
   path: string,
   method = "GET",
   body?: unknown,
   match?: number,
   key?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "X-Request-ID": crypto.randomUUID(),
@@ -119,16 +131,21 @@ export async function api<T>(
       headers,
       credentials: "same-origin",
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     },
   );
   const data = await res.json().catch(() => ({}));
-  if (!res.ok)
-    throw new ApiError(
+  if (!res.ok) {
+    const error = new ApiError(
       res.status,
       data.error?.code || "request_failed",
       data.error?.message || "The request failed. Try again.",
       data.request_id || res.headers.get("X-Request-ID") || "",
     );
+    if (res.status === 401 && endedCodes.has(error.code) && path !== "session")
+      dispatchEvent(new CustomEvent(SESSION_ENDED, { detail: error.code }));
+    throw error;
+  }
   return data as T;
 }
 export function can(actor: Actor, role: string) {

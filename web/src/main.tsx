@@ -16,8 +16,14 @@ import {
   X,
   ArrowRight,
   LockKeyhole,
+  Server,
+  ShieldHalf,
+  Rocket,
+  ListChecks,
+  KeyRound,
+  TerminalSquare,
 } from "lucide-react";
-import { ApiError, Session, api, useCSRF, setCustomerPolicy } from "./api";
+import { ApiError, SESSION_ENDED, Session, api, useCSRF, setCustomerPolicy } from "./api";
 import { Loading, ErrorBox } from "./components";
 import {
   Overview,
@@ -32,8 +38,23 @@ import "./style.css";
 import { LocalLogin } from "./local-login";
 import { Users } from "./users";
 import { PolicyWorkspace } from "./policy-workspace";
+import { TargetDetail, Targets } from "./targets";
+import { ProfileDetail, Profiles } from "./profiles";
+import { LaunchPage } from "./launch-form";
+import { LaunchDetail, Launches } from "./launches";
+import { Secrets } from "./secrets";
+import { Tokens } from "./tokens";
+import { ProvisioningOverview } from "./prov-overview";
+import { permissions } from "./prov-api";
+import "./provisioning.css";
 const nav = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
+  { id: "targets", label: "Targets", icon: Server },
+  { id: "profiles", label: "Access profiles", icon: ShieldHalf },
+  { id: "launch", label: "Launch", icon: Rocket },
+  { id: "launches", label: "Launches", icon: ListChecks },
+  { id: "secrets", label: "Secrets", icon: KeyRound },
+  { id: "tokens", label: "API tokens", icon: TerminalSquare },
   { id: "policies", label: "Policies", icon: Layers },
   { id: "policy-builder", label: "Policy builder", icon: ShieldCheck },
   { id: "requests", label: "Requests", icon: Inbox },
@@ -128,10 +149,24 @@ function App() {
     const listener = () => {
       if (location.hash.startsWith("#/"))
         setPath(location.hash.slice(2) || "overview");
+      document.getElementById("main-content")?.focus({ preventScroll: true });
     };
     addEventListener("hashchange", listener);
     return () => removeEventListener("hashchange", listener);
   }, []);
+  useEffect(() => {
+    const ended = () => setSession(null);
+    addEventListener(SESSION_ENDED, ended);
+    return () => removeEventListener(SESSION_ENDED, ended);
+  }, []);
+  const [clock, setClock] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setClock(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (session && session.expires && session.expires * 1000 <= clock) setSession(null);
+  }, [clock, session?.expires]);
   useEffect(() => {
     if (!session) return;
     let live = true;
@@ -178,10 +213,31 @@ function App() {
       </main>
     );
   const actor = session.actor;
-  const visibleNav = nav.filter(item => (item.id !== 'users' || (session.local_identity && actor.roles.includes('admin'))) && (item.id !== 'policy-builder' || session.customer_policy));
+  const perms = permissions(actor);
+  const visibleNav = nav.filter(item => (item.id !== 'users' || (session.local_identity && actor.roles.includes('admin'))) && (item.id !== 'policy-builder' || session.customer_policy) && (item.id !== 'launch' || perms.launch) && (item.id !== 'secrets' || perms.secretsAdmin) && (item.id !== 'tokens' || perms.tokens));
   const section = path.split("/")[0];
+  const parts = path.split("/");
+  const expiresSoon = session.expires && session.expires * 1000 - clock < 5 * 60 * 1000;
   let content: React.ReactNode;
   switch (section) {
+    case "targets":
+      content = parts[1] ? <TargetDetail key={parts[1]} id={parts[1]} actor={actor} epoch={epoch} navigate={navigate} /> : <Targets actor={actor} epoch={epoch} navigate={navigate} />;
+      break;
+    case "profiles":
+      content = parts[1] ? <ProfileDetail key={parts[1]} id={parts[1]} selected={parts[2] ? Number(parts[2]) : undefined} actor={actor} epoch={epoch} navigate={navigate} /> : <Profiles actor={actor} epoch={epoch} navigate={navigate} />;
+      break;
+    case "launch":
+      content = <LaunchPage key={path} actor={actor} from={parts[1] === "from" ? parts[2] : undefined} navigate={navigate} />;
+      break;
+    case "launches":
+      content = parts[1] ? <LaunchDetail key={parts[1]} id={parts[1]} actor={actor} epoch={epoch} navigate={navigate} /> : <Launches actor={actor} epoch={epoch} navigate={navigate} />;
+      break;
+    case "secrets":
+      content = <Secrets actor={actor} epoch={epoch} />;
+      break;
+    case "tokens":
+      content = <Tokens actor={actor} epoch={epoch} />;
+      break;
     case "users":
       content = session.local_identity && actor.roles.includes('admin') ? <Users epoch={epoch} refresh={refresh} /> : <ErrorBox error={new Error('Local user administration requires an administrator.')} />;
       break;
@@ -220,7 +276,7 @@ function App() {
       content = <AuditExplorer key={path} epoch={epoch} actor={actor} versionID={path.split("/")[1]} />;
       break;
     default:
-      content = <Overview epoch={epoch} navigate={navigate} />;
+      content = <Overview epoch={epoch} navigate={navigate} extra={<ProvisioningOverview actor={actor} epoch={epoch} navigate={navigate} />} />;
   }
   return (
     <div className="app-shell">
@@ -317,6 +373,11 @@ function App() {
           </div>
         </header>
         <main id="main-content" tabIndex={-1}>
+          {expiresSoon && (
+            <div className="session-warning" role="status">
+              Your session ends at {new Date(session.expires * 1000).toLocaleTimeString()}. Unsaved form input is lost when it does; sign in again to continue.
+            </div>
+          )}
           {Boolean(error) && <ErrorBox error={error} />} {content}
         </main>
         <footer className="workspace-footer">

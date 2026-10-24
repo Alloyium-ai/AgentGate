@@ -89,9 +89,11 @@ function usePaging(scope = "") {
 export function Overview({
   epoch,
   navigate,
+  extra,
 }: {
   epoch: number;
   navigate: (path: string) => void;
+  extra?: React.ReactNode;
 }) {
   const { data, error, loading } = useData<Record<string, any>>(
     "overview",
@@ -105,6 +107,7 @@ export function Overview({
         title="Keep intent and execution in view."
         text="Review policy decisions, follow worker runs, and inspect the evidence behind them."
       />
+      {extra}
       {Boolean(error) && <ErrorBox error={error} />}
       <div className="stats">
         {[
