@@ -337,12 +337,12 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt *route, rest
 		writeError(w, http.StatusBadGateway, "upstream_"+errKindTooLarge)
 		return
 	}
-	headerRedactions := s.copyResponseHeaders(w.Header(), resp.Header, rt)
+	s.stats.responseBytes(rt.name, 0, s.copyResponseHeaders(w.Header(), resp.Header, rt))
 	if resp.ContentLength >= 0 && r.Method != http.MethodHead {
 		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
 	w.WriteHeader(resp.StatusCode)
-	s.stream(ctx, cancel, w, resp.Body, rt, headerRedactions)
+	s.stream(ctx, cancel, w, resp.Body, rt)
 }
 
 // copyResponseHeaders drops hop-by-hop, cookie and protocol-advertising
@@ -380,17 +380,15 @@ func (s *Server) copyResponseHeaders(dst, src http.Header, rt *route) int {
 // between upstream reads and a deadline on every client write. It flushes after
 // every write so Server-Sent Events arrive promptly. A failure after the status
 // line aborts the connection, so a truncated body is never presented as complete.
-func (s *Server) stream(ctx context.Context, cancel context.CancelFunc, w http.ResponseWriter, body io.Reader, rt *route, headerRedactions int) {
+func (s *Server) stream(ctx context.Context, cancel context.CancelFunc, w http.ResponseWriter, body io.Reader, rt *route) {
 	var idleFired atomic.Bool
 	idle := time.AfterFunc(s.set.StreamIdleTimeout, func() { idleFired.Store(true); cancel() })
 	defer idle.Stop()
 	rc := http.NewResponseController(w)
 	red := newRedactor(rt.cred.patterns)
+	defer red.release()
 	written := int64(0)
-	defer func() {
-		s.stats.responseBytes(rt.name, int(written), red.count+headerRedactions)
-		red.release()
-	}()
+	counted := 0
 	abort := func(kind string) {
 		s.stats.routeError(rt.name, kind)
 		panic(http.ErrAbortHandler)
@@ -402,6 +400,10 @@ func (s *Server) stream(ctx context.Context, cancel context.CancelFunc, w http.R
 		if written+int64(len(p)) > s.set.MaxResponseBytes {
 			abort(errKindTooLarge)
 		}
+		// Count before writing, so the evidence is never behind what the
+		// client has already received.
+		s.stats.responseBytes(rt.name, len(p), red.count-counted)
+		counted = red.count
 		_ = rc.SetWriteDeadline(time.Now().Add(s.set.WriteTimeout))
 		n, err := w.Write(p)
 		written += int64(n)
