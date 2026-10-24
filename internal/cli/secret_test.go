@@ -60,11 +60,11 @@ func (f *sealFixture) serve(hostPub ed25519.PublicKey, record any) {
 	f.h.api.reply("GET /api/v1/targets/{id}", 200, f.target)
 	if hostPub == nil && record == nil {
 		f.h.api.handle("GET /api/v1/targets/{id}/seal-key", func(w http.ResponseWriter, r *http.Request, _ []byte, _ []string) {
-			apiError(w, 404, "not_found", "The API endpoint does not exist.")
+			apiError(w, 404, "seal_key_unavailable", "The target's host has not published a host-signed seal key yet.")
 		})
 		return
 	}
-	m := map[string]any{"record": record}
+	m := map[string]any{"record": record, "target_id": f.target.ID, "host_key_id": f.target.HostKeyID}
 	if hostPub != nil {
 		m["host_public_key"] = hostproto.EncodeKey(hostPub)
 		m["host_key_fingerprint"] = secretseal.HostKeyFingerprint(hostPub)

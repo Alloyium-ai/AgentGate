@@ -17,23 +17,29 @@ var apiTokenFormat = regexp.MustCompile(`^agt_[A-Za-z0-9_-]{43}$`)
 
 // Target is a host that runs agentgate-hostd.
 type Target struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	State            string   `json:"state"`
-	Capabilities     []string `json:"capabilities"`
-	Hostname         string   `json:"hostname"`
-	AgentVersion     string   `json:"agent_version"`
-	HostKeyID        string   `json:"host_key_id"`
-	EncryptionKey    string   `json:"encryption_key"`
-	JobKeyID         string   `json:"job_key_id"`
-	LastSeen         string   `json:"last_seen_at,omitempty"`
-	Online           bool     `json:"online"`
-	HeartbeatSeconds int      `json:"heartbeat_seconds"`
-	Created          string   `json:"created_at"`
-	CreatedBy        string   `json:"created_by"`
-	Updated          string   `json:"updated_at"`
-	Revision         int      `json:"revision"`
-	KernelVerified   bool     `json:"kernel_verified"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	State        string   `json:"state"`
+	Capabilities []string `json:"capabilities"`
+	Hostname     string   `json:"hostname"`
+	AgentVersion string   `json:"agent_version"`
+	HostKeyID    string   `json:"host_key_id"`
+	// HostPublicKey and the seal key fields appear once the service relays
+	// the host-signed seal key (secretseal.SignedKeyRecord).
+	HostPublicKey    string          `json:"host_public_key,omitempty"`
+	EncryptionKey    string          `json:"encryption_key"`
+	SealKey          json.RawMessage `json:"seal_key,omitempty"`
+	SealKeyID        string          `json:"seal_key_id,omitempty"`
+	SealKeyNotAfter  string          `json:"seal_key_not_after,omitempty"`
+	JobKeyID         string          `json:"job_key_id"`
+	LastSeen         string          `json:"last_seen_at,omitempty"`
+	Online           bool            `json:"online"`
+	HeartbeatSeconds int             `json:"heartbeat_seconds"`
+	Created          string          `json:"created_at"`
+	CreatedBy        string          `json:"created_by"`
+	Updated          string          `json:"updated_at"`
+	Revision         int             `json:"revision"`
+	KernelVerified   bool            `json:"kernel_verified"`
 }
 
 // Enrollment is a one-time host enrollment token.

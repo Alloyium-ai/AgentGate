@@ -32,8 +32,12 @@ import (
 
 // sealKeyAnswer is the answer of GET /targets/{id}/seal-key.
 type sealKeyAnswer struct {
+	TargetID           string          `json:"target_id"`
+	HostKeyID          string          `json:"host_key_id"`
 	HostPublicKey      string          `json:"host_public_key"`
 	HostKeyFingerprint string          `json:"host_key_fingerprint"`
+	SealKeyID          string          `json:"seal_key_id"`
+	NotAfter           string          `json:"not_after"`
 	Record             json.RawMessage `json:"record"`
 }
 
@@ -70,6 +74,9 @@ func planSeal(pin *KnownTarget, t Target, sk *sealKeyAnswer, now time.Time) (*se
 	}
 	if sk.HostPublicKey == "" || len(sk.Record) == 0 || string(sk.Record) == "null" {
 		return nil, trustError("seal_key_incomplete", "The service published only part of the target's seal key material.", "Report this to the service operator; nothing was sent.")
+	}
+	if (sk.TargetID != "" && sk.TargetID != t.ID) || (sk.HostKeyID != "" && sk.HostKeyID != t.HostKeyID) {
+		return nil, trustError("seal_key_inconsistent", "The service answered with the seal key of another target or host key. Nothing was sent.", "Report this to the service operator.")
 	}
 	raw, err := hostproto.DecodeKey(sk.HostPublicKey)
 	if err != nil {

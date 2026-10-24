@@ -188,7 +188,7 @@ func (e *env) sealKey(ctx context.Context, c *Client, t Target) (*sealKeyAnswer,
 	var sk sealKeyAnswer
 	_, err := c.get(ctx, apiPrefix+"/targets/"+pathEscape(t.ID)+"/seal-key", nil, &sk)
 	var ce *Error
-	if errors.As(err, &ce) && ce.Exit == ExitNotFound {
+	if errors.As(err, &ce) && (ce.Exit == ExitNotFound || ce.Code == "seal_key_unavailable") {
 		return nil, nil
 	}
 	if err != nil {
