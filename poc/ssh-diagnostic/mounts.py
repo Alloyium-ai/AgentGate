@@ -137,6 +137,14 @@ def check_source_rules(source, forbidden=(), home=None):
             raise MountError('%s overlaps protected host tree %s' % (source, protected))
     if source.startswith(INSTANCE_PREFIX) or INSTANCE_PREFIX.startswith(source.rstrip('/') + '/'):
         raise MountError('%s overlaps an AgentGate instance directory' % source)
+    # The same rules the guard applies without knowing $HOME (dockerplacement
+    # protectedSource): no home directory itself, no credential store anywhere.
+    parts = source.strip('/').split('/')
+    if parts[0] == 'home' and len(parts) <= 2:
+        raise MountError('%s is a home directory or contains one; share a project folder below it' % source)
+    for name in SECRET_NAMES:
+        if ('/' + name + '/') in (source + '/'):
+            raise MountError('%s passes through the credential store %s' % (source, name))
     if home:
         home = os.path.normpath(home)
         if source == home or home.startswith(source.rstrip('/') + '/'):
