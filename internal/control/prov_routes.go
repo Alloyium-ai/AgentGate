@@ -597,10 +597,12 @@ func (s *Server) hostd(w http.ResponseWriter, r *http.Request) {
 		s.hostProblem(w, r, fail(413, "body_too_large", "The host request exceeds the one MiB limit."))
 		return
 	}
+	var hostID string
 	if domain := hostDomain(path); domain != "" {
-		hostID, perr := s.Store.PreauthenticateHost(body, domain)
+		var perr error
+		hostID, perr = s.Store.PreauthenticateHost(body, domain)
 		if perr != nil {
-			if s.limited("hostfail:" + host) {
+			if s.limited("hostfail", host) {
 				s.hostProblem(w, r, fail(429, "rate_limited", "Too many host requests from this address failed authentication."))
 				return
 			}
@@ -612,7 +614,7 @@ func (s *Server) hostd(w http.ResponseWriter, r *http.Request) {
 			s.hostProblem(w, r, perr)
 			return
 		}
-		if s.limitedHost(hostID) {
+		if s.limitedHost("host", hostID) {
 			s.hostProblem(w, r, fail(429, "rate_limited", "The request rate of this host exceeds its limit."))
 			return
 		}
@@ -620,7 +622,7 @@ func (s *Server) hostd(w http.ResponseWriter, r *http.Request) {
 	var value any
 	switch {
 	case path == "enroll":
-		if s.limited("ip:"+host) || s.limited("enroll:"+host) {
+		if s.limited("ip", host) || s.limited("enroll", host) {
 			s.hostProblem(w, r, fail(429, "rate_limited", "The enrollment rate exceeds its limit."))
 			return
 		}
@@ -631,7 +633,9 @@ func (s *Server) hostd(w http.ResponseWriter, r *http.Request) {
 			s.Store.Sweep()
 		}
 	case path == "resync":
-		if s.limited("enroll:resync:" + host) {
+		// Resync is signed by the enrolled host key (verified above), so its
+		// tight bucket is the host's own, not one an address flood shares.
+		if s.limitedHost("resync", hostID) {
 			s.hostProblem(w, r, fail(429, "rate_limited", "The resync rate exceeds its limit."))
 			return
 		}

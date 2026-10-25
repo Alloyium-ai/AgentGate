@@ -33,10 +33,11 @@ type Server struct {
 	TrustedProxies []netip.Prefix
 	mu             sync.Mutex
 	clients        map[chan int64]bool
-	limits         map[string]*bucket
-	// hostLimits holds the per-host buckets of authenticated host requests,
-	// apart from limits, so no flood of other keys can crowd them out.
-	hostLimits map[string]*bucket
+	// limits holds one bounded rate table per client-keyed family
+	// (ratelimit.go); hostLimits the buckets of authenticated host requests,
+	// apart from them, so no flood of other keys can crowd them out.
+	limits     map[string]*rateTable
+	hostLimits *rateTable
 	inflight   chan struct{}
 	// StreamWriteTimeout, StreamHeartbeat and StreamLifetime bound the launch
 	// log stream; zero means the defaults (20 s, 15 s and 5 minutes).
@@ -44,10 +45,6 @@ type Server struct {
 	// logLinesFetched and logLinesDelivered count log stream lines read from
 	// the store and written to clients.
 	logLinesFetched, logLinesDelivered atomic.Int64
-}
-type bucket struct {
-	Count int
-	Reset time.Time
 }
 type call struct {
 	Actor     Actor
@@ -58,7 +55,7 @@ type call struct {
 var safeMeta = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,100}$`)
 
 func NewServer(s *Store, a *Auth, spool, web string) *Server {
-	app := &Server{Store: s, Auth: a, Spool: spool, Web: web, clients: map[chan int64]bool{}, limits: map[string]*bucket{}, hostLimits: map[string]*bucket{}, inflight: make(chan struct{}, 32)}
+	app := &Server{Store: s, Auth: a, Spool: spool, Web: web, clients: map[chan int64]bool{}, limits: map[string]*rateTable{}, hostLimits: newRateTable(hostTableSize), inflight: make(chan struct{}, 32)}
 	s.Changed = app.changed
 	return app
 }
@@ -133,7 +130,7 @@ func (s *Server) authRoute(name string) http.HandlerFunc {
 			s.problem(w, r, ferr, Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "auth.denied", Resource: "session", Reason: "Malformed forwarding header", RequestID: r.Header.Get("X-Request-ID"), Source: host}, true)
 			return
 		}
-		if s.limited("auth:" + host) {
+		if s.limited("auth", host) {
 			s.problem(w, r, fail(429, "rate_limited", "The sign-in request rate exceeds its limit."), Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "auth.denied", Resource: "session", Reason: "Sign-in rate limit", RequestID: r.Header.Get("X-Request-ID"), Source: host}, true)
 			return
 		}
@@ -141,7 +138,7 @@ func (s *Server) authRoute(name string) http.HandlerFunc {
 		case "local-challenge":
 			err = s.Auth.LocalChallenge(w, r)
 		case "local-login":
-			if s.limited("password:" + host) {
+			if s.limited("password", host) {
 				err = fail(429, "rate_limited", "The local sign-in rate exceeds its limit.")
 			} else {
 				err = s.Auth.LocalLogin(w, r)
@@ -176,50 +173,6 @@ func (s *Server) authRoute(name string) http.HandlerFunc {
 		}
 	}
 }
-func (s *Server) limited(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ceiling := 120
-	if strings.HasPrefix(key, "password:") || strings.HasPrefix(key, "enroll:") {
-		ceiling = 10
-	}
-	if strings.HasPrefix(key, "ip:") {
-		ceiling = 1200
-	}
-	return take(s.limits, key, ceiling, 2048)
-}
-
-// limitedHost is the per-host bucket of authenticated host requests: a host
-// polls every heartbeat and uploads job events, so its ceiling is generous,
-// and it lives apart from the client address buckets.
-func (s *Server) limitedHost(hostID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return take(s.hostLimits, "host:"+hostID, 1200, 1024)
-}
-
-// take counts one request against key's one-minute bucket in m (at most size
-// buckets; a full map refuses new keys) and reports whether it is over ceiling.
-func take(m map[string]*bucket, key string, ceiling, size int) bool {
-	now := time.Now()
-	b := m[key]
-	if b == nil || now.After(b.Reset) {
-		if len(m) >= size {
-			for k, v := range m {
-				if now.After(v.Reset) {
-					delete(m, k)
-				}
-			}
-			if len(m) >= size {
-				return true
-			}
-		}
-		b = &bucket{Reset: now.Add(time.Minute)}
-		m[key] = b
-	}
-	b.Count++
-	return b.Count > ceiling
-}
 
 // clientIP is the address a request is limited and its anonymous denials
 // sampled by. Without a trusted proxy it is the TCP peer. When the peer is
@@ -227,7 +180,8 @@ func take(m map[string]*bucket, key string, ceiling, size int) bool {
 // itself a trusted proxy: the proxies append the address they received from,
 // so entries to its left are whatever the client chose to send. A trusted
 // proxy that sends no X-Forwarded-For, or a malformed one, is refused. An
-// IPv6 client is keyed by its /64. The peer is returned with an error.
+// IPv6 client is keyed by its /56 (ratelimit.go). The peer is returned with
+// an error.
 func (s *Server) clientIP(r *http.Request) (string, error) {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	peer, err := netip.ParseAddr(host)
@@ -275,7 +229,7 @@ func (s *Server) trusted(a netip.Addr) bool {
 
 func clientKey(a netip.Addr) string {
 	if a.Is6() {
-		p, _ := a.Prefix(64)
+		p, _ := a.Prefix(56)
 		return p.String()
 	}
 	return a.String()
@@ -305,7 +259,7 @@ func (s *Server) prepare(r *http.Request) (call, error) {
 	if err != nil {
 		return c, err
 	}
-	if s.limited("ip:" + host) {
+	if s.limited("ip", host) {
 		return c, fail(429, "rate_limited", "The request rate exceeds this node's limit.")
 	}
 	if r.Method != "GET" {
@@ -344,7 +298,7 @@ func (s *Server) prepare(r *http.Request) (call, error) {
 	if r.Method != "GET" && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		return c, fail(415, "json_required", "Use an application/json request.")
 	}
-	if s.limited("actor:" + c.Actor.Subject) {
+	if s.limited("actor", c.Actor.Subject) {
 		return c, fail(429, "rate_limited", "The actor request rate exceeds its limit.")
 	}
 	key := r.Header.Get("Idempotency-Key")
