@@ -826,6 +826,85 @@ func TestReceiptsSurviveARestartUntilAcknowledged(t *testing.T) {
 	}
 }
 
+// TestRedeliveredCompletedJobsNeverReopenTheOutbox: a hostile or confused
+// service keeps re-delivering jobs whose results it already acknowledged. The
+// host answers with nothing: no run, no new ledger entry, no new event, so the
+// outbox stays drained and Ledger.Prune still removes the old entries.
+func TestRedeliveredCompletedJobsNeverReopenTheOutbox(t *testing.T) {
+	h := newHarness(t)
+	h.scripted("stopped", "exited", true)
+	launch := h.launchJob(specBytes("oneshot", 30, "{}"), nil, nil)
+	rejected := h.launchJob(specBytes("session", 30, "{}"), nil, nil) // refused: invalid lifetime
+	rejected.LaunchID = strings.Repeat("e", 32)
+	jobs := []hostproto.Job{launch, rejected}
+	for _, job := range jobs {
+		h.service.send(t, job)
+	}
+	h.cycle()
+	next := func(id string) uint32 {
+		h.daemon.Outbox.mu.Lock()
+		defer h.daemon.Outbox.mu.Unlock()
+		if job := h.daemon.Outbox.jobs[id]; job != nil {
+			return job.next
+		}
+		return 0
+	}
+	held, numbered := map[string]int{}, map[string]uint32{}
+	for _, job := range jobs {
+		if !h.daemon.Outbox.Completed(job.ID) || len(h.service.results(job.ID)) != 1 {
+			t.Fatalf("job %s did not complete once: %v", job.ID, h.service.kinds(job.ID))
+		}
+		held[job.ID], numbered[job.ID] = len(h.service.kinds(job.ID)), next(job.ID)
+	}
+	unchanged := func(when string) {
+		t.Helper()
+		if pending := h.daemon.Outbox.Pending(); len(pending) != 0 {
+			t.Fatalf("%s: completed jobs were reopened: %v", when, pending)
+		}
+		for _, job := range jobs {
+			if next(job.ID) != numbered[job.ID] || len(h.service.kinds(job.ID)) != held[job.ID] || len(h.service.results(job.ID)) != 1 {
+				t.Fatalf("%s: job %s gained events: %v", when, job.ID, h.service.kinds(job.ID))
+			}
+		}
+		if h.runtime.called("run") != 1 {
+			t.Fatalf("%s: a completed launch ran again", when)
+		}
+	}
+	for round := 0; round < 4; round++ {
+		for _, job := range jobs {
+			h.service.send(t, job)
+			h.service.send(t, job)
+		}
+		h.cycle()
+		if round == 1 {
+			h.open() // the completed marks survive a restart
+		}
+		unchanged(fmt.Sprintf("round %d", round))
+	}
+	// The ledger still prunes while the service keeps re-delivering.
+	h.clock.add(2*time.Hour + ledgerRetention + time.Minute)
+	keep := func(id string) bool { return h.daemon.Outbox.Known(id) && !h.daemon.Outbox.Completed(id) }
+	if err := h.daemon.Ledger.Prune(ledgerRetention, keep); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range jobs {
+		if _, err := h.daemon.Ledger.Get(job.ID); err == nil {
+			t.Fatalf("job %s was not pruned", job.ID)
+		}
+	}
+	// A pruned id stays answered by nothing: no new entry, no new event.
+	for _, job := range jobs {
+		h.service.send(t, job)
+	}
+	h.cycle()
+	unchanged("after the prune")
+	for _, job := range jobs {
+		if _, err := h.daemon.Ledger.Get(job.ID); err == nil {
+			t.Fatalf("job %s gained a new ledger entry after its prune", job.ID)
+		}
+	}
+}
+
 func TestCrashMidLaunchReportsHostRestarted(t *testing.T) {
 	h := newHarness(t)
 	job := h.launchJob(specBytes("oneshot", 30, "{}"), nil, nil)

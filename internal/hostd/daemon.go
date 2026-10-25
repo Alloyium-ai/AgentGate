@@ -324,6 +324,13 @@ func (d *Daemon) HandleEnvelope(ctx context.Context, env hostproto.Envelope) {
 		d.logf("dropped a job with an invalid id")
 		return
 	}
+	if d.Outbox.Completed(job.ID) {
+		// The service acknowledged this job's result. A repeat, even after
+		// its ledger entry was pruned, is answered by nothing: a new entry or
+		// a new result event would reopen a completed job.
+		d.logf("job %s repeated after the service acknowledged its result; ignored", job.ID)
+		return
+	}
 	entry, fresh, err := d.Ledger.Begin(LedgerEntry{JobID: job.ID, Type: job.Type, LaunchID: job.LaunchID,
 		SpecDigest: job.SpecDigest, PolicyDigest: job.PolicyDigest, DeadlineMS: job.DeadlineMS})
 	if err != nil {
@@ -343,13 +350,21 @@ func (d *Daemon) HandleEnvelope(ctx context.Context, env hostproto.Envelope) {
 }
 
 // repeat answers a job id seen before with its recorded result. A job still
-// running is never started again.
+// running is never started again. The result is queued again only when the
+// outbox holds nothing for the job: while it is queued it will be uploaded,
+// and once the service acknowledged it as complete the service already holds
+// it. Appending to a completed job would reopen it, and a service that keeps
+// re-delivering finished jobs would then grow its outbox without bound.
 func (d *Daemon) repeat(entry LedgerEntry) {
 	if entry.State != JobDone || entry.Result == nil {
 		d.logf("job %s repeated while %s; not run again", entry.JobID, entry.State)
 		return
 	}
-	if d.Outbox.Known(entry.JobID) && !d.Outbox.Completed(entry.JobID) {
+	if d.Outbox.Completed(entry.JobID) {
+		d.logf("job %s repeated after the service acknowledged its result; ignored", entry.JobID)
+		return
+	}
+	if d.Outbox.Known(entry.JobID) {
 		return // the recorded result is still queued for upload
 	}
 	result := *entry.Result
