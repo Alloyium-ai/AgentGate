@@ -100,7 +100,7 @@ function CreateProfile({ actor, onClose, onDone }: { actor: Actor; onClose: () =
             Launches of this profile need a second person's approval
             <small id="approval-help">
               {p.profilesAdmin
-                ? "Turning this off lets a launcher start agents with this profile alone, unless the launch needs approval for another reason."
+                ? "Turning this off approves version 1 as you create it: a launcher may start that version alone, unless the launch needs approval for another reason. Later versions need a second person until an administrator approves one."
                 : `New profiles always require approval. Only an administrator can create one that skips it (your roles: ${roleText(actor)}).`}
             </small>
           </span>
@@ -174,7 +174,13 @@ export function Profiles({ actor, epoch, navigate }: { actor: Actor; epoch: numb
                     <small>{x.description || "No description"}</small>
                   </td>
                   <td>v{x.latest_version}</td>
-                  <td>{x.require_approval ? <span className="badge pending">Second person required</span> : <span className="badge">Launcher may start alone</span>}</td>
+                  <td>
+                    {!x.require_approval && x.approved_version ? (
+                      <span className="badge">Launcher may start v{x.approved_version} alone</span>
+                    ) : (
+                      <span className="badge pending">Second person required</span>
+                    )}
+                  </td>
                   <td>
                     {when(x.created_at)}
                     <small>{x.created_by}</small>
@@ -737,7 +743,7 @@ export function ProfileDetail({ id: profileRef, selected, actor, epoch, navigate
   const profile = useResource<Profile>(`profiles/${encodeURIComponent(profileRef)}`, epoch);
   const versions = useResource<Items<ProfileVersion>>(`profiles/${encodeURIComponent(profileRef)}/versions`, epoch);
   const [compare, setCompare] = useState<number>();
-  const [dialog, setDialog] = useState<"approval" | "document">();
+  const [dialog, setDialog] = useState<"approval" | "require" | "document">();
   const [applied, setApplied] = useState<Applied>();
   const list = versions.data?.items || [];
   const byID = useMemo(() => new Map(list.map((v) => [v.id, v])), [list]);
@@ -769,16 +775,46 @@ export function ProfileDetail({ id: profileRef, selected, actor, epoch, navigate
         <p>
           {prof.require_approval
             ? "Every launch of this profile waits for a second person with the approver role. The requester can never approve their own launch."
-            : "A launcher may start this profile alone, unless the launch needs approval for another reason (inline access, live host folders, brokered secrets, public web, or the spec asks for it)."}
+            : prof.approved_version
+              ? `A launcher may start version ${prof.approved_version} alone, the version an administrator reviewed, unless the launch needs approval for another reason (inline access, live host folders, brokered secrets, public web, or the spec asks for it). Every other version, including newer ones, needs a second person.`
+              : "No version is approved for launches without a second person, so every launch needs approval."}
         </p>
+        {!prof.require_approval && prof.approved_version && (
+          <div className="metadata">
+            <div>
+              <span>Approved version</span>
+              <strong>
+                v{prof.approved_version} by {prof.approved_by} {prof.approved_at ? when(prof.approved_at) : ""}
+              </strong>
+            </div>
+            <div>
+              <span>Approved digest</span>
+              <Digest value={prof.approved_digest} label="Approved version digest" />
+            </div>
+          </div>
+        )}
         <Gate
           className="secondary"
-          allowed={p.profilesAdmin}
-          reason={`Only an administrator changes whether launches need approval. Your roles: ${roleText(actor)}.`}
+          allowed={p.profilesAdmin && !!current && (prof.require_approval || current.digest !== prof.approved_digest)}
+          reason={
+            !p.profilesAdmin
+              ? `Only an administrator changes whether launches need approval. Your roles: ${roleText(actor)}.`
+              : `Version ${current?.number} is already the approved version.`
+          }
           onClick={() => setDialog("approval")}
         >
-          {prof.require_approval ? "Let launchers start alone…" : "Require a second person…"}
+          {`Let launchers start v${current?.number ?? "?"} alone…`}
         </Gate>
+        {!prof.require_approval && (
+          <Gate
+            className="secondary"
+            allowed={p.profilesAdmin}
+            reason={`Only an administrator changes whether launches need approval. Your roles: ${roleText(actor)}.`}
+            onClick={() => setDialog("require")}
+          >
+            Require a second person…
+          </Gate>
+        )}
       </section>
       <div className="detail-grid">
         <div>
@@ -883,23 +919,46 @@ export function ProfileDetail({ id: profileRef, selected, actor, epoch, navigate
         </section>
       </div>
       <KernelNotice />
-      {dialog === "approval" && (
+      {dialog === "approval" && current && (
         <ConfirmDialog
-          title={prof.require_approval ? "Let launchers start this profile alone" : "Require a second person for every launch"}
-          confirmLabel="Change approval setting"
-          danger={prof.require_approval}
+          title={`Let launchers start version ${current.number} alone`}
+          confirmLabel={`Approve version ${current.number}`}
+          danger
           onClose={() => setDialog(undefined)}
           onConfirm={async (reason) => {
-            await api(`profiles/${prof.id}`, "PATCH", { require_approval: !prof.require_approval, reason });
+            await api(`profiles/${prof.id}`, "PATCH", { require_approval: false, version: current.number, digest: current.digest, reason });
             setDialog(undefined);
             reload();
           }}
         >
           <p>
-            {prof.require_approval
-              ? "After this, a launcher can start an agent with this profile without anyone else reviewing it, when nothing else in the launch needs approval. Every launch is still audited."
-              : "After this, every launch of this profile waits in approval_pending for a different person with the approver role."}
+            After this, a launcher can start an agent with version {current.number} of this profile without anyone else reviewing it, when nothing else in the launch needs approval. Every
+            launch is still audited. Every other version, including any version added later, needs a second person until an administrator approves it here.
           </p>
+          <div className="metadata">
+            <div>
+              <span>Version you reviewed</span>
+              <strong>v{current.number}</strong>
+            </div>
+            <div>
+              <span>Its digest (sent with the approval; a different one is refused)</span>
+              <Digest value={current.digest} label="Version digest" />
+            </div>
+          </div>
+        </ConfirmDialog>
+      )}
+      {dialog === "require" && (
+        <ConfirmDialog
+          title="Require a second person for every launch"
+          confirmLabel="Require approval"
+          onClose={() => setDialog(undefined)}
+          onConfirm={async (reason) => {
+            await api(`profiles/${prof.id}`, "PATCH", { require_approval: true, reason });
+            setDialog(undefined);
+            reload();
+          }}
+        >
+          <p>After this, every launch of this profile waits in approval_pending for a different person with the approver role, and no version stays approved.</p>
         </ConfirmDialog>
       )}
       {dialog === "document" && latest && (

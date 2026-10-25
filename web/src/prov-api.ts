@@ -40,6 +40,12 @@ export type Profile = {
   name: string;
   description: string;
   require_approval: boolean;
+  // With require_approval false, only this version (this digest) launches
+  // without a second human; every other version needs approval.
+  approved_version?: number;
+  approved_digest?: string;
+  approved_by?: string;
+  approved_at?: string;
   created_at: string;
   created_by: string;
   revision: number;

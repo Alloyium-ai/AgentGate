@@ -2,46 +2,46 @@
   "jobs": [
     {
       "attempts": 1,
-      "created_at": "2026-10-25T00:35:58.884861487Z",
-      "deadline": "2026-10-25T01:40:58.759Z",
+      "created_at": "2026-10-25T01:58:03.248367080Z",
+      "deadline": "2026-10-25T03:03:03.121Z",
       "event_seq": 2,
-      "id": "c3a908ed1f421fdce445931c81229804",
-      "key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
-      "launch_id": "d9c401af5318a31cba90f9f4c76c8f55",
+      "id": "bce7aa9a02636785966796dd468d0244",
+      "key_id": "ed25519:2f146d9736b073971b8c94afb474659c",
+      "launch_id": "04468a675a2cc2f33b1441109e689f48",
       "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
       "state": "delivered",
-      "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+      "target_id": "c58de5aaa7a9b49afe9203e70f4d301e",
       "type": "launch"
     },
     {
       "attempts": 1,
-      "completed_at": "2026-10-25T00:35:58.894574155Z",
-      "created_at": "2026-10-25T00:35:58.891153353Z",
-      "deadline": "2026-10-26T00:35:58.759Z",
+      "completed_at": "2026-10-25T01:58:03.257833196Z",
+      "created_at": "2026-10-25T01:58:03.254499506Z",
+      "deadline": "2026-10-26T01:58:03.121Z",
       "event_seq": 1,
-      "id": "8179444b6942f41f4bbf16cf216b9953",
-      "key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
-      "launch_id": "d9c401af5318a31cba90f9f4c76c8f55",
+      "id": "747e3ed5bf6b3732e4406587fed300b3",
+      "key_id": "ed25519:2f146d9736b073971b8c94afb474659c",
+      "launch_id": "04468a675a2cc2f33b1441109e689f48",
       "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
       "result": {
         "evidence_missing": "",
         "reason": "stopped",
-        "receipt_digest": "8162f57feb19d5ac5c639a2198c25c75061a8748d9c91717306465c47e6602dd",
+        "receipt_digest": "119bfa796eee4611067481243838014e93246a623544b726c40fbd058f50ecd5",
         "status": "succeeded"
       },
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
       "state": "succeeded",
-      "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+      "target_id": "c58de5aaa7a9b49afe9203e70f4d301e",
       "type": "stop"
     }
   ],
   "launch": {
     "approval_required": false,
-    "created_at": "2026-10-25T00:35:58.884269567Z",
-    "ended_at": "2026-10-25T00:35:58.894771721Z",
-    "expires_at": "2026-10-25T01:35:58.759Z",
-    "id": "d9c401af5318a31cba90f9f4c76c8f55",
+    "created_at": "2026-10-25T01:58:03.247548830Z",
+    "ended_at": "2026-10-25T01:58:03.257958577Z",
+    "expires_at": "2026-10-25T02:58:03.121Z",
+    "id": "04468a675a2cc2f33b1441109e689f48",
     "kernel_verified": false,
     "lifetime_seconds": 3600,
     "mode": "session",
@@ -61,6 +61,7 @@
       "mode": "session",
       "mounts": [],
       "notices": [
+        "approved profile version grants: the taskboard bridge /run/agentgate/taskboard (read-only)",
         "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
         "the target does not advertise bpf-lsm; the host fails closed if it cannot enforce the policy"
       ],
@@ -106,16 +107,18 @@
       },
       "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
       "profile": {
+        "approved_digest": "9d06a5d87bcc579ecc027ac11fb1062413a9865118a933c6ea6103847376da51",
+        "approved_version": 1,
         "digest": "9d06a5d87bcc579ecc027ac11fb1062413a9865118a933c6ea6103847376da51",
-        "id": "f7892339076b69bd06bab967eaf42c85",
+        "id": "69e604f7b51830d2c5e9892f9ca97c93",
         "name": "dev",
         "version": 1,
-        "version_id": "1839a3f6bf8c1a185f0e17805df5462c"
+        "version_id": "2316bbc83d9e55227f4937e221873e1f"
       },
       "secrets": [],
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
       "target": {
-        "id": "590c422db60dad1d354e64bc1cf9f38d",
+        "id": "c58de5aaa7a9b49afe9203e70f4d301e",
         "name": "local"
       },
       "workdir": "/var/lib/agentgate/workspace"
@@ -184,26 +187,26 @@
       }
     },
     "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
-    "profile_version_id": "1839a3f6bf8c1a185f0e17805df5462c",
-    "queued_at": "2026-10-25T00:35:58.884621810Z",
+    "profile_version_id": "2316bbc83d9e55227f4937e221873e1f",
+    "queued_at": "2026-10-25T01:58:03.248089817Z",
     "receipt": {
       "bpf_objects": {
         "network.bpf.o": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       },
       "broker_counts": {},
       "domain_empty": true,
-      "ended_at_ms": 1792888558759,
+      "ended_at_ms": 1792893483121,
       "enforcement_released": true,
       "exit_code": 0,
       "guard_digest": "",
       "kernel_verified": false,
-      "launch_id": "d9c401af5318a31cba90f9f4c76c8f55",
+      "launch_id": "04468a675a2cc2f33b1441109e689f48",
       "mounts": [],
       "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
       "reason": "exited",
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
-      "started_at_ms": 1792888558759,
-      "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+      "started_at_ms": 1792893483121,
+      "target_id": "c58de5aaa7a9b49afe9203e70f4d301e",
       "version": "agentgate.receipt.v1"
     },
     "requested_by": "oidc:lin",
@@ -235,11 +238,11 @@
       "version": "agentgate.launch.v1"
     },
     "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
-    "started_at": "2026-10-25T00:35:58.889173925Z",
+    "started_at": "2026-10-25T01:58:03.252444630Z",
     "state": "stopped",
     "stop_reason": "Done",
-    "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+    "target_id": "c58de5aaa7a9b49afe9203e70f4d301e",
     "terminal_reason": "The host confirmed an empty domain and released enforcement",
-    "updated_at": "2026-10-25T00:35:58.894771721Z"
+    "updated_at": "2026-10-25T01:58:03.257958577Z"
   }
 }

@@ -262,7 +262,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `target retire NAME [--yes] [--force]` | `DELETE /targets/{id}` | confirms; the host removes the target's secrets first (the target is `retiring` until it confirms), then the host key is revoked; `--force` finishes without the host (values may remain on it) |
 | `profile ls`, `profile show NAME [--version N]`, `profile versions NAME` | `GET /profiles...` | |
 | `profile new NAME [--preset P \| --file F] [--description D] [--no-approval]` | `POST /profiles` | `--no-approval` is for administrators |
-| `profile approval NAME required\|auto` | `PATCH /profiles/{id}` | administrators |
+| `profile approval NAME required\|auto [--version N]` | `GET /profiles/{id}/versions/{n}`, `PATCH /profiles/{id}` | administrators; `auto` needs `--version N`, prints that version's digest and sends it: only that reviewed version launches without a second human, every other version (a newer one too) needs approval |
 | `preset ls` | `GET /access-presets` | presets, grant actions and revoke kinds |
 | `grant PROFILE ACTION [VALUE...] [--mode M] [--upgrade] [--dry-run]` | `POST /profiles/{id}/versions/{n}/grants` | actions below |
 | `launch (-f SPEC \| FLAGS) [--dry-run] [--wait] [--until running\|done] [--wait-timeout D] [-- CMD...]` | `POST /launch-plans`, `POST /launches`, events | flags below |

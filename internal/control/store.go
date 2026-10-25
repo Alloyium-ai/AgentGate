@@ -184,16 +184,34 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	for _, c := range retirementColumns {
-		if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+	if version < 7 {
+		for _, c := range retirementColumns {
+			if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`PRAGMA user_version=7;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 7", RequestID: "migration-7"}, "committed"); err != nil {
 			return err
 		}
 	}
-	if _, err = tx.Exec(`PRAGMA user_version=7;`); err != nil {
-		return err
-	}
-	if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 7", RequestID: "migration-7"}, "committed"); err != nil {
-		return err
+	for _, step := range laterMigrations {
+		if version >= step.version {
+			continue
+		}
+		for _, c := range step.columns {
+			if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(step.statements + fmt.Sprintf(" PRAGMA user_version=%d;", step.version)); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: fmt.Sprintf("Migrate schema to version %d", step.version), RequestID: fmt.Sprintf("migration-%d", step.version)}, "committed"); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

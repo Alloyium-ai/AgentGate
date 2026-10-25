@@ -3,7 +3,7 @@
 package control
 
 // SchemaVersion is the database user_version this build writes.
-const SchemaVersion = 7
+const SchemaVersion = 8
 
 // provisioningSchema adds targets, profiles, launches, jobs, secrets metadata
 // and API tokens. Every statement is idempotent. Bindings that the contract
@@ -108,4 +108,31 @@ CREATE TRIGGER IF NOT EXISTS target_seal_key_json BEFORE UPDATE OF seal_key ON t
 var retirementColumns = []struct{ table, column, decl string }{
 	{"targets", "retiring", "TEXT NOT NULL DEFAULT ''"},
 	{"secrets", "removal", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// migration is one forward-only schema step after version 7: columns added
+// idempotently (addColumn) and statements that are idempotent themselves
+// (CREATE ... IF NOT EXISTS, DROP ... IF EXISTS before a re-create).
+type migration struct {
+	version    int
+	columns    []struct{ table, column, decl string }
+	statements string
+}
+
+// laterMigrations run in order from the database's version to SchemaVersion.
+var laterMigrations = []migration{
+	// Version 8: the profile version an administrator approved for launches
+	// without a second human. Automatic approval needs the launched version's
+	// digest to equal approved_digest; the trigger keeps the pair naming a
+	// real version of the same profile.
+	{version: 8, columns: []struct{ table, column, decl string }{
+		{"profiles", "approved_version_id", "TEXT NOT NULL DEFAULT ''"},
+		{"profiles", "approved_digest", "TEXT NOT NULL DEFAULT ''"},
+		{"profiles", "approved_by", "TEXT NOT NULL DEFAULT ''"},
+		{"profiles", "approved_at", "TEXT NOT NULL DEFAULT ''"},
+	}, statements: `
+DROP TRIGGER IF EXISTS profile_approved_version_exists;
+CREATE TRIGGER profile_approved_version_exists BEFORE UPDATE OF approved_version_id,approved_digest ON profiles WHEN NEW.approved_digest<>'' AND NOT EXISTS (SELECT 1 FROM profile_versions v WHERE v.id=NEW.approved_version_id AND v.profile_id=NEW.id AND v.digest=NEW.approved_digest) BEGIN SELECT RAISE(ABORT,'approved profile version must exist'); END;
+DROP TRIGGER IF EXISTS profile_approved_pair;
+CREATE TRIGGER profile_approved_pair BEFORE UPDATE OF approved_version_id,approved_digest,approved_by,approved_at ON profiles WHEN (NEW.approved_digest='') <> (NEW.approved_version_id='') OR (NEW.approved_digest<>'' AND (NEW.approved_by='' OR NEW.approved_at='')) BEGIN SELECT RAISE(ABORT,'an approved profile version names its digest, administrator and time'); END;`},
 }

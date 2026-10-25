@@ -53,6 +53,7 @@
         "live host folder repo",
         "public web access",
         "secret wild-api has wildcard broker rules",
+        "signals beyond the defaults: SIGALRM, SIGCHLD, SIGPIPE, SIGWINCH",
         "the profile requires approval"
       ],
       "broker": {
@@ -66,7 +67,7 @@
         "--print",
         "fix the failing tests"
       ],
-      "expires_at": "2026-10-25T01:35:58Z",
+      "expires_at": "2026-10-25T02:58:03Z",
       "expiry_rule": "the lifetime starts when the launch is queued; the host and the kernel policy end it at expires_at",
       "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "kernel_verified": false,
@@ -148,10 +149,10 @@
       "policy_digest": "81f01d23000f075939ccc4768852296c697f313e0fe2726039e21cefd3e78f5f",
       "profile": {
         "digest": "e51c290b9ee93aeee99c246e06387a843fcf85363c26abd0133eca5c39badf9a",
-        "id": "fa305806338e71cbe9cf821cc2da0ab3",
+        "id": "a68248290c1892d6a3262fe1ac50ef92",
         "name": "python-dev",
         "version": 2,
-        "version_id": "f8d3cc1f2b87d19b5c43b85a3c5f1a6d"
+        "version_id": "3af28dd0699f8eaa2e006f5c00aaa4d2"
       },
       "secrets": [
         {
@@ -180,12 +181,12 @@
             }
           ],
           "scheme": "Basic",
-          "secret_id": "43a49a04b778ec0715572ae6e1070ab1",
+          "secret_id": "6c37a53f06d5cb3f5ae0214a8e93dea3",
           "upstreams": [
             "api.docs.example"
           ],
           "username": "agent",
-          "value_fingerprint": "sfp1_25bc6686ea54de9c1d9d90c9f3cb6e42",
+          "value_fingerprint": "sfp1_01e75c1fd18e399ee73fc04f2f0095c1",
           "wildcard_rules": false
         },
         {
@@ -210,17 +211,17 @@
             }
           ],
           "scheme": "",
-          "secret_id": "5c563a3eea17e724636e60640c36f362",
+          "secret_id": "0b003feaac600b8d4bc625e7220d6050",
           "upstreams": [
             "api.wild.example"
           ],
-          "value_fingerprint": "sfp1_42d33c7a1f924c39f7e7dfed10a674b0",
+          "value_fingerprint": "sfp1_780d37b59712f5d07d860eec65ceefa8",
           "wildcard_rules": true
         }
       ],
       "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
       "target": {
-        "id": "590c422db60dad1d354e64bc1cf9f38d",
+        "id": "c58de5aaa7a9b49afe9203e70f4d301e",
         "name": "local"
       },
       "workdir": "/var/lib/agentgate/workspace"

@@ -58,13 +58,23 @@ func init() {
 		}
 	}})
 	register(&command{name: "profile approval", args: "NAME required|auto", summary: "Set whether launches of a profile need a second human (admin).",
-		help: "  --reason TEXT", setup: func(fs *flag.FlagSet) runner {
+		help: `  --version N   with auto (required): the one version you reviewed; launchers may start only that
+                version alone, every other version (a newer one too) needs a second human
+  --reason TEXT
+auto prints the version's digest and sends it, so a version that differs from the one you looked at is refused.`, setup: func(fs *flag.FlagSet) runner {
 			reason := fs.String("reason", "", "")
+			version := fs.Int("version", 0, "")
 			return func(ctx context.Context, e *env, args, _ []string) error {
 				if len(args) != 2 || (args[1] != "required" && args[1] != "auto") {
 					return usageError("profile approval takes a profile name and required or auto")
 				}
-				return e.profileApproval(ctx, args[0], args[1] == "required", *reason)
+				if args[1] == "auto" && *version < 1 {
+					return usageError("profile approval NAME auto approves one reviewed version: pass --version N (agentgate profile show NAME --version N shows it)")
+				}
+				if args[1] == "required" && *version != 0 {
+					return usageError("--version goes with auto only")
+				}
+				return e.profileApproval(ctx, args[0], args[1] == "required", *version, *reason)
 			}
 		}})
 	register(&command{name: "preset ls", summary: "List access presets and the grant actions.", setup: func(fs *flag.FlagSet) runner {
@@ -200,8 +210,8 @@ func (e *env) profileList(ctx context.Context) error {
 		rows := [][]string{}
 		for _, p := range list.Items {
 			approval := "required"
-			if !p.RequireApproval {
-				approval = "auto"
+			if !p.RequireApproval && p.ApprovedVersion > 0 {
+				approval = "auto v" + strconv.Itoa(p.ApprovedVersion)
 			}
 			rows = append(rows, []string{p.Name, strconv.Itoa(p.LatestVersion), approval, p.CreatedBy, p.Description})
 		}
@@ -242,8 +252,11 @@ func (e *env) profileShow(ctx context.Context, ref string, n int) error {
 		return e.p.value(map[string]any{"profile": p, "version": v})
 	}
 	approval := "required for every launch"
-	if !p.RequireApproval {
-		approval = "not required by the profile (other reasons may still require it)"
+	switch {
+	case !p.RequireApproval && p.ApprovedVersion > 0:
+		approval = fmt.Sprintf("not required for version %d (digest %s, approved by %s); every other version needs approval (other reasons may still require it)", p.ApprovedVersion, shortDigest(p.ApprovedDigest), p.ApprovedBy)
+	case !p.RequireApproval:
+		approval = "required: no version is approved for launches without approval"
 	}
 	e.p.fields("", [][2]string{{"name", p.Name}, {"id", p.ID}, {"description", p.Description}, {"approval", approval},
 		{"version", fmt.Sprintf("%d of %d", v.Number, p.LatestVersion)}, {"digest", v.Digest}, {"changed by", v.Actor}, {"reason", v.Reason}, {"created", v.Created}})
@@ -325,7 +338,7 @@ func (e *env) profileNew(ctx context.Context, name, preset, file, description st
 	return e.emit(raw, func() error {
 		approval := "need approval by a second human"
 		if !out.Profile.RequireApproval {
-			approval = "skip approval unless the plan requires it"
+			approval = "of this version skip approval unless the plan requires it (later versions need approval until an administrator approves one)"
 		}
 		e.p.line("Created profile %s (version %d, digest %s); its launches %s.", out.Profile.Name, out.Version.Number, shortDigest(out.Version.Digest), approval)
 		e.p.note("Grant access with agentgate grant %s read|write|exec|web|... (agentgate grant --help).", out.Profile.Name)
@@ -365,7 +378,7 @@ func (e *env) profileVersions(ctx context.Context, ref string) error {
 	})
 }
 
-func (e *env) profileApproval(ctx context.Context, ref string, required bool, reason string) error {
+func (e *env) profileApproval(ctx context.Context, ref string, required bool, version int, reason string) error {
 	c, err := e.authed()
 	if err != nil {
 		return err
@@ -374,13 +387,33 @@ func (e *env) profileApproval(ctx context.Context, ref string, required bool, re
 	if reason, err = defaultReason(reason, "Set launch approval of profile "+ref+" to "+word); err != nil {
 		return err
 	}
+	body := map[string]any{"require_approval": required, "reason": reason}
+	if !required {
+		pr, err := e.getProfile(ctx, c, ref)
+		if err != nil {
+			return err
+		}
+		v, _, err := e.getVersion(ctx, c, pr.ID, version)
+		if err != nil {
+			return err
+		}
+		if !e.g.json {
+			e.p.line("Approving profile %s version %d (digest %s) for launches without a second human.", pr.Name, v.Number, v.Digest)
+			e.p.note("Every other version of the profile, including newer ones, still needs approval.")
+		}
+		body["version"], body["digest"] = v.Number, v.Digest
+	}
 	var p Profile
-	raw, err := c.mutate(ctx, "PATCH", apiPrefix+"/profiles/"+pathEscape(ref), map[string]any{"require_approval": required, "reason": reason}, true, &p)
+	raw, err := c.mutate(ctx, "PATCH", apiPrefix+"/profiles/"+pathEscape(ref), body, true, &p)
 	if err != nil {
 		return err
 	}
 	return e.emit(raw, func() error {
-		e.p.line("Profile %s: launch approval %s.", p.Name, word)
+		if required {
+			e.p.line("Profile %s: launch approval required.", p.Name)
+		} else {
+			e.p.line("Profile %s: launches of version %d (digest %s) start without approval; other versions need it.", p.Name, p.ApprovedVersion, shortDigest(p.ApprovedDigest))
+		}
 		return nil
 	})
 }

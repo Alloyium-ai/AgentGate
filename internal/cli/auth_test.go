@@ -151,9 +151,20 @@ func TestMoreTargetProfileAndAuditCommands(t *testing.T) {
 	if r = h.run("", "target", "rename", "local", "edge"); r.code != 0 || !strings.Contains(r.stdout, "to edge") {
 		t.Fatalf("%v", r)
 	}
-	h.api.reply("PATCH /api/v1/profiles/{id}", 200, control.Profile{ID: "p1", Name: "dev", RequireApproval: false})
-	if r = h.run("", "profile", "approval", "dev", "auto"); r.code != 0 || !strings.Contains(r.stdout, "launch approval auto") {
+	digest := strings.Repeat("d", 64)
+	h.api.reply("PATCH /api/v1/profiles/{id}", 200, control.Profile{ID: "p1", Name: "dev", RequireApproval: false, ApprovedVersion: 2, ApprovedDigest: digest})
+	h.api.reply("GET /api/v1/profiles/{id}", 200, control.Profile{ID: "p1", Name: "dev", RequireApproval: true, LatestVersion: 2})
+	h.api.reply("GET /api/v1/profiles/{id}/versions/{n}", 200, control.ProfileVersion{ID: "v2", ProfileID: "p1", Number: 2, Digest: digest, Document: json.RawMessage(`{}`)})
+	if r = h.run("", "profile", "approval", "dev", "auto"); r.code != ExitUsage || !strings.Contains(r.stderr, "--version N") {
+		t.Fatalf("auto approves one named version: %v", r)
+	}
+	if r = h.run("", "profile", "approval", "dev", "auto", "--version", "2"); r.code != 0 || !strings.Contains(r.stdout, "version 2 (digest "+digest) || !strings.Contains(r.stdout, "other versions need it") {
 		t.Fatalf("%v", r)
+	}
+	var sent map[string]any
+	mustDecode(t, h.api.requestsTo("PATCH /api/v1/profiles/{id}")[0].Body, &sent)
+	if sent["require_approval"] != false || sent["version"] != float64(2) || sent["digest"] != digest {
+		t.Fatalf("PATCH body %v", sent)
 	}
 	if r = h.run("", "profile", "approval", "dev", "maybe"); r.code != ExitUsage {
 		t.Fatalf("%v", r)

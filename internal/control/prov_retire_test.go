@@ -314,7 +314,7 @@ func TestSchemaSevenMigratesAVersionSixDatabase(t *testing.T) {
 	s.DB.QueryRow("SELECT count(*) FROM audit WHERE request_id='migration-6'").Scan(&six)
 	s.DB.QueryRow("SELECT count(*) FROM audit WHERE request_id='migration-7'").Scan(&seven)
 	s.DB.QueryRow("SELECT count(*) FROM targets WHERE retiring=''").Scan(&targets)
-	if version != 7 || six != 1 || seven != 2 || targets != 1 {
+	if version != SchemaVersion || six != 1 || seven != 2 || targets != 1 {
 		t.Fatalf("version %d, migration six %d and seven %d times, %d targets", version, six, seven, targets)
 	}
 	if _, err := s.TargetDetail("local"); err != nil {

@@ -5,13 +5,13 @@
       "seq": 1,
       "stream": "stdout",
       "text": "collecting the docs",
-      "time": "2026-10-25T00:35:58.759Z"
+      "time": "2026-10-25T01:58:03.121Z"
     },
     {
       "seq": 2,
       "stream": "stdout",
       "text": "wrote 3 files",
-      "time": "2026-10-25T00:35:58.759Z"
+      "time": "2026-10-25T01:58:03.121Z"
     }
   ],
   "limit_bytes": 1048576,

@@ -7,20 +7,20 @@
     "brokered-secrets",
     "pocpolicy-v2"
   ],
-  "created_at": "2026-10-25T00:35:58.928559494Z",
+  "created_at": "2026-10-25T01:58:03.284599920Z",
   "created_by": "oidc:ada",
-  "encryption_key": "Il4p-fgB3BVCceFo3BPPwbhFnH_mTcsbyM9aE-pvsk0",
+  "encryption_key": "_LZ0KCdnt1P9DP9lyw4bpKi1D-3qFr5sgO4CmAxuUWg",
   "heartbeat_seconds": 10,
-  "host_key_id": "ed25519:ab6588e83266efcac6d7097fb0db6ba0",
-  "host_public_key": "mD6YXDwlsXGNdVUFd1WsI6eEcJ_L7Vm59qD0BL046Fs",
+  "host_key_id": "ed25519:4d67735eb1feab8b841e4be03638ac26",
+  "host_public_key": "HrF6boHBBhiKLynC47fg2TKQce_Zt2eqfHMoaLTzkpg",
   "hostname": "host-1",
-  "id": "da77486e40733bddd6ee884c30355077",
-  "job_key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+  "id": "097a6432e73b4c073f89bb7ae173fa02",
+  "job_key_id": "ed25519:2f146d9736b073971b8c94afb474659c",
   "kernel_verified": false,
-  "last_seen_at": "2026-10-25T00:35:58.759Z",
+  "last_seen_at": "2026-10-25T01:58:03.121Z",
   "name": "waiting-host",
   "online": false,
   "revision": 2,
   "state": "awaiting_key_approval",
-  "updated_at": "2026-10-25T00:35:58.929945690Z"
+  "updated_at": "2026-10-25T01:58:03.285962666Z"
 }

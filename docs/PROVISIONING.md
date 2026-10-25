@@ -80,9 +80,23 @@ Rules every implementation enforces (`internal/control/prov_launchspec.go`; JSON
   field such as `value` is rejected).
 - `approval` is `auto` or `required`. `auto` is honoured only when nothing requires a second human. Approval is
   required when any of these hold: the spec says `required`; the profile has `require_approval` (the default for a
-  new profile; only an administrator creates or changes a profile that skips it); access is an inline document; any
-  mount is live (`read-only` or `read-write`); any secret is referenced; the effective policy allows public web. The
-  plan lists every reason. A launch that needs approval waits in `approval_pending` for a different human with the
+  new profile); the launched profile version is not the one an administrator approved for launches without approval
+  (below); access is an inline document; any mount is live (`read-only` or `read-write`); any secret is referenced;
+  the effective policy allows public web. The plan lists every reason.
+- Automatic approval is per profile **version**, not per profile. Only an administrator relaxes a profile
+  (`PATCH /profiles/{id}` with `require_approval: false`, the `version` they reviewed and its `digest`; or creating a
+  profile with `require_approval: false`, which approves its first version), and the service stores that version's
+  id and digest with the administrator and the time (`approved_version`, `approved_digest`, `approved_by`,
+  `approved_at`; audited as `profile.approval.changed`; a trigger keeps the pair naming a real version of the
+  profile). Creating a version never approves it, so an editor who widens an approved profile cannot start the wider
+  version alone: a launch of any version whose digest differs from `approved_digest` needs a second human, and its
+  approval reasons name the drift from the approved version (DNS resolvers, the taskboard endpoint, public web, any
+  workspace, scratch, read-only, execute, device or signal not in the approved version, any deny tree removed, new
+  anonymous executable memory), plus what the version grants beyond the shipped defaults (DNS resolvers other than
+  `1.1.1.1`, a taskboard endpoint other than `10.10.10.10:8080`, the taskboard bridge, anonymous executable memory,
+  devices and signals beyond the defaults). A launch of exactly the approved version lists the latter as notices.
+  Requiring approval again clears the approved version; a profile migrated from schema 7 without one launches
+  nothing alone until an administrator approves a version. A launch that needs approval waits in `approval_pending` for a different human with the
   `approver` (or `admin`) role. The requester can never decide their own launch, with any credential.
 - Brokered secrets need a stored profile. Each secret is scoped to the profiles (`allowed_profiles`) and human
   subjects (`allowed_launchers`) that may reference it; the scope is checked when the launch is planned and again when
@@ -279,7 +293,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/targets/{id}/enrollment` | POST | admin | a new one-time token (reinstall, job key rotation) |
 | `/targets/{id}/approve-key` | POST | admin | approve the presented host key fingerprint; activates the target |
 | `/profiles` | GET, POST | viewer, editor | list; create from a preset, a document or the full example |
-| `/profiles/{id}` | GET, PATCH | viewer, admin | detail; change `require_approval` (admin only) |
+| `/profiles/{id}` | GET, PATCH | viewer, admin | detail; change `require_approval` (admin only): `false` approves exactly one reviewed `version` and `digest`, `true` clears it |
 | `/profiles/{id}/versions` | GET, POST | viewer, editor | immutable versions; a new version names the latest as its parent |
 | `/profiles/{id}/versions/{n}` | GET | viewer | one version with its document and digest |
 | `/profiles/{id}/versions/{n}/grants` | POST | editor | 1 to 16 typed edits (read, write, exec, deny, allow-web, deny-web, dns, signal, anon-exec, mount, unmount, device, preset, revoke) on the latest version, producing a new version or a no-op; `"dry_run": true` answers the same (document, `from_digest`, `digest`, `changes`) and stores nothing |
@@ -333,7 +347,7 @@ agentgate up [--target local] [--service-url URL] [--compose-file F] [--approve]
 agentgate login URL [--token-stdin] | logout [--revoke] | whoami | context ls|use|rm   API token in a 0600 config
 agentgate target ls | add NAME | enroll NAME | status NAME | approve-key NAME --host-key-id ID
 agentgate target pin NAME --host-key-id ID | rename NAME NEW | retire NAME
-agentgate profile ls | show NAME | new NAME [--preset P | --file DOC] | versions NAME | approval NAME required|auto
+agentgate profile ls | show NAME | new NAME [--preset P | --file DOC] | versions NAME | approval NAME required|auto --version N
 agentgate preset ls
 agentgate grant PROFILE read|write|exec|deny PATH | web [allow|deny] PROTO... | dns IP... | signal SIG...
                         | anon-exec | mount NAME [--mode read-only|read-write] | unmount NAME | device DEVICE | preset NAME

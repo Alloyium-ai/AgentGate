@@ -3,6 +3,7 @@
 package control
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,15 +16,28 @@ import (
 )
 
 // Profile is a named, versioned access policy.
+//
+// RequireApproval false lets a launcher start a launch alone only when it
+// uses exactly the version an administrator reviewed and approved for that:
+// ApprovedVersion and ApprovedDigest (by ApprovedBy, at ApprovedAt). A launch
+// of any other version, including a newer one an editor added, needs a second
+// human. Only an administrator sets or clears the approved version
+// (PATCH /profiles/{id}, audited as profile.approval.changed); creating a
+// version never does.
 type Profile struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
 	Description     string `json:"description"`
 	RequireApproval bool   `json:"require_approval"`
+	ApprovedVersion int    `json:"approved_version,omitempty"`
+	ApprovedDigest  string `json:"approved_digest,omitempty"`
+	ApprovedBy      string `json:"approved_by,omitempty"`
+	ApprovedAt      string `json:"approved_at,omitempty"`
 	Created         string `json:"created_at"`
 	CreatedBy       string `json:"created_by"`
 	Revision        int    `json:"revision"`
 	LatestVersion   int    `json:"latest_version"`
+	approvedID      string
 }
 
 // ProfileVersion is one immutable, digest-addressed policy document.
@@ -68,8 +82,12 @@ type GrantInput struct {
 }
 
 // ProfileSettingsInput changes whether launches of a profile need approval.
+// RequireApproval false approves exactly Version, whose digest the
+// administrator reviewed and repeats in Digest; true clears the approval.
 type ProfileSettingsInput struct {
 	RequireApproval bool   `json:"require_approval"`
+	Version         int    `json:"version,omitempty"`
+	Digest          string `json:"digest,omitempty"`
 	Reason          string `json:"reason"`
 }
 
@@ -80,8 +98,10 @@ var descriptionPattern = regexp.MustCompile(`^[^\x00-\x08\x0b-\x1f\x7f]{0,1000}$
 func (s *Store) profileBy(q queryer, ref string) (Profile, error) {
 	var p Profile
 	scan := func(where string) error {
-		return q.QueryRow("SELECT p.id,p.name,p.description,p.require_approval,p.created,p.created_by,p.revision,(SELECT coalesce(max(number),0) FROM profile_versions v WHERE v.profile_id=p.id) FROM profiles p WHERE "+where, ref).
-			Scan(&p.ID, &p.Name, &p.Description, &p.RequireApproval, &p.Created, &p.CreatedBy, &p.Revision, &p.LatestVersion)
+		return q.QueryRow("SELECT p.id,p.name,p.description,p.require_approval,p.created,p.created_by,p.revision,(SELECT coalesce(max(number),0) FROM profile_versions v WHERE v.profile_id=p.id),"+
+			"p.approved_version_id,p.approved_digest,p.approved_by,p.approved_at,(SELECT coalesce(max(number),0) FROM profile_versions v WHERE v.id=p.approved_version_id AND v.profile_id=p.id) FROM profiles p WHERE "+where, ref).
+			Scan(&p.ID, &p.Name, &p.Description, &p.RequireApproval, &p.Created, &p.CreatedBy, &p.Revision, &p.LatestVersion,
+				&p.approvedID, &p.ApprovedDigest, &p.ApprovedBy, &p.ApprovedAt, &p.ApprovedVersion)
 	}
 	err := scan("p.id=?")
 	if errors.Is(err, sql.ErrNoRows) {
@@ -243,7 +263,7 @@ func (s *Store) CreateProfile(op Operation, in ProfileInput) (any, error) {
 			return nil, fail(409, "profile_limit", "The profile limit is reached.")
 		}
 		p := Profile{ID: newID(), Name: in.Name, Description: in.Description, RequireApproval: requireApproval, Created: stamp(), CreatedBy: operation.Actor.Subject, Revision: 1}
-		if _, err = tx.Exec("INSERT INTO profiles VALUES(?,?,?,?,?,?,1)", p.ID, p.Name, p.Description, p.RequireApproval, p.Created, p.CreatedBy); err != nil {
+		if _, err = tx.Exec("INSERT INTO profiles(id,name,description,require_approval,created,created_by,revision) VALUES(?,?,?,?,?,?,1)", p.ID, p.Name, p.Description, p.RequireApproval, p.Created, p.CreatedBy); err != nil {
 			return nil, fail(409, "profile_exists", "A profile already uses this name.")
 		}
 		edits := []access.Edit{}
@@ -256,12 +276,26 @@ func (s *Store) CreateProfile(op Operation, in ProfileInput) (any, error) {
 		}
 		p.LatestVersion = 1
 		operation.Resource, operation.Version = "profile:"+p.ID, v.ID
+		if !requireApproval {
+			// The administrator creating a profile that skips approval reviewed
+			// exactly this first version: it is the approved one, audited here.
+			if err = approveProfileVersion(tx, p.ID, v, operation.Actor.Subject); err != nil {
+				return nil, err
+			}
+			operation.After = map[string]any{"approved_version": 1, "approved_digest": v.Digest}
+		}
+		p, err = s.profileBy(tx, p.ID)
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{"profile": p, "version": v}, nil
 	})
 }
 
 // SetProfileApproval changes whether launches of a profile need approval.
-// Administrators only: relaxing it lets launchers start agents alone.
+// Administrators only: relaxing it lets launchers start agents alone, and
+// only with the one version the administrator names and reviewed (Version,
+// whose digest must equal Digest). Requiring approval clears it.
 func (s *Store) SetProfileApproval(op Operation, ref string, in ProfileSettingsInput) (any, error) {
 	op.Action, op.Resource, op.Reason = "profile.approval.changed", "profile:"+ref, safeReason(in.Reason)
 	return s.Mutation(op, "profiles:admin", true, func(tx *sql.Tx, operation *Operation) (any, error) {
@@ -272,13 +306,49 @@ func (s *Store) SetProfileApproval(op Operation, ref string, in ProfileSettingsI
 		if err != nil {
 			return nil, err
 		}
-		operation.Resource, operation.Before = "profile:"+p.ID, map[string]bool{"require_approval": p.RequireApproval}
-		if _, err = tx.Exec("UPDATE profiles SET require_approval=?,revision=revision+1 WHERE id=?", in.RequireApproval, p.ID); err != nil {
+		operation.Resource = "profile:" + p.ID
+		operation.Before = map[string]any{"require_approval": p.RequireApproval, "approved_version": p.ApprovedVersion, "approved_digest": p.ApprovedDigest}
+		if in.RequireApproval {
+			if in.Version != 0 || in.Digest != "" {
+				return nil, fail(422, "invalid_profile", "Requiring approval approves no version; omit version and digest.")
+			}
+			if _, err = tx.Exec("UPDATE profiles SET require_approval=1,approved_version_id='',approved_digest='',approved_by='',approved_at='',revision=revision+1 WHERE id=?", p.ID); err != nil {
+				return nil, err
+			}
+			return s.profileBy(tx, p.ID)
+		}
+		if in.Version < 1 || !digestPattern.MatchString(in.Digest) {
+			return nil, fail(422, "approved_version_required", "Letting launchers start alone approves one reviewed version: give its number as version and its SHA-256 as digest.")
+		}
+		v, err := profileVersionFrom(tx, p.ID, in.Version)
+		if err != nil {
 			return nil, err
 		}
+		if _, err = v.document(); err != nil {
+			return nil, err
+		}
+		if subtle.ConstantTimeCompare([]byte(v.Digest), []byte(in.Digest)) != 1 {
+			return nil, fail(409, "digest_mismatch", "Version "+itoa(v.Number)+" has digest "+v.Digest+", not the one you reviewed. Review the version again.")
+		}
+		if _, err = tx.Exec("UPDATE profiles SET require_approval=0,revision=revision+1 WHERE id=?", p.ID); err != nil {
+			return nil, err
+		}
+		if err = approveProfileVersion(tx, p.ID, v, operation.Actor.Subject); err != nil {
+			return nil, err
+		}
+		operation.Version = v.ID
 		return s.profileBy(tx, p.ID)
 	})
 }
+
+// approveProfileVersion records v as the version launches may use without a
+// second human. Callers are administrator mutations, which audit it.
+func approveProfileVersion(tx *sql.Tx, profileID string, v ProfileVersion, admin string) error {
+	_, err := tx.Exec("UPDATE profiles SET approved_version_id=?,approved_digest=?,approved_by=?,approved_at=? WHERE id=?", v.ID, v.Digest, admin, stamp(), profileID)
+	return err
+}
+
+var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // CreateProfileVersion stores a new document as the next version.
 func (s *Store) CreateProfileVersion(op Operation, ref string, in ProfileVersionInput) (any, error) {

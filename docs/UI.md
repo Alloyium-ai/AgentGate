@@ -233,7 +233,7 @@ signed-in person with a role.
 | Access profiles, versions, compare | `profile ls`, `profile show`, `profile versions` | `GET /profiles…` |
 | New profile | `profile new NAME --preset P` | `POST /profiles` |
 | Change access: preview / apply | `grant P ACTION … --dry-run` / `grant P ACTION …` | `POST /profiles/{id}/versions/{n}/grants` |
-| Launch approval setting | `profile approval NAME required\|auto` | `PATCH /profiles/{id}` |
+| Launch approval setting (approves the selected version and digest) | `profile approval NAME required\|auto --version N` | `PATCH /profiles/{id}` |
 | Launch: Review & plan / Launch | `launch --dry-run -f SPEC` / `launch -f SPEC` | `POST /launch-plans`, `POST /launches` |
 | Launches, launch page | `ps`, `show ID` | `GET /launches`, `GET /launches/{id}` |
 | State timeline (live) | `events ID -f` | `GET /launches/{id}/events` (SSE) |

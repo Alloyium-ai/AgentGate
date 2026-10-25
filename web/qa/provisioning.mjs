@@ -193,6 +193,8 @@ function plan(spec, actor) {
   if (!v) throw new Fail(422, "profile_unavailable", "The access profile version does not exist.");
   const reasons = [];
   if (p.require_approval) reasons.push("the profile requires approval");
+  else if (!p.approved_digest) reasons.push(`no version of profile ${p.name} is approved by an administrator for launches without approval`);
+  else if (p.approved_digest !== v.digest) reasons.push(`profile ${p.name} version ${v.number} (digest ${v.digest.slice(0, 12)}) is not the administrator-approved version ${p.approved_version} (digest ${p.approved_digest.slice(0, 12)})`);
   if (spec.approval === "required") reasons.push("the spec requires approval");
   for (const m of spec.mounts) if (m.mode !== "snapshot") reasons.push((m.mode === "read-write" ? "read-write host folder " : "live host folder ") + m.name);
   const planned = [];
@@ -333,6 +335,7 @@ function api(method, path, query, input, headers) {
       const d = docFromPreset(input.preset);
       profiles.push(p);
       versions[p.id] = [{ id: newID(), profile_id: p.id, number: 1, parent_id: "", document: d, digest: sha(JSON.stringify(d)), edits: input.preset ? [{ action: "preset", values: [input.preset] }] : [], actor: actors[who].subject, reason: input.reason, created_at: now() }];
+      if (!p.require_approval) Object.assign(p, { approved_version: 1, approved_digest: versions[p.id][0].digest, approved_by: actors[who].subject, approved_at: now() });
       return { profile: p, version: versions[p.id][0] };
     }
     const p = findProfile(id);
@@ -341,7 +344,15 @@ function api(method, path, query, input, headers) {
     if (method === "GET" && !sub) return p;
     if (method === "PATCH") {
       need("admin");
-      p.require_approval = input.require_approval;
+      if (input.require_approval) {
+        p.require_approval = true;
+        for (const k of ["approved_version", "approved_digest", "approved_by", "approved_at"]) delete p[k];
+        return p;
+      }
+      const v = list.find((x) => x.number === input.version);
+      if (!v || !/^[a-f0-9]{64}$/.test(input.digest || "")) throw new Fail(422, "approved_version_required", "Letting launchers start alone approves one reviewed version: give its number as version and its SHA-256 as digest.");
+      if (v.digest !== input.digest) throw new Fail(409, "digest_mismatch", `Version ${v.number} has digest ${v.digest}, not the one you reviewed. Review the version again.`);
+      Object.assign(p, { require_approval: false, approved_version: v.number, approved_digest: v.digest, approved_by: actors[who].subject, approved_at: now() });
       return p;
     }
     if (method === "GET" && sub === "versions" && !parts[3]) return { items: [...list].reverse() };
@@ -778,6 +789,20 @@ try {
     await page.getByRole("heading", { name: "Version 1", exact: true }).waitFor();
     await pick("Compare v1 with").selectOption("2");
     await page.getByRole("heading", { name: "From v1 to v2" }).waitFor();
+    // Relaxing approval approves exactly the version on screen, with its digest.
+    await page.getByRole("button", { name: "Let launchers start v1 alone…" }).click();
+    await page.getByRole("dialog").getByText("Its digest (sent with the approval; a different one is refused)").waitFor();
+    await page.getByRole("dialog").getByRole("textbox", { name: "Reason" }).fill("Reviewed version 1");
+    await page.getByRole("button", { name: "Approve version 1" }).click();
+    await text("A launcher may start version 1 alone").waitFor();
+    const relaxed = JSON.parse(requests.filter((r) => r.method === "PATCH" && r.path === `profiles/${profiles[0].id}`).at(-1).body);
+    assert.deepEqual([relaxed.require_approval, relaxed.version, relaxed.digest], [false, 1, versions[profiles[0].id][0].digest]);
+    assert.equal(await page.getByRole("button", { name: "Let launchers start v1 alone…" }).isDisabled(), true, "the approved version is approved already");
+    await page.getByRole("button", { name: "Require a second person…" }).click();
+    await page.getByRole("dialog").getByRole("textbox", { name: "Reason" }).fill("Back to two people");
+    await page.getByRole("button", { name: "Require approval" }).click();
+    await text("Every launch of this profile waits for a second person").waitFor();
+    assert.deepEqual(JSON.parse(requests.filter((r) => r.method === "PATCH").at(-1).body), { require_approval: true, reason: "Back to two people" });
     await page.screenshot({ path: `${output}/profile-desktop.png`, fullPage: true });
     await noHorizontalScroll("profile");
   });
@@ -1197,7 +1222,7 @@ try {
     assert.equal(await page.getByRole("button", { name: "New profile" }).isDisabled(), true);
     await go("profiles/python-dev", "vic");
     await text("Granting or revoking access needs the editor role").waitFor();
-    assert.equal(await page.getByRole("button", { name: "Let launchers start alone…" }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: /Let launchers start v\d+ alone…/ }).isDisabled(), true);
     await go(`launches/${launches.at(-1).id}`, "vic");
     for (const name of ["Approve", "Reject", "Stop"]) assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true, name);
     await text("Deciding launches needs the approver role").waitFor();

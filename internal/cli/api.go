@@ -57,12 +57,17 @@ type TargetEnrollment struct {
 	Enrollment Enrollment `json:"enrollment"`
 }
 
-// Profile is a named, versioned access policy.
+// Profile is a named, versioned access policy. With RequireApproval false,
+// only ApprovedVersion (digest ApprovedDigest) launches without a second human.
 type Profile struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
 	Description     string `json:"description"`
 	RequireApproval bool   `json:"require_approval"`
+	ApprovedVersion int    `json:"approved_version,omitempty"`
+	ApprovedDigest  string `json:"approved_digest,omitempty"`
+	ApprovedBy      string `json:"approved_by,omitempty"`
+	ApprovedAt      string `json:"approved_at,omitempty"`
 	Created         string `json:"created_at"`
 	CreatedBy       string `json:"created_by"`
 	Revision        int    `json:"revision"`

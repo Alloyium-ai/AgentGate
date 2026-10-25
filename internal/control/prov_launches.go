@@ -409,8 +409,21 @@ func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical [
 		}
 		r.profile, r.version = &p, &v
 		plan.Profile = map[string]any{"id": p.ID, "name": p.Name, "version": v.Number, "version_id": v.ID, "digest": v.Digest}
-		if p.RequireApproval {
-			plan.ApprovalReasons = append(plan.ApprovalReasons, "the profile requires approval")
+		if p.ApprovedDigest != "" {
+			plan.Profile["approved_version"], plan.Profile["approved_digest"] = p.ApprovedVersion, p.ApprovedDigest
+		}
+		reasons, err := s.profileApprovalReasons(tx, p, v, doc, len(spec.Secrets) > 0)
+		if err != nil {
+			return r, err
+		}
+		if len(reasons) > 0 {
+			plan.ApprovalReasons = append(plan.ApprovalReasons, reasons...)
+		} else {
+			// The administrator reviewed exactly this version; what it grants
+			// is listed for transparency, not to ask again.
+			for _, note := range policyRiskNotes(doc, nil, len(spec.Secrets) > 0) {
+				plan.Notices = append(plan.Notices, "approved profile version grants: "+note)
+			}
 		}
 	}
 	if spec.Approval == "required" {
