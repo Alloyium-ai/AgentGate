@@ -73,7 +73,7 @@
       "path": "bpf/fs_access.bpf.c",
       "kind": "BPF",
       "license": "GPL-2.0-only",
-      "preserved_sha256": "28042977db4c277cf6e6e2c2a9be18d1008cf4d340495a7a927b240685e024cb"
+      "preserved_sha256": "106d6beac127445dcf3dd4d159d5a028db088d24bb65a77577fa4d054068df1d"
     },
     {
       "path": "bpf/network_abi.h",
@@ -4591,6 +4591,136 @@
     {
       "path": "web/qa/fixtures/secretseal-vector-v2.json",
       "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "deploy/shipped_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/broker/fuzz_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/broker/testdata/fuzz/FuzzOutboundHeaders/6ccf463288e43eb4",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/broker/testdata/fuzz/FuzzOutboundHeaders/underscore-family",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/cli/cmd_identity.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/cli/identity_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/changes.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/changes_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_identity.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_identity_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/proxytrust.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/proxytrust_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/ratelimit.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/ratelimit_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostd/mountroots.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostd/mountroots_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostd/outbox_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostd/secrets_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostproto/fuzz_review_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostproto/protected_python_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/secretseal/fuzz_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/secretseal/store_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "web/qa/fixtures/api/change-event.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "web/qa/fixtures/api/identity-links.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "web/src/changes.ts",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "web/src/identities.tsx",
+      "kind": "code",
       "license": "Apache-2.0"
     }
   ]
