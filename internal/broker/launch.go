@@ -24,6 +24,9 @@ type LaunchSecret struct {
 	Rules      []Rule // required: a secret without rules is refused (deny by default)
 	SecretFile string
 	Extra      map[string]string
+	// Forward is the route's forward_headers: request headers forwarded in
+	// addition to the defaults.
+	Forward []string
 }
 
 // LaunchInput is everything the host agent decides for one launch's broker.
@@ -95,7 +98,7 @@ func BuildLaunchConfig(in LaunchInput, now time.Time) ([]byte, *Config, map[stri
 			cfg.Routes = append(cfg.Routes, Route{Name: RouteName(s.Ref, i), Upstream: Upstream{Host: host, Port: port},
 				Credential: Credential{SecretFile: s.SecretFile, Header: strings.ToLower(s.Header), Scheme: scheme,
 					Username: s.Username, ExtraHeaders: s.Extra},
-				Rules: rules})
+				Rules: rules, ForwardHeaders: s.Forward})
 		}
 		if s.Env != "" {
 			if _, dup := env[s.Env]; dup {

@@ -94,25 +94,48 @@ Every step refuses with a fixed reason code (JSON body `{"error":"agentgate_brok
 4. **Shape**: HTTP/1.1; not `CONNECT`; origin form only (no absolute form, no `*`); `Host` exactly the broker's
    authority (`172.30.7.2:8443`, or `listen.authority` in unix mode); no `Upgrade`, `Connection: upgrade` or
    `HTTP2-Settings`; no request trailers.
-5. **Path**: at most 2048 bytes of RFC 3986 path characters; percent-encoding must not produce `/`, `\`, `.`, `%` or a
-   control byte; no dot segments; no empty segment except one trailing slash. The query is forwarded verbatim if it is
-   visible ASCII without `#`.
+5. **Path**: at most 2048 bytes of ASCII RFC 3986 path characters. Refused, so that no upstream normalization can turn
+   an allowed path into another one: path parameters (`;` anywhere, literal or `%3B`: Tomcat, Jetty and several proxies
+   strip `;...` and read `..;` as `..`); any byte outside ASCII, literal or percent-encoded (`%80`..`%FF`, so fullwidth
+   and other look-alike dots that an NFKC-normalizing upstream folds into `.`, and overlong UTF-8 forms of `.` and `/`,
+   never pass); percent-encoding that produces `/`, `\`, `.`, `%`, `?`, `#` or a control byte; dot-only segments (`.`,
+   `..`, `...`); segments that end in `.` or start or end with a space (servers that trim them turn `.. ` into `..`);
+   empty segments except one trailing slash. The rules match the decoded path, and the broker forwards exactly that path
+   in one canonical encoding (path characters literally, every other byte as an upper-case `%XX`), never the agent's own
+   spelling. The query is forwarded verbatim if it is visible ASCII without `#`.
 6. **Route and rules**: the first segment names a route; the rest must match a rule (`exact`, or `prefix` on a segment
    boundary) whose methods include the request method. Methods are `GET HEAD POST PUT PATCH DELETE OPTIONS`; `CONNECT`
    and `TRACE` cannot be configured.
 7. **Concurrency**: at most `max_concurrent_requests` in flight (`503`).
 8. **Body**: read in full within `body_timeout_seconds`, at most `max_request_bytes` (`413`). Invalid chunking or a
    truncated body is `400`; the upstream sees nothing.
-9. **Forward**: headers are copied except the stripped set; the credential and extra headers are injected;
-   `Accept-Encoding: identity` is set; the URL is `https://host[:port]` + `base_path` + the route-relative path.
+9. **Forward**: only allowlisted request headers are copied (below); the credential and extra headers are injected;
+   `Accept-Encoding: identity` is set; `Content-Length` is the length of the buffered body; the URL is
+   `https://host[:port]` + `base_path` + the canonical route-relative path.
 
-Stripped inbound headers: hop-by-hop (`Connection` and every header it lists, `Keep-Alive`, `Proxy-Connection`, `TE`,
-`Trailer`, `Transfer-Encoding`, `Upgrade`, `HTTP2-Settings`); credentials (`Authorization`, `Proxy-Authorization`,
-`X-Api-Key`, `Api-Key`, `X-Goog-Api-Key`, `Private-Token`, `X-Auth-Token`, `Authentication`, `Cookie`, `Cookie2`, the
-route's credential header and every extra header name); client identity and forwarding (`Forwarded`, `Via`,
-`X-Forwarded-*`, `X-Real-Ip`, `X-Client-Ip`, `True-Client-Ip`, `Cf-Connecting-Ip`, `Fastly-Client-Ip`,
-`X-Cluster-Client-Ip`, every `Proxy-*`); and framing owned by the broker (`Host`, `Content-Length`, `Expect`,
-`Accept-Encoding`). Without a client `User-Agent`, none is sent.
+Request headers are forwarded by allowlist (`internal/broker/headers.go`); every other header is dropped, so the next
+override-style header an upstream invents is safe by default:
+
+- **Route default** (every route): `Accept`, `Content-Type`, `User-Agent`, `Idempotency-Key`, and the families
+  `anthropic-*` (`anthropic-version`, `anthropic-beta`), `openai-*` (`openai-organization`, `openai-project`) and
+  `x-stainless-*` (the client metadata of the model-API SDKs). This is the header set of the Anthropic and OpenAI SDKs;
+  `TestModelSDKHeadersPassTheRouteDefault` sends it through a route.
+- **`forward_headers`** (per route, default empty): up to 16 further exact names, for example `git-protocol` or
+  `x-github-api-version`.
+- **Never forwarded**, even when a route lists it (the configuration is refused): hop-by-hop (`Connection` and every
+  header it lists, `Keep-Alive`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`,
+  `HTTP2-Settings`); credentials (`Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `X-Goog-Api-Key`,
+  `Private-Token`, `X-Auth-Token`, `Authentication`, `Cookie`, `Cookie2`, and any name containing `Authorization`,
+  `Token`, `Secret`, `Password`, `Cookie`, `Session`, `Credential`, `Api-Key`, `Apikey`, `Access-Key` or
+  `Signature`); method and URL overrides (`X-HTTP-Method-Override`, `X-HTTP-Method*`, `X-Method-Override`,
+  `X-Original-*` such as `X-Original-URL`, `X-Rewrite-*` such as `X-Rewrite-URL`, `X-Override-*`,
+  `X-Forwarded-Method`, `X-Forwarded-Uri`, `X-Forwarded-Path`): an upstream that honours one would act on a method or
+  path the rules never matched; client identity and forwarding (`Forwarded`, `Via`, `X-Forwarded-*`, `X-Real-Ip`,
+  `X-Client-Ip`, `True-Client-Ip`, `Cf-Connecting-Ip`, `Fastly-Client-Ip`, `X-Cluster-Client-Ip`,
+  `X-Original-Forwarded-For`, every `Proxy-*`); `Range` and `If-Range` (a partial response could show part of a
+  response the masking never sees whole); `Sec-*`; and framing owned by the broker (`Host`, `Content-Length`,
+  `Expect`, `Accept-Encoding`, `Content-Encoding`). The route's credential header and its extra header names are
+  always the broker's own values. Without a client `User-Agent`, none is sent.
 
 ## Upstream connections and SSRF
 
@@ -157,7 +180,7 @@ verified chain must contain one (pin an intermediate or root key to survive leaf
   `write_timeout_seconds` per client write, `request_timeout_seconds` in total, and the launch deadline. A failure
   after the status line aborts the connection, so a truncated body is never presented as complete.
 
-## Configuration reference (`agentgate.broker.v1`)
+## Configuration reference (`agentgate.broker.v2`)
 
 One JSON object, at most 64 KiB, root-owned (or owned by the broker user), regular, not a symlink, not group or world
 writable. Unknown fields, duplicate keys, keys that are not lowercase, `null`, trailing data and nesting beyond 16
@@ -165,7 +188,7 @@ levels are refused. Errors name the field and never echo a value. The file never
 
 ```json
 {
-  "version": "agentgate.broker.v1",
+  "version": "agentgate.broker.v2",
   "launch_id": "lch-0001",
   "target_id": "local",
   "deadline": "2026-10-24T21:00:00Z",
@@ -196,7 +219,7 @@ levels are refused. Errors name the field and never echo a value. The file never
 
 | Field | Rule |
 | --- | --- |
-| `version` | `agentgate.broker.v1` |
+| `version` | `agentgate.broker.v2` (version 2 forwards request headers by allowlist and refuses path parameters and non-ASCII paths; a version 1 configuration is refused) |
 | `launch_id`, `target_id` | `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` |
 | `deadline` | RFC 3339; more than 1 s and at most 24 h 10 min in the future; the broker exits at it |
 | `listen` (tcp) | `address`: canonical RFC 1918 IPv4, not the network or broadcast address; `port` 1024..65535; `subnet`: canonical `/16`..`/30` inside one RFC 1918 range containing `address`. At start, exactly one up, non-loopback interface must hold `address/prefix`; the broker binds that exact address and port, never a wildcard |
@@ -213,7 +236,8 @@ levels are refused. Errors name the field and never echo a value. The file never
 | `credential.header` | a token header name, never a framing, hop-by-hop, cookie, proxy or forwarding header |
 | `credential.scheme` | `""` (the raw value), `Bearer` or `Basic` (both need `authorization`; Basic needs `username`, visible ASCII without `:`) |
 | `credential.extra_headers` | up to 8 non-secret headers (for example an API version), 1..256 printable ASCII characters; they replace any client value |
-| `rules` | 1..64 of `{methods, path, match}`; `path` canonical, no percent-encoding; `match` `exact` or `prefix` |
+| `rules` | 1..64 of `{methods, path, match}`; `path` canonical (no percent-encoding, no `;`, no dot-only segment or segment ending in `.`); `match` `exact` or `prefix` |
+| `forward_headers` | optional, up to 16 unique token header names forwarded in addition to the route default; never a header from the never-forwarded set, nor the credential header or an extra header |
 
 Limits (all optional; the default applies when absent):
 
@@ -553,7 +577,11 @@ for every class above and transition forms; DNS rebinding with a fake resolver (
 proxy); a redirect to `169.254.169.254` returned and not followed; the raw smuggling corpus at every read split and
 over the wire (duplicate and list `Content-Length`, `Transfer-Encoding` with `Content-Length`, obs-fold, bare LF and
 CR, NUL, non-ASCII, HTTP/1.0, the HTTP/2 preface, invalid and truncated chunking, chunk-extension floods, pipelining,
-trailers, header floods); credential stripping and injection for raw, Bearer and Basic; route isolation with two
+trailers, header floods); the request-header allowlist (method and URL override headers, `Range`, unlisted headers
+dropped; the model-API SDK header set and a route's `forward_headers` forwarded; forbidden `forward_headers` refused);
+path normalization tricks (`..;`, `.;`, `;jsessionid`, encoded `;`, fullwidth and other look-alike dots, overlong
+UTF-8, mixed and double encodings, double slashes, trailing dots and spaces, encoded `?` and `#`) refused before
+matching, and the canonical form forwarded; credential stripping and injection for raw, Bearer and Basic; route isolation with two
 secrets; streaming SSE flushed before the upstream finishes; idle, header, body, upstream-header and total timeouts;
 request and response size limits (declared and streamed); rate, concurrency and connection limits; hostname, CA and
 pin failures; encoded and protocol-switching responses; header and body masking; config fuzzing and over 80 negative

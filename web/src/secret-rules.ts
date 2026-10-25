@@ -10,12 +10,13 @@ export const SECRET_HEADER = /^[A-Za-z0-9-]{1,64}$/;
 // checks every rule again with the broker's validator.
 export const BROKER_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 // canonicalRulePath is hostproto.CanonicalRulePath: an absolute path of RFC
-// 3986 path characters without percent-encoding, dot segments or empty
-// segments (one trailing slash is allowed), at most 512 bytes.
+// 3986 path characters without percent-encoding, path parameters (";"),
+// dot-only segments, segments ending in "." or empty segments (one trailing
+// slash is allowed), at most 512 bytes.
 export function canonicalRulePath(p: string): boolean {
-  if (!/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@/]{0,511}$/.test(p)) return false;
+  if (!/^\/[A-Za-z0-9\-._~!$&'()*+,=:@/]{0,511}$/.test(p)) return false;
   const segments = p.slice(1).split("/");
-  return segments.every((seg, i) => seg !== "." && seg !== ".." && (seg !== "" || i === segments.length - 1));
+  return segments.every((seg, i) => (seg === "" ? i === segments.length - 1 : seg.replace(/\./g, "") !== "" && !seg.endsWith(".")));
 }
 export const BASIC_USER = /^[\x21-\x39\x3b-\x7e]{1,64}$/;
 const NEVER_EXTRA = ["authorization", "x-api-key", "host", "cookie"];
@@ -31,7 +32,7 @@ export function ruleIssues(rows: RuleRow[], wildcard: boolean, confirmed: boolea
   rows.forEach((r, i) => {
     const methods = r.methods.split(/[\s,]+/).filter(Boolean).map((m) => m.toUpperCase());
     if (!methods.length || methods.some((m) => !BROKER_METHODS.includes(m)) || new Set(methods).size !== methods.length) out.push(`Rule ${i + 1}: methods are unique ${BROKER_METHODS.join(", ")}.`);
-    if (!canonicalRulePath(r.path)) out.push(`Rule ${i + 1}: the path is an absolute path such as /v1/messages, without percent-encoding, dot segments or //.`);
+    if (!canonicalRulePath(r.path)) out.push(`Rule ${i + 1}: the path is an absolute path such as /v1/messages, without percent-encoding, ";", dot segments, a segment ending in "." or //.`);
   });
   return out;
 }

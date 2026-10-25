@@ -382,12 +382,13 @@ test("the secret form checks broker rules as hostproto.CheckInjection does", (t)
   assert.deepEqual(M.ruleIssues(rule("POST", "/v1/messages"), false, false), []);
   assert.deepEqual(M.ruleIssues(rule("get, head", "/v2/", "prefix"), false, false), []);
   assert.match(M.ruleIssues([], false, false)[0], /forwards nothing by default/);
-  for (const [m, p] of [["CONNECT", "/"], ["GET GET", "/"], ["", "/"], ["GET", "v1"], ["GET", "/a%2fb"], ["GET", "/a/../b"], ["GET", "/a//b"], ["GET", "/a b"], ["GET", "/" + "a".repeat(512)]])
+  for (const [m, p] of [["CONNECT", "/"], ["GET GET", "/"], ["", "/"], ["GET", "v1"], ["GET", "/a%2fb"], ["GET", "/a/../b"], ["GET", "/a//b"], ["GET", "/a b"], ["GET", "/a;b"], ["GET", "/a/..;/b"], ["GET", "/a/.../b"], ["GET", "/a/b."], ["GET", "/" + "a".repeat(512)]])
     assert.equal(M.ruleIssues(rule(m, p), false, false).length, 1, `${m} ${p}`);
   assert.equal(M.ruleIssues(Array.from({ length: 65 }, () => rule("GET", "/")[0]), false, false).length, 1);
   assert.match(M.ruleIssues([], true, false)[0], /Confirm that the wildcard/);
   assert.deepEqual(M.ruleIssues([], true, true), []);
-  assert.ok(M.canonicalRulePath("/") && M.canonicalRulePath("/v1/models/") && M.canonicalRulePath("/a:b@c"));
+  assert.ok(M.canonicalRulePath("/") && M.canonicalRulePath("/v1/models/") && M.canonicalRulePath("/a:b@c") && M.canonicalRulePath("/v1/a.b"));
+  for (const p of ["/a;b", "/a/..;/b", "/a/.;/b", "/a/.../b", "/a/b.", "/a/./b"]) assert.ok(!M.canonicalRulePath(p), p);
   const header = (name, value) => [{ name, value }];
   assert.deepEqual(M.headerIssues(header("anthropic-version", "2023-06-01"), "x-api-key"), []);
   for (const name of ["x-api-key", "Authorization", "Host", "cookie", "Proxy-Authorization", "X-Forwarded-For", "bad name"]) assert.equal(M.headerIssues(header(name, "v"), "x-api-key").length, 1, name);

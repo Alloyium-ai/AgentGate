@@ -126,7 +126,7 @@ func New(cfg *Config, digest string, log io.Writer, ov Overrides) (*Server, erro
 			g.dial = ov.Dial
 		}
 		s.routes[rc.Name] = &route{name: rc.Name, upstream: rc.Upstream, rules: rc.Rules, cred: cred, guard: g,
-			transport: newTransport(rc.Upstream, g, set, ov.RootCAs)}
+			forward: canonicalSet(rc.ForwardHeaders...), transport: newTransport(rc.Upstream, g, set, ov.RootCAs)}
 	}
 	return s, nil
 }

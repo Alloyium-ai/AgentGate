@@ -9,11 +9,27 @@ import (
 	"strings"
 )
 
-// Inbound headers the broker never forwards. Credential headers are removed so
-// the operator's credential is the only one an upstream sees; forwarding headers
-// are removed so the broker network is not disclosed; framing and negotiation
-// headers are set by the broker itself.
-var inboundStripped = canonicalSet(
+// Request headers are forwarded by allowlist. An inbound header reaches the
+// upstream only when it is in DefaultForwarded, in one of the
+// DefaultForwardedPrefixes families, or in the route's own forward_headers,
+// and never when it is in NeverForwarded (or one of its prefixes or
+// substrings). Everything else is dropped, so a header that changes how an
+// upstream reads the request (a method or URL override, a forwarding chain,
+// a cookie, a range) cannot widen what the route's method and path rules
+// allowed. The broker itself sets Host, Content-Length (from the buffered
+// body), Accept-Encoding (identity), the credential header and the route's
+// extra_headers; agent copies of those are always dropped.
+
+// DefaultForwarded is what model-API SDKs send on every request.
+var DefaultForwarded = []string{"Accept", "Content-Type", "User-Agent", "Idempotency-Key"}
+
+// DefaultForwardedPrefixes are header families the model APIs define:
+// anthropic-version and anthropic-beta, openai-organization and
+// openai-project, and the x-stainless-* client metadata of their SDKs.
+var DefaultForwardedPrefixes = []string{"Anthropic-", "Openai-", "X-Stainless-"}
+
+// NeverForwarded can never be forwarded, even when a route lists it.
+var NeverForwarded = []string{
 	// hop-by-hop (RFC 9110 section 7.6.1) and protocol switching
 	"Connection", "Keep-Alive", "Proxy-Connection", "Te", "Trailer", "Transfer-Encoding", "Upgrade", "Http2-Settings",
 	// credentials
@@ -22,9 +38,58 @@ var inboundStripped = canonicalSet(
 	// forwarding and client identity
 	"Forwarded", "Via", "X-Real-Ip", "X-Client-Ip", "True-Client-Ip", "Cf-Connecting-Ip", "Fastly-Client-Ip",
 	"X-Cluster-Client-Ip", "X-Original-Forwarded-For",
+	// method and URL overrides: an upstream that honours one acts on a
+	// method or path the rules never matched
+	"X-Http-Method-Override", "X-Http-Method", "X-Method-Override", "X-Original-Url", "X-Rewrite-Url",
+	"X-Original-Uri", "X-Original-Method", "X-Forwarded-Method", "X-Forwarded-Uri", "X-Forwarded-Path",
+	// partial responses would let a client read part of a response the
+	// redactor never sees whole
+	"Range", "If-Range",
 	// framing and negotiation owned by the broker
-	"Host", "Content-Length", "Expect", "Accept-Encoding",
+	"Host", "Content-Length", "Expect", "Accept-Encoding", "Content-Encoding",
+}
+
+// NeverForwardedPrefixes and neverForwardedParts extend NeverForwarded to
+// whole families (canonical header name forms).
+var NeverForwardedPrefixes = []string{"X-Forwarded-", "Proxy-", "X-Override-", "X-Http-Method", "X-Original-", "X-Rewrite-", "Sec-"}
+
+var neverForwardedParts = []string{"Authorization", "Token", "Secret", "Password", "Cookie", "Session", "Credential", "Api-Key", "Apikey", "Access-Key", "Signature"}
+
+var (
+	defaultForwarded = canonicalSet(DefaultForwarded...)
+	neverForwarded   = canonicalSet(NeverForwarded...)
 )
+
+// neverForward reports a header the broker never forwards. name is canonical.
+func neverForward(name string) bool {
+	if neverForwarded[name] {
+		return true
+	}
+	for _, p := range NeverForwardedPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	for _, p := range neverForwardedParts {
+		if strings.Contains(name, p) && !defaultForwarded[name] {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultForward reports a header the route default forwards. name is canonical.
+func defaultForward(name string) bool {
+	if defaultForwarded[name] {
+		return true
+	}
+	for _, p := range DefaultForwardedPrefixes {
+		if strings.HasPrefix(name, p) && len(name) > len(p) {
+			return true
+		}
+	}
+	return false
+}
 
 // Upstream response headers the broker never returns.
 var responseStripped = canonicalSet(
@@ -39,10 +104,6 @@ func canonicalSet(names ...string) map[string]bool {
 		out[http.CanonicalHeaderKey(n)] = true
 	}
 	return out
-}
-
-func strippedPrefix(name string) bool {
-	return strings.HasPrefix(name, "X-Forwarded-") || strings.HasPrefix(name, "Proxy-")
 }
 
 // connectionListed returns the header names a message's Connection header
@@ -67,18 +128,27 @@ func wantsUpgrade(h http.Header) bool {
 	return connectionListed(h)["Upgrade"]
 }
 
-// outboundHeaders copies the inbound headers the upstream may see.
-func outboundHeaders(in http.Header, strip map[string]bool) http.Header {
+// outboundHeaders copies the inbound headers the upstream may see: those on
+// the route default or in forward (the route's forward_headers, canonical),
+// minus every header in NeverForwarded, the broker-set headers in strip (the
+// credential header and the extra headers) and anything the Connection
+// header lists as hop-by-hop.
+func outboundHeaders(in http.Header, strip, forward map[string]bool) http.Header {
 	listed := connectionListed(in)
 	out := make(http.Header, len(in))
 	for k, vv := range in {
 		ck := http.CanonicalHeaderKey(k)
-		if inboundStripped[ck] || strip[ck] || listed[ck] || strippedPrefix(ck) {
+		if neverForward(ck) || strip[ck] || listed[ck] || !(defaultForward(ck) || forward[ck]) {
 			continue
 		}
 		out[ck] = append([]string(nil), vv...)
 	}
 	return out
+}
+
+// checkForwardHeader validates one configured forward_headers entry.
+func checkForwardHeader(name string) bool {
+	return token(name) && len(name) <= 64 && !neverForward(http.CanonicalHeaderKey(name))
 }
 
 // pchar bytes allowed literally in a request path (RFC 3986 pchar and "/").
@@ -102,10 +172,19 @@ func unhex(c byte) (byte, bool) {
 	return 0, false
 }
 
-// decodePath validates a raw origin-form path and returns its decoded form.
-// It refuses anything whose meaning an upstream could read differently from
-// the broker's allowlist: percent-encoded "/", "\", "." or "%", control bytes,
-// dot segments, and empty segments other than one trailing slash.
+// decodePath validates a raw origin-form path and returns its canonical
+// decoded form, the one the rules match and the broker forwards (re-encoded
+// by canonicalPath). It refuses anything whose meaning an upstream could read
+// differently from the broker's allowlist:
+//   - path parameters: ";" anywhere, literal or encoded (Tomcat, Jetty and
+//     several proxies strip ";..." and would turn "..;" into "..");
+//   - any byte outside ASCII, literal or percent-encoded (an NFKC-normalizing
+//     upstream turns fullwidth dots into "." and other look-alikes into
+//     separators; overlong UTF-8 encodings of "." and "/" die here too);
+//   - percent-encoded "/", "\", ".", "%", "?" and "#", and control bytes;
+//   - dot segments, segments that end in "." or start or end with a space
+//     (servers that trim them turn "..." or ".. " into ".."), and empty
+//     segments other than one trailing slash.
 func decodePath(raw string) (string, bool) {
 	if raw == "" || raw[0] != '/' || len(raw) > 2048 {
 		return "", false
@@ -124,14 +203,14 @@ func decodePath(raw string) (string, bool) {
 				return "", false
 			}
 			d := hi<<4 | lo
-			if d < 0x20 || d == 0x7f || d == '/' || d == '\\' || d == '.' || d == '%' {
+			if d < 0x20 || d >= 0x7f || strings.IndexByte("/\\.%;?#", d) >= 0 {
 				return "", false
 			}
 			b.WriteByte(d)
 			i += 2
 			continue
 		}
-		if !pathByte(c) {
+		if !pathByte(c) || c == ';' {
 			return "", false
 		}
 		b.WriteByte(c)
@@ -139,14 +218,38 @@ func decodePath(raw string) (string, bool) {
 	decoded := b.String()
 	segments := strings.Split(decoded[1:], "/")
 	for i, seg := range segments {
-		if seg == "." || seg == ".." {
-			return "", false
+		if seg == "" {
+			if i != len(segments)-1 {
+				return "", false
+			}
+			continue
 		}
-		if seg == "" && i != len(segments)-1 {
+		if strings.Trim(seg, ".") == "" || seg[len(seg)-1] == '.' || seg[0] == ' ' || seg[len(seg)-1] == ' ' {
 			return "", false
 		}
 	}
 	return decoded, true
+}
+
+// canonicalPath is the one encoding of a decoded path the broker forwards:
+// RFC 3986 path characters literally (";" never occurs), every other byte as
+// an upper-case percent escape. decodePath(canonicalPath(p)) == p, so the
+// upstream reads exactly the path the rules matched.
+func canonicalPath(decoded string) string {
+	const hexDigits = "0123456789ABCDEF"
+	var b strings.Builder
+	b.Grow(len(decoded))
+	for i := 0; i < len(decoded); i++ {
+		c := decoded[i]
+		if pathByte(c) {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hexDigits[c>>4])
+		b.WriteByte(hexDigits[c&15])
+	}
+	return b.String()
 }
 
 // validQuery accepts a raw query of visible ASCII without a fragment.

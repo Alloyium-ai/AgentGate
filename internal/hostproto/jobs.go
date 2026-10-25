@@ -88,7 +88,7 @@ type LaunchSecret struct {
 }
 
 // BrokerRule allows a set of methods on one route-relative path
-// (agentgate.broker.v1 rules). Match is "exact" or "prefix" (on a segment
+// (agentgate.broker.v2 rules). Match is "exact" or "prefix" (on a segment
 // boundary).
 type BrokerRule struct {
 	Methods []string `json:"methods"`
@@ -451,21 +451,29 @@ func checkRule(r BrokerRule) error {
 }
 
 // CanonicalRulePath accepts an absolute path of RFC 3986 path characters
-// without percent-encoding, dot segments or empty segments (one trailing
-// slash is allowed), at most 512 bytes: the broker's rule path form.
+// without percent-encoding, path parameters (";"), dot-only segments,
+// segments ending in "." or empty segments (one trailing slash is allowed),
+// at most 512 bytes: the broker's rule path form (agentgate.broker.v2 refuses
+// a request path with any of these, so a rule holding one never matches).
 func CanonicalRulePath(p string) bool {
 	if p == "" || p[0] != '/' || len(p) > maxRulePathBytes {
 		return false
 	}
 	for i := 0; i < len(p); i++ {
 		c := p[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("-._~!$&'()*+,;=:@/", c) >= 0) {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("-._~!$&'()*+,=:@/", c) >= 0) {
 			return false
 		}
 	}
 	segments := strings.Split(p[1:], "/")
 	for i, seg := range segments {
-		if seg == "." || seg == ".." || seg == "" && i != len(segments)-1 {
+		if seg == "" {
+			if i != len(segments)-1 {
+				return false
+			}
+			continue
+		}
+		if strings.Trim(seg, ".") == "" || seg[len(seg)-1] == '.' {
 			return false
 		}
 	}

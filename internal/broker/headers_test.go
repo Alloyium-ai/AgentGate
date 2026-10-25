@@ -12,14 +12,14 @@ import (
 
 func TestDecodePathTable(t *testing.T) {
 	ok := map[string]string{
-		"/":                           "/",
-		"/anthropic/v1/messages":      "/anthropic/v1/messages",
-		"/git/o/r.git/info/refs":      "/git/o/r.git/info/refs",
-		"/a/b/":                       "/a/b/",
-		"/a/%20b":                     "/a/ b",
-		"/v1/models:generateContent":  "/v1/models:generateContent",
-		"/a/%C3%A9":                   "/a/\xc3\xa9",
-		"/a/b@c;d=e,f+g$h&i'j(k)l*m!": "/a/b@c;d=e,f+g$h&i'j(k)l*m!",
+		"/":                          "/",
+		"/anthropic/v1/messages":     "/anthropic/v1/messages",
+		"/git/o/r.git/info/refs":     "/git/o/r.git/info/refs",
+		"/a/b/":                      "/a/b/",
+		"/a/b%20c":                   "/a/b c",
+		"/v1/models:generateContent": "/v1/models:generateContent",
+		"/a/%41":                     "/a/A",
+		"/a/b@c=d,f+g$h&i'j(k)l*m!":  "/a/b@c=d,f+g$h&i'j(k)l*m!",
 	}
 	for raw, want := range ok {
 		got, valid := decodePath(raw)
@@ -29,7 +29,8 @@ func TestDecodePathTable(t *testing.T) {
 	}
 	bad := []string{"", "a", "*", "//", "/a//b", "/./a", "/a/./b", "/a/../b", "/a/..", "/..", "/a/%2e%2e/b", "/a/%2E",
 		"/a%2fb", "/a%2Fb", "/a%5cb", "/a\\b", "/a%25b", "/a%00", "/a%0d%0a", "/a%7f", "/a%", "/a%2", "/a%zz", "/a b",
-		"/a\"b", "/a<b", "/a{b", "/a|b", "/a^b", "/a`b", "/a#b", "/a?b", "/a[b", "/" + strings.Repeat("a", 2048)}
+		"/a\"b", "/a<b", "/a{b", "/a|b", "/a^b", "/a`b", "/a#b", "/a?b", "/a[b", "/" + strings.Repeat("a", 2048),
+		"/a/%C3%A9", "/a/b;c", "/a/%20b"}
 	for _, raw := range bad {
 		if _, valid := decodePath(raw); valid {
 			t.Errorf("%q accepted", raw)
@@ -88,7 +89,7 @@ func TestOutboundHeadersStripCredentialsAndHopByHop(t *testing.T) {
 	in.Set("Connection", "close, X-Listed")
 	in.Set("Content-Type", "application/json")
 	in.Set("Anthropic-Beta", "tools")
-	out := outboundHeaders(in, map[string]bool{"Anthropic-Version": true})
+	out := outboundHeaders(in, map[string]bool{"Anthropic-Version": true}, nil)
 	for k := range out {
 		if k != "Content-Type" && k != "Anthropic-Beta" {
 			t.Errorf("forwarded %s", k)

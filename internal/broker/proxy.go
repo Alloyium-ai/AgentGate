@@ -22,10 +22,13 @@ import (
 
 // route is one validated upstream with its credential and transport.
 type route struct {
-	name      string
-	upstream  Upstream
-	rules     []Rule
-	cred      *credential
+	name     string
+	upstream Upstream
+	rules    []Rule
+	cred     *credential
+	// forward is the route's forward_headers in canonical form: request
+	// headers it forwards beyond the defaults (see outboundHeaders).
+	forward   map[string]bool
 	guard     *addressGuard
 	transport *http.Transport
 }
@@ -186,7 +189,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusBadRequest, reasonQueryInvalid)
 		return
 	}
-	name, restRaw, rest, ok := splitRoute(rawPath, decoded)
+	name, _, rest, ok := splitRoute(rawPath, decoded)
 	rt := s.routes[name]
 	if !ok || rt == nil {
 		deny(http.StatusNotFound, reasonRouteUnknown)
@@ -214,7 +217,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		deny(status, reason)
 		return
 	}
-	s.forward(w, r, rt, restRaw, rest, rawQuery, hasQuery, body)
+	s.forward(w, r, rt, rest, rawQuery, hasQuery, body)
 }
 
 // readBody buffers the whole request body, bounded in size and time, so the
@@ -274,11 +277,14 @@ func classify(err error, idle bool) string {
 	return errKindOther
 }
 
-func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt *route, restRaw, rest, rawQuery string, hasQuery bool, body []byte) {
+// forward sends the request upstream with the canonical encoding of the
+// exact decoded path the rules matched (canonicalPath), never the agent's own
+// spelling of it.
+func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt *route, rest, rawQuery string, hasQuery bool, body []byte) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.set.RequestTimeout)
 	defer cancel()
 	base := rt.upstream.BasePath
-	u := &url.URL{Scheme: "https", Host: rt.hostHeader(), Path: base + rest, RawPath: base + restRaw}
+	u := &url.URL{Scheme: "https", Host: rt.hostHeader(), Path: base + rest, RawPath: base + canonicalPath(rest)}
 	if hasQuery {
 		u.RawQuery = rawQuery
 		u.ForceQuery = rawQuery == ""
@@ -296,7 +302,7 @@ func (s *Server) forward(w http.ResponseWriter, r *http.Request, rt *route, rest
 	if len(body) > 0 {
 		out.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 	}
-	out.Header = outboundHeaders(r.Header, rt.cred.strip)
+	out.Header = outboundHeaders(r.Header, rt.cred.strip, rt.forward)
 	out.Header[rt.cred.header] = []string{rt.cred.value}
 	for k, v := range rt.cred.extra {
 		out.Header[k] = v

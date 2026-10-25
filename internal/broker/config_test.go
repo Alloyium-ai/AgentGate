@@ -234,7 +234,7 @@ func TestUnixListenConfig(t *testing.T) {
 
 func FuzzParseConfig(f *testing.F) {
 	f.Add(encode(f, validConfigJSON()))
-	f.Add([]byte(`{"version":"agentgate.broker.v1","routes":[{"name":"a"}]}`))
+	f.Add([]byte(`{"version":"agentgate.broker.v2","routes":[{"name":"a"}]}`))
 	f.Add([]byte(`{"a":{"b":[1,2,{"c":null}]}}`))
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		cfg, err := ParseConfig(raw)

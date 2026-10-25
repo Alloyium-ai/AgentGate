@@ -15,8 +15,11 @@ import (
 	"time"
 )
 
-// ConfigVersion is the only accepted configuration version.
-const ConfigVersion = "agentgate.broker.v1"
+// ConfigVersion is the only accepted configuration version. Version 2
+// forwards request headers by allowlist (DefaultForwarded, the
+// DefaultForwardedPrefixes families and a route's forward_headers) and
+// refuses path parameters and non-ASCII paths; version 1 is not accepted.
+const ConfigVersion = "agentgate.broker.v2"
 
 // MaxConfigBytes bounds the configuration document.
 const MaxConfigBytes = 64 << 10
@@ -87,11 +90,16 @@ type Limits struct {
 }
 
 // Route binds one path prefix on the broker to one upstream and one credential.
+// ForwardHeaders names request headers the route forwards in addition to
+// DefaultForwarded and the DefaultForwardedPrefixes families (at most 16
+// exact names; never a credential, hop-by-hop, override, forwarding, proxy,
+// cookie or range header, nor the credential or an extra header).
 type Route struct {
-	Name       string     `json:"name"`
-	Upstream   Upstream   `json:"upstream"`
-	Credential Credential `json:"credential"`
-	Rules      []Rule     `json:"rules"`
+	Name           string     `json:"name"`
+	Upstream       Upstream   `json:"upstream"`
+	Credential     Credential `json:"credential"`
+	Rules          []Rule     `json:"rules"`
+	ForwardHeaders []string   `json:"forward_headers,omitempty"`
 }
 
 // Upstream is one exact HTTPS origin.
@@ -507,6 +515,18 @@ func (r *Route) validate(field string) error {
 	if err := r.Credential.validate(field + ".credential"); err != nil {
 		return err
 	}
+	if len(r.ForwardHeaders) > 16 {
+		return cfgErr(field+".forward_headers", "holds at most 16 headers")
+	}
+	forward := map[string]bool{}
+	for _, h := range r.ForwardHeaders {
+		ck := http.CanonicalHeaderKey(h)
+		_, extra := r.Credential.ExtraHeaders[h]
+		if !checkForwardHeader(h) || forward[ck] || ck == http.CanonicalHeaderKey(r.Credential.Header) || extra || extraHeaderNamed(r.Credential.ExtraHeaders, ck) {
+			return cfgErr(field+".forward_headers", "entries must be unique header names the broker may forward (never a credential, hop-by-hop, override, forwarding, proxy, cookie or range header, nor one the broker sets)")
+		}
+		forward[ck] = true
+	}
 	if len(r.Rules) < 1 || len(r.Rules) > 64 {
 		return cfgErr(field+".rules", "must hold 1 to 64 rules")
 	}
@@ -530,6 +550,15 @@ func (r *Route) validate(field string) error {
 		}
 	}
 	return nil
+}
+
+func extraHeaderNamed(extra map[string]string, canonical string) bool {
+	for k := range extra {
+		if http.CanonicalHeaderKey(k) == canonical {
+			return true
+		}
+	}
+	return false
 }
 
 func hasForbiddenSuffix(h string) bool {

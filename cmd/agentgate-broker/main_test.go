@@ -27,7 +27,7 @@ func setup(t *testing.T, mutate func(m map[string]any)) files {
 		t.Fatal(err)
 	}
 	m := map[string]any{
-		"version": "agentgate.broker.v1", "launch_id": "lch-cmd", "target_id": "local",
+		"version": "agentgate.broker.v2", "launch_id": "lch-cmd", "target_id": "local",
 		"deadline":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		"listen":     map[string]any{"network": "tcp", "address": "10.251.77.2", "port": 18443, "subnet": "10.251.77.0/29"},
 		"stats_path": filepath.Join(dir, "stats.json"),
