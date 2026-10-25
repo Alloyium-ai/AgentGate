@@ -1,8 +1,8 @@
 {
   "launch": {
     "approval_required": true,
-    "created_at": "2026-10-25T02:07:43.148685762Z",
-    "id": "d3056e663a4b2184351c205fdd1c0371",
+    "created_at": "2026-10-25T02:51:18.726284525Z",
+    "id": "d5af70a47f15fffd62f1e4f5e65d7d33",
     "kernel_verified": false,
     "lifetime_seconds": 3600,
     "mode": "session",
@@ -18,10 +18,10 @@
         "the profile requires approval"
       ],
       "broker": {
-        "address": "172.30.138.82",
+        "address": "172.30.137.10",
         "port": 8443,
-        "subnet": "172.30.138.80/29",
-        "target_address": "172.30.138.83"
+        "subnet": "172.30.137.8/29",
+        "target_address": "172.30.137.11"
       },
       "command": [
         "agent",
@@ -43,13 +43,13 @@
       ],
       "notices": [
         "WARNING: secret wild-api uses wildcard rules: the broker forwards every method on every path of api.wild.example with the credential",
-        "the agent reaches its secrets only through the broker at 172.30.138.82:8443; the taskboard TCP endpoint is not allowed in this launch",
+        "the agent reaches its secrets only through the broker at 172.30.137.10:8443; the taskboard TCP endpoint is not allowed in this launch",
         "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
         "the target does not advertise bpf-lsm; the host fails closed if it cannot enforce the policy"
       ],
       "permissions": {
         "anonymous_execute": false,
-        "broker": "172.30.138.82:8443",
+        "broker": "172.30.137.10:8443",
         "deny": [
           "/etc/shadow",
           "/etc/gshadow",
@@ -105,22 +105,26 @@
           "/tmp"
         ]
       },
-      "policy_digest": "6db8852902c92de939b95682d8d9bff8eef415d9350eef20fdbef46f1e6fde82",
+      "policy_digest": "3a130c178525c4a66527140f0677daf2f62e212f77b16cc2b149a3c91cf6c710",
       "profile": {
         "digest": "e51c290b9ee93aeee99c246e06387a843fcf85363c26abd0133eca5c39badf9a",
-        "id": "9c8cd7c4cd583134e47f7fd8315a2d21",
+        "id": "c717ba3bb2a5be625311ecc64aab9e9e",
         "name": "python-dev",
         "version": 2,
-        "version_id": "ca5c9d322bf6e4eca90a1de69a924fcc"
+        "version_id": "a3bad224d203d391a0411796098f09ab"
       },
       "secrets": [
         {
-          "base_url": "http://172.30.138.82:8443/docs-api",
+          "base_url": "http://172.30.137.10:8443/docs-api",
           "env": "DOCS_BASE_URL",
           "extra_headers": {
             "docs-version": "2"
           },
+          "forward_headers": [
+            "x-request-id"
+          ],
           "header": "Authorization",
+          "policy_digest": "fc076f73f3d950c670dd0267fffaffa0f6fa22f8d070abb7e50bce250b606cbb",
           "ref": "docs-api",
           "rules": [
             {
@@ -140,19 +144,21 @@
             }
           ],
           "scheme": "Basic",
-          "secret_id": "b26c30b8788329c15a8b46cbab345511",
+          "secret_id": "64a08773c8abfb22cf5f753fe8c86c14",
           "upstreams": [
             "api.docs.example"
           ],
           "username": "agent",
-          "value_fingerprint": "sfp1_bbc6fdace494f201387d5c4028046cfe",
+          "value_fingerprint": "sfp1_253df75a6a09a95caa1eec0b69e94be4",
           "wildcard_rules": false
         },
         {
-          "base_url": "http://172.30.138.82:8443/wild-api",
+          "base_url": "http://172.30.137.10:8443/wild-api",
           "env": "WILD_BASE_URL",
           "extra_headers": {},
+          "forward_headers": [],
           "header": "x-api-key",
+          "policy_digest": "697cd95840e2f60cbbf88dba9084a6fbb5d04a016d75f83bc85bf838515bb6b9",
           "ref": "wild-api",
           "rules": [
             {
@@ -170,29 +176,29 @@
             }
           ],
           "scheme": "",
-          "secret_id": "85005ce7886d086a96a2ef1b5ea7c33a",
+          "secret_id": "6e498e162a7e3d7b4ef70ae0c96a77d4",
           "upstreams": [
             "api.wild.example"
           ],
-          "value_fingerprint": "sfp1_bcc5495998f6a19b18b5026f0498f547",
+          "value_fingerprint": "sfp1_14fa5972fd2f22bdd000e27b41a4ebb6",
           "wildcard_rules": true
         }
       ],
       "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
       "target": {
-        "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+        "id": "3051ed3763d89e3871ce3d313dc46788",
         "name": "local"
       },
       "workdir": "/var/lib/agentgate/workspace"
     },
-    "policy_digest": "6db8852902c92de939b95682d8d9bff8eef415d9350eef20fdbef46f1e6fde82",
-    "profile_version_id": "ca5c9d322bf6e4eca90a1de69a924fcc",
+    "policy_digest": "3a130c178525c4a66527140f0677daf2f62e212f77b16cc2b149a3c91cf6c710",
+    "profile_version_id": "a3bad224d203d391a0411796098f09ab",
     "requested_by": "oidc:lin",
     "revision": 2,
     "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
     "state": "approval_pending",
-    "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
-    "updated_at": "2026-10-25T02:07:43.148999602Z"
+    "target_id": "3051ed3763d89e3871ce3d313dc46788",
+    "updated_at": "2026-10-25T02:51:18.726372197Z"
   },
   "plan": {
     "approval": "required",
@@ -205,10 +211,10 @@
       "the profile requires approval"
     ],
     "broker": {
-      "address": "172.30.138.82",
+      "address": "172.30.137.10",
       "port": 8443,
-      "subnet": "172.30.138.80/29",
-      "target_address": "172.30.138.83"
+      "subnet": "172.30.137.8/29",
+      "target_address": "172.30.137.11"
     },
     "command": [
       "agent",
@@ -230,13 +236,13 @@
     ],
     "notices": [
       "WARNING: secret wild-api uses wildcard rules: the broker forwards every method on every path of api.wild.example with the credential",
-      "the agent reaches its secrets only through the broker at 172.30.138.82:8443; the taskboard TCP endpoint is not allowed in this launch",
+      "the agent reaches its secrets only through the broker at 172.30.137.10:8443; the taskboard TCP endpoint is not allowed in this launch",
       "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
       "the target does not advertise bpf-lsm; the host fails closed if it cannot enforce the policy"
     ],
     "permissions": {
       "anonymous_execute": false,
-      "broker": "172.30.138.82:8443",
+      "broker": "172.30.137.10:8443",
       "deny": [
         "/etc/shadow",
         "/etc/gshadow",
@@ -292,22 +298,26 @@
         "/tmp"
       ]
     },
-    "policy_digest": "6db8852902c92de939b95682d8d9bff8eef415d9350eef20fdbef46f1e6fde82",
+    "policy_digest": "3a130c178525c4a66527140f0677daf2f62e212f77b16cc2b149a3c91cf6c710",
     "profile": {
       "digest": "e51c290b9ee93aeee99c246e06387a843fcf85363c26abd0133eca5c39badf9a",
-      "id": "9c8cd7c4cd583134e47f7fd8315a2d21",
+      "id": "c717ba3bb2a5be625311ecc64aab9e9e",
       "name": "python-dev",
       "version": 2,
-      "version_id": "ca5c9d322bf6e4eca90a1de69a924fcc"
+      "version_id": "a3bad224d203d391a0411796098f09ab"
     },
     "secrets": [
       {
-        "base_url": "http://172.30.138.82:8443/docs-api",
+        "base_url": "http://172.30.137.10:8443/docs-api",
         "env": "DOCS_BASE_URL",
         "extra_headers": {
           "docs-version": "2"
         },
+        "forward_headers": [
+          "x-request-id"
+        ],
         "header": "Authorization",
+        "policy_digest": "fc076f73f3d950c670dd0267fffaffa0f6fa22f8d070abb7e50bce250b606cbb",
         "ref": "docs-api",
         "rules": [
           {
@@ -327,19 +337,21 @@
           }
         ],
         "scheme": "Basic",
-        "secret_id": "b26c30b8788329c15a8b46cbab345511",
+        "secret_id": "64a08773c8abfb22cf5f753fe8c86c14",
         "upstreams": [
           "api.docs.example"
         ],
         "username": "agent",
-        "value_fingerprint": "sfp1_bbc6fdace494f201387d5c4028046cfe",
+        "value_fingerprint": "sfp1_253df75a6a09a95caa1eec0b69e94be4",
         "wildcard_rules": false
       },
       {
-        "base_url": "http://172.30.138.82:8443/wild-api",
+        "base_url": "http://172.30.137.10:8443/wild-api",
         "env": "WILD_BASE_URL",
         "extra_headers": {},
+        "forward_headers": [],
         "header": "x-api-key",
+        "policy_digest": "697cd95840e2f60cbbf88dba9084a6fbb5d04a016d75f83bc85bf838515bb6b9",
         "ref": "wild-api",
         "rules": [
           {
@@ -357,17 +369,17 @@
           }
         ],
         "scheme": "",
-        "secret_id": "85005ce7886d086a96a2ef1b5ea7c33a",
+        "secret_id": "6e498e162a7e3d7b4ef70ae0c96a77d4",
         "upstreams": [
           "api.wild.example"
         ],
-        "value_fingerprint": "sfp1_bcc5495998f6a19b18b5026f0498f547",
+        "value_fingerprint": "sfp1_14fa5972fd2f22bdd000e27b41a4ebb6",
         "wildcard_rules": true
       }
     ],
     "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
     "target": {
-      "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+      "id": "3051ed3763d89e3871ce3d313dc46788",
       "name": "local"
     },
     "workdir": "/var/lib/agentgate/workspace"

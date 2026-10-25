@@ -406,7 +406,7 @@ test("the secret form checks broker rules as hostproto.CheckInjection does", (t)
 
 test("every secret refusal the service sends is explained (real service answers)", () => {
   const errors = fixture("errors.json");
-  for (const code of ["seal_key_changed", "seal_key_unavailable", "invalid_ciphertext", "invalid_secret"]) {
+  for (const code of ["seal_key_changed", "seal_key_unavailable", "invalid_ciphertext", "invalid_secret", "policy_mismatch"]) {
     const e = errors[code];
     assert.equal(e.body.error.code, code);
     assert.ok(M.sealFailureText(code, e.body.error.message), code);
@@ -415,6 +415,7 @@ test("every secret refusal the service sends is explained (real service answers)
   assert.ok(M.sealFailureText("invalid_secret", errors.invalid_secret.body.error.message).includes(errors.invalid_secret.body.error.message));
   assert.equal(errors.secret_rules_missing.body.error.code, "secret_rules_missing");
   assert.match(M.refusalHelp("secret_rules_missing"), /without broker rules/);
+  assert.match(M.refusalHelp("secret_policy_mismatch"), /new envelope/);
   assert.equal(M.sealFailureText("not_found", ""), undefined);
 });
 

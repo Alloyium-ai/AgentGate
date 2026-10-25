@@ -101,18 +101,23 @@ type Permissions struct {
 }
 
 // PlanSecret is one brokered secret in a plan. It names the secret and how
-// the broker uses it, never a value. The approval covers exactly these rules.
+// the broker uses it, never a value. The approval covers exactly these rules,
+// which are the injection policy sealed with the value: PolicyDigest is its
+// digest, the one the secret's envelope and the host's receipt carry, and
+// the host refuses the launch if the settings it receives differ from it.
 type PlanSecret struct {
-	Ref          string                 `json:"ref"`
-	SecretID     string                 `json:"secret_id"`
-	Env          string                 `json:"env"`
-	Upstreams    []string               `json:"upstreams"`
-	Header       string                 `json:"header"`
-	Scheme       string                 `json:"scheme"`
-	Username     string                 `json:"username,omitempty"`
-	Rules        []hostproto.BrokerRule `json:"rules"`
-	Wildcard     bool                   `json:"wildcard_rules"`
-	ExtraHeaders map[string]string      `json:"extra_headers"`
+	Ref            string                 `json:"ref"`
+	SecretID       string                 `json:"secret_id"`
+	Env            string                 `json:"env"`
+	Upstreams      []string               `json:"upstreams"`
+	Header         string                 `json:"header"`
+	Scheme         string                 `json:"scheme"`
+	Username       string                 `json:"username,omitempty"`
+	Rules          []hostproto.BrokerRule `json:"rules"`
+	Wildcard       bool                   `json:"wildcard_rules"`
+	ExtraHeaders   map[string]string      `json:"extra_headers"`
+	ForwardHeaders []string               `json:"forward_headers"`
+	PolicyDigest   string                 `json:"policy_digest"`
 	// BaseURL is the value Env receives inside the sandbox.
 	BaseURL string `json:"base_url"`
 	// ValueFingerprint is the host's keyed fingerprint of the stored value.
@@ -488,9 +493,12 @@ func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical [
 			return r, fail(422, "secret_rules_missing", "Secret "+sec.Ref+" has no broker rules, so it allows nothing (deny by default). Recreate it with explicit rules, "+
 				`for example [{"methods":["POST"],"path":"/v1/messages","match":"exact"}], or with the wildcard [{"methods":["*"],"path":"/"}] to allow every method and path of its upstreams.`)
 		}
+		if _, err = sealedPolicy(stored); err != nil {
+			return r, err
+		}
 		ps := PlanSecret{Ref: sec.Ref, SecretID: stored.ID, Env: sec.Expose.Env, Upstreams: stored.Upstreams, Header: stored.Header, Scheme: stored.Scheme,
-			Username: stored.Username, Rules: stored.Rules, Wildcard: stored.Wildcard, ExtraHeaders: stored.ExtraHeaders,
-			BaseURL: brokerBaseURL(endpoint, sec.Ref), ValueFingerprint: stored.ValueFingerprint}
+			Username: stored.Username, Rules: stored.Rules, Wildcard: stored.Wildcard, ExtraHeaders: stored.ExtraHeaders, ForwardHeaders: stored.ForwardHeaders,
+			PolicyDigest: stored.PolicyDigest, BaseURL: brokerBaseURL(endpoint, sec.Ref), ValueFingerprint: stored.ValueFingerprint}
 		if stored.Wildcard {
 			plan.Notices = append(plan.Notices, "WARNING: secret "+sec.Ref+" uses wildcard rules: the broker forwards every method on every path of "+joinList(stored.Upstreams)+" with the credential")
 			plan.ApprovalReasons = append(plan.ApprovalReasons, "secret "+sec.Ref+" has wildcard broker rules")
@@ -651,9 +659,17 @@ func (s *Store) queueLaunch(tx *sql.Tx, l *launchRow, plan LaunchPlan, canonical
 		return fail(409, "target_unavailable", "The launch target is no longer enrolled and active.")
 	}
 	for _, sec := range plan.Secrets {
-		var state string
-		if err = tx.QueryRow("SELECT state FROM secrets WHERE id=?", sec.SecretID).Scan(&state); err != nil || state != "stored" {
+		stored, err := scanSecret(tx.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE id=?", sec.SecretID))
+		if err != nil || stored.State != "stored" {
 			return fail(409, "secret_unavailable", "Secret "+sec.Ref+" is no longer stored on the target.")
+		}
+		// The plan the approver saw names the sealed policy; the secret must
+		// still hold exactly it (and its receipt must report it).
+		if _, err = sealedPolicy(stored); err != nil {
+			return err
+		}
+		if stored.PolicyDigest != sec.PolicyDigest {
+			return fail(409, "secret_policy_mismatch", "Secret "+sec.Ref+" now holds policy "+stored.PolicyDigest+", not the policy "+sec.PolicyDigest+" this launch was planned and approved with.")
 		}
 		profile, _ := plan.Profile["name"].(string)
 		if err = secretInScope(tx, sec.SecretID, profile, l.RequestedBy); err != nil {
@@ -678,9 +694,12 @@ func (s *Store) queueLaunch(tx *sql.Tx, l *launchRow, plan LaunchPlan, canonical
 	secrets := []hostproto.LaunchSecret{}
 	for _, sec := range plan.Secrets {
 		ls := hostproto.LaunchSecret{Ref: sec.Ref, SecretID: sec.SecretID, Env: sec.Env, Upstreams: sec.Upstreams, Header: sec.Header,
-			Scheme: sec.Scheme, Username: sec.Username, Rules: sec.Rules}
+			Scheme: sec.Scheme, Username: sec.Username, Rules: sec.Rules, Wildcard: sec.Wildcard, PolicyDigest: sec.PolicyDigest}
 		if len(sec.ExtraHeaders) > 0 {
 			ls.ExtraHeaders = sec.ExtraHeaders
+		}
+		if len(sec.ForwardHeaders) > 0 {
+			ls.ForwardHeaders = sec.ForwardHeaders
 		}
 		secrets = append(secrets, ls)
 	}

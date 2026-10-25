@@ -1,13 +1,13 @@
 {
   "agent_version": "",
   "capabilities": [],
-  "created_at": "2026-10-25T02:07:43.237208649Z",
+  "created_at": "2026-10-25T02:51:18.797886989Z",
   "created_by": "oidc:ada",
   "encryption_key": "",
   "heartbeat_seconds": 10,
   "host_key_id": "",
   "hostname": "",
-  "id": "8f08891ef729e7794c60a3f2997e21ad",
+  "id": "c72e5f9401cfe5f8e39a5b29db087cc6",
   "job_key_id": "",
   "kernel_verified": false,
   "mount_roots": [],
@@ -15,5 +15,5 @@
   "online": false,
   "revision": 1,
   "state": "pending",
-  "updated_at": "2026-10-25T02:07:43.237208649Z"
+  "updated_at": "2026-10-25T02:51:18.797886989Z"
 }

@@ -170,6 +170,8 @@ var codeHints = map[string]string{
 	"invalid_ciphertext":        "The service refused the sealed envelope (another target, name or format): run agentgate secret set again; never reuse an envelope.",
 	"invalid_secret":            "Fix the broker setting the message names (--upstream, --header, --scheme, --username, --rule, --extra-header).",
 	"secret_rules_missing":      "The secret was stored without broker rules, so no launch can use it: an administrator removes it (agentgate secret rm) and stores it again with --rule or --allow-any-path.",
+	"policy_mismatch":           "The service received other broker settings than the policy this run sealed: nothing was stored. Do not store secrets through this service until you know why.",
+	"secret_policy_mismatch":    "The secret's stored settings are not the policy sealed with its value (or it predates sealed policies): an administrator removes it (agentgate secret rm) and stores it again.",
 	"secrets_on_host":           "Approve the host key so its host can remove the secrets, or retire with --force and wipe the host.",
 	"receipt_unavailable":       "The host has not answered the secret-put yet: agentgate secret ls shows its state.",
 }

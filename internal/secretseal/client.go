@@ -105,11 +105,13 @@ func (k *KnownTargets) Pin(targetID, fingerprint string) error {
 
 // SealForTarget is the client's whole path for `agentgate secret set`: check
 // the host key against the pin (pinning it first when trustOnFirstUse is set
-// and none exists), verify the signed seal key, and seal value. The caller
+// and none exists), verify the signed seal key, and seal value for use under
+// the injection policy whose digest is policyDigest (the client computes it
+// from what the operator intended; see hostproto.SecretPolicy). The caller
 // shows the returned status and fingerprint to the operator, keeps the
 // Sealed value, and verifies the host's receipt with Sealed.VerifyReceipt.
 func SealForTarget(known *KnownTargets, trustOnFirstUse bool, rec *SignedKeyRecord, hostPub ed25519.PublicKey,
-	targetID, name string, value []byte, now time.Time) (*Sealed, PinStatus, error) {
+	targetID, name, policyDigest string, value []byte, now time.Time) (*Sealed, PinStatus, error) {
 	if known == nil || len(hostPub) != ed25519.PublicKeySize {
 		return nil, PinUnknown, ErrFingerprint
 	}
@@ -134,6 +136,6 @@ func SealForTarget(known *KnownTargets, trustOnFirstUse bool, rec *SignedKeyReco
 	if err != nil {
 		return nil, status, err
 	}
-	sealed, err := SealAt(pub, targetID, name, value, now)
+	sealed, err := SealAt(pub, targetID, name, policyDigest, value, now)
 	return sealed, status, err
 }

@@ -13,8 +13,10 @@ import (
 // HPKE: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305) to the
 // seal key the target host published in a record signed by its enrolled
 // Ed25519 key, which the client checks against a pinned fingerprint. The
-// associated data binds the format, suite, target, secret name, version and a
-// fresh nonce, so the host refuses a replayed or rolled-back envelope. The
+// associated data binds the format, suite, target, secret name, version, a
+// fresh nonce and the digest of the secret's injection policy (SecretPolicy),
+// so the host refuses a replayed or rolled-back envelope and one whose
+// policy the service changed. The
 // wire form is secretseal.Envelope.Encode(): unpadded base64url of the
 // envelope's canonical JSON. The service relays it and cannot open it.
 //
@@ -25,9 +27,9 @@ import (
 // relayed old ciphertext to roll a rotated secret back.
 const (
 	// SealedFormat is secretseal.EnvelopeFormat.
-	SealedFormat = "agentgate.secretseal.v1"
+	SealedFormat = "agentgate.secretseal.v2"
 	// SecretReceiptFormat is secretseal.ReceiptFormat.
-	SecretReceiptFormat = "agentgate.secretseal.receipt.v1"
+	SecretReceiptFormat = "agentgate.secretseal.receipt.v2"
 	// MaxSealedValueBytes is secretseal.MaxValueBytes; the broker itself
 	// injects at most MaxSecretBytes.
 	MaxSealedValueBytes = 16 << 10
@@ -55,7 +57,9 @@ type SealedEnvelope struct {
 	Version uint64 `json:"version"`
 	KeyID   string `json:"key_id"`
 	Nonce   string `json:"nonce"`
-	Sealed  string `json:"sealed"`
+	// PolicyDigest is the SecretPolicy digest the associated data binds.
+	PolicyDigest string `json:"policy_digest"`
+	Sealed       string `json:"sealed"`
 }
 
 // ParseSealed strictly decodes the JSON of one envelope and checks its shape.
@@ -75,7 +79,7 @@ func ParseSealed(raw []byte) (SealedEnvelope, error) {
 		return e, errors.New("hostproto: sealed envelope is not in its canonical encoding")
 	}
 	if e.Format != SealedFormat || !sealTargetPattern.MatchString(e.TargetID) || !NamePattern.MatchString(e.Name) ||
-		e.Version == 0 || e.Version > 1<<62 || !sealKeyIDPattern.MatchString(e.KeyID) || !sealNoncePattern.MatchString(e.Nonce) {
+		e.Version == 0 || e.Version > 1<<62 || !sealKeyIDPattern.MatchString(e.KeyID) || !sealNoncePattern.MatchString(e.Nonce) || !validDigest(e.PolicyDigest) {
 		return e, errors.New("hostproto: sealed envelope context invalid")
 	}
 	sealed, err := b64.DecodeString(e.Sealed)
@@ -113,21 +117,24 @@ func DecodeSealed(value string) ([]byte, error) {
 // is keyed by the HPKE exporter secret only the sealing client shares with
 // the host, so the client, not the service, can verify it.
 type SecretReceipt struct {
-	Format      string `json:"format"`
-	TargetID    string `json:"target_id"`
-	Name        string `json:"name"`
-	Version     uint64 `json:"version"`
-	KeyID       string `json:"key_id"`
-	Nonce       string `json:"nonce"`
-	Fingerprint string `json:"fingerprint"`
-	Tag         string `json:"tag"`
+	Format   string `json:"format"`
+	TargetID string `json:"target_id"`
+	Name     string `json:"name"`
+	Version  uint64 `json:"version"`
+	KeyID    string `json:"key_id"`
+	Nonce    string `json:"nonce"`
+	// PolicyDigest is the policy the host stored with the value; the tag
+	// covers it, so the sealing client checks it is the one it sealed.
+	PolicyDigest string `json:"policy_digest"`
+	Fingerprint  string `json:"fingerprint"`
+	Tag          string `json:"tag"`
 }
 
 // Check validates the receipt's shape.
 func (r SecretReceipt) Check() error {
 	if r.Format != SecretReceiptFormat || !sealTargetPattern.MatchString(r.TargetID) || !NamePattern.MatchString(r.Name) ||
 		r.Version == 0 || r.Version > 1<<62 || !sealKeyIDPattern.MatchString(r.KeyID) || !sealNoncePattern.MatchString(r.Nonce) ||
-		!fingerprintRule.MatchString(r.Fingerprint) {
+		!fingerprintRule.MatchString(r.Fingerprint) || !validDigest(r.PolicyDigest) {
 		return errors.New("hostproto: secret receipt invalid")
 	}
 	tag, err := b64.DecodeString(r.Tag)
@@ -139,5 +146,5 @@ func (r SecretReceipt) Check() error {
 
 // Answers reports whether the receipt names exactly this envelope's context.
 func (r SecretReceipt) Answers(e SealedEnvelope) bool {
-	return r.TargetID == e.TargetID && r.Name == e.Name && r.Version == e.Version && r.KeyID == e.KeyID && r.Nonce == e.Nonce
+	return r.TargetID == e.TargetID && r.Name == e.Name && r.Version == e.Version && r.KeyID == e.KeyID && r.Nonce == e.Nonce && r.PolicyDigest == e.PolicyDigest
 }

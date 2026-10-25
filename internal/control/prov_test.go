@@ -570,7 +570,7 @@ func (f *provFixture) sealFor(h *fakeHost, name, value string) *secretseal.Seale
 	if err = known.Pin(h.id, secretseal.HostKeyFingerprint(hostPub)); err != nil {
 		f.t.Fatal(err)
 	}
-	sealed, _, err := secretseal.SealForTarget(known, false, rec, hostPub, h.id, name, []byte(value), f.now())
+	sealed, _, err := secretseal.SealForTarget(known, false, rec, hostPub, h.id, name, defaultPolicyDigest(), []byte(value), f.now())
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -578,9 +578,68 @@ func (f *provFixture) sealFor(h *fakeHost, name, value string) *secretseal.Seale
 }
 
 func secretInput(name string, sealed *secretseal.Sealed, profile string) SecretInput {
-	return SecretInput{Name: name, Target: "local", Upstreams: []string{"api.model.example"}, Header: "x-api-key", Ciphertext: sealed.Envelope.Encode(),
+	in := SecretInput{Name: name, Target: "local", Upstreams: []string{"api.model.example"}, Header: "x-api-key",
 		Rules:           []SecretRuleInput{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}, {Methods: []string{"GET"}, Path: "/v1/models", Match: "prefix"}},
 		AllowedProfiles: []string{profile}, AllowedLaunchers: []string{"oidc:lin"}, Reason: "Store the model API key"}
+	if sealed != nil {
+		in.Ciphertext = sealed.Envelope.Encode()
+	}
+	return in
+}
+
+// inputPolicyDigest is what a client computes before it seals: the digest of
+// the injection policy the settings of in make (the wildcard rule expanded,
+// as the service stores it).
+func inputPolicyDigest(t testing.TB, in SecretInput) string {
+	t.Helper()
+	digest, err := policyDigestOf(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
+func policyDigestOf(in SecretInput) (string, error) {
+	rules := []hostproto.BrokerRule{}
+	wild := len(in.Rules) == 1 && len(in.Rules[0].Methods) == 1 && in.Rules[0].Methods[0] == "*"
+	if wild {
+		rules = append(rules, hostproto.BrokerRule{Methods: hostproto.BrokerMethods, Path: "/", Match: "prefix"})
+	}
+	for _, r := range in.Rules {
+		if !wild {
+			rules = append(rules, hostproto.BrokerRule{Methods: r.Methods, Path: r.Path, Match: r.Match})
+		}
+	}
+	p, err := hostproto.NewSecretPolicy(in.Upstreams, in.Header, in.Scheme, in.Username, rules, in.ExtraHeaders, in.ForwardHeaders, wild)
+	return p.Digest(), err
+}
+
+// defaultPolicyDigest is the policy of secretInput's settings.
+func defaultPolicyDigest() string {
+	digest, err := policyDigestOf(secretInput("x", nil, "dev"))
+	if err != nil {
+		panic(err)
+	}
+	return digest
+}
+
+// sealInput seals value for in's name, target and settings and returns in
+// with the envelope, as a client does once the operator chose the settings.
+func (f *provFixture) sealInput(h *fakeHost, in SecretInput, value string) SecretInput {
+	f.t.Helper()
+	published := must(f.s.TargetSealKey(in.Target))
+	rec := must(secretseal.ParseSignedKeyRecord(published["record"].(json.RawMessage)))
+	pub := h.key.Public().(ed25519.PublicKey)
+	known := must(secretseal.LoadKnownTargets(filepath.Join(f.t.TempDir(), "known.json")))
+	if err := known.Pin(h.id, secretseal.HostKeyFingerprint(pub)); err != nil {
+		f.t.Fatal(err)
+	}
+	sealed, _, err := secretseal.SealForTarget(known, false, rec, pub, h.id, in.Name, inputPolicyDigest(f.t, in), []byte(value), f.now())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	in.Ciphertext = sealed.Envelope.Encode()
+	return in
 }
 
 // hostStore opens a host-side secretseal store for the fake host.
@@ -630,7 +689,7 @@ func TestSecretsKeepOnlyMetadataAndAreScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the host could not open its sealed secret: %v", err)
 	}
-	if _, _, ok, _ := store.Stored("model-api"); !ok {
+	if _, ok, _ := store.Stored("model-api"); !ok {
 		t.Fatal("the value was not stored")
 	}
 	if _, err := f.s.SecretReceipt(sec.ID); errCode(err) != "receipt_unavailable" {

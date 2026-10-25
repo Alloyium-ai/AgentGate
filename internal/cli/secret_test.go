@@ -49,9 +49,37 @@ func newSealFixture(t *testing.T) *sealFixture {
 		var in control.SecretInput
 		json.Unmarshal(body, &in)
 		raw, _ := base64.RawURLEncoding.DecodeString(in.Ciphertext)
-		writeJSON(w, 200, control.Secret{ID: "s1", Name: in.Name, TargetID: f.target.ID, Upstreams: in.Upstreams, Header: in.Header, Fingerprint: hostproto.SHA256Hex(raw), AllowedProfiles: in.AllowedProfiles, AllowedLaunchers: in.AllowedLaunchers, State: "pending"})
+		writeJSON(w, 200, f.stored(in, hostproto.SHA256Hex(raw)))
 	})
 	return f
+}
+
+// stored is the service's answer to POST /secrets as the real service makes
+// it: the settings as stored (Bearer explicit for Authorization, the wildcard
+// expanded) and the envelope's policy digest.
+func (f *sealFixture) stored(in control.SecretInput, sum string) control.Secret {
+	sec := control.Secret{ID: "s1", Name: in.Name, TargetID: f.target.ID, Upstreams: in.Upstreams, Header: in.Header, Scheme: in.Scheme, Username: in.Username,
+		Rules: []hostproto.BrokerRule{}, ExtraHeaders: map[string]string{}, ForwardHeaders: []string{}, Fingerprint: sum, AllowedProfiles: in.AllowedProfiles, AllowedLaunchers: in.AllowedLaunchers, State: "pending"}
+	if sec.Scheme == "" && strings.EqualFold(in.Header, "authorization") {
+		sec.Scheme = "Bearer"
+	}
+	for _, r := range in.Rules {
+		if len(r.Methods) == 1 && r.Methods[0] == "*" {
+			sec.Wildcard, sec.Rules = true, []hostproto.BrokerRule{{Methods: hostproto.BrokerMethods, Path: "/", Match: "prefix"}}
+			break
+		}
+		sec.Rules = append(sec.Rules, hostproto.BrokerRule{Methods: r.Methods, Path: r.Path, Match: r.Match})
+	}
+	for k, v := range in.ExtraHeaders {
+		sec.ExtraHeaders[k] = v
+	}
+	for _, h := range in.ForwardHeaders {
+		sec.ForwardHeaders = append(sec.ForwardHeaders, strings.ToLower(h))
+	}
+	if env, err := secretseal.DecodeEnvelope(in.Ciphertext); err == nil {
+		sec.PolicyDigest = env.PolicyDigest
+	}
+	return sec
 }
 
 // serve answers GET /targets/{id} with the target and GET /targets/{id}/seal-key
@@ -324,7 +352,7 @@ func TestSecretSetUsesTheServiceInjectionFieldsAndVerifiesTheReceipt(t *testing.
 	f.h.api.handle("GET /api/v1/secrets/{id}/receipt", func(w http.ResponseWriter, r *http.Request, _ []byte, _ []string) {
 		other, _ := secretseal.GenerateHostKey(f.target.ID, f.hostKey, f.h.now, time.Hour)
 		pub, _ := secretseal.VerifyKeyRecord(ptr(other.Published()), f.hostPub, secretseal.HostKeyFingerprint(f.hostPub), f.target.ID, f.h.now)
-		forged, _ := secretseal.SealAt(pub, f.target.ID, "anthropic", []byte("attacker-key"), f.h.now)
+		forged, _ := secretseal.SealAt(pub, f.target.ID, "anthropic", strings.Repeat("0", 64), []byte("attacker-key"), f.h.now)
 		opened, _ := secretseal.Open(other, &forged.Envelope, 0, f.h.now)
 		raw, _ := json.Marshal(opened.Receipt("sfp1_" + strings.Repeat("cd", 16)))
 		writeJSON(w, 200, map[string]any{"secret_id": "s1", "state": "stored", "receipt": json.RawMessage(raw)})

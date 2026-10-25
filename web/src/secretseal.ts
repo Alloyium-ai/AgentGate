@@ -14,7 +14,10 @@
 //  3. It seals with RFC 9180 HPKE base mode, DHKEM(X25519, HKDF-SHA256),
 //     HKDF-SHA256, ChaCha20-Poly1305, exactly as secretseal.Seal does. The
 //     associated data binds the target id, the secret name, the version (the
-//     sealing time in milliseconds), the key id and a fresh nonce.
+//     sealing time in milliseconds), the key id, a fresh nonce and the digest
+//     of the secret's injection policy (hostproto.SecretPolicy, encoded here
+//     byte for byte as Go does): the host stores and uses the value only
+//     under that policy, so the service cannot redirect it.
 //
 // WebCrypto provides X25519, Ed25519, SHA-256 and HMAC. It has no
 // ChaCha20-Poly1305, so this file implements RFC 8439 for that one AEAD; the
@@ -24,14 +27,14 @@
 //
 // Errors never include a value, a key or plaintext.
 
-export const ENVELOPE_FORMAT = "agentgate.secretseal.v1";
-export const RECEIPT_FORMAT = "agentgate.secretseal.receipt.v1";
+export const ENVELOPE_FORMAT = "agentgate.secretseal.v2";
+export const RECEIPT_FORMAT = "agentgate.secretseal.receipt.v2";
 export const KEY_RECORD_FORMAT = "agentgate.sealkey.v1";
 export const SUITE = "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305";
 export const MAX_VALUE_BYTES = 16 << 10;
 const MAX_KEY_LIFETIME_MS = 90 * 24 * 3600 * 1000;
 const MAX_SKEW_MS = 5 * 60 * 1000;
-const EXPORT_RECEIPT = "agentgate.secretseal.v1 receipt";
+const EXPORT_RECEIPT = "agentgate.secretseal.v2 receipt";
 
 export type KeyRecord = {
   format: string;
@@ -51,6 +54,7 @@ export type Envelope = {
   version: number;
   key_id: string;
   nonce: string;
+  policy_digest: string;
   sealed: string;
 };
 export type SealReceipt = {
@@ -60,6 +64,7 @@ export type SealReceipt = {
   version: number;
   key_id: string;
   nonce: string;
+  policy_digest: string;
   fingerprint: string;
   tag: string;
 };
@@ -74,7 +79,8 @@ export type SealErrorCode =
   | "context"
   | "value"
   | "receipt"
-  | "envelope";
+  | "envelope"
+  | "policy";
 
 export class SealError extends Error {
   constructor(
@@ -95,6 +101,7 @@ const messages: Record<SealErrorCode, string> = {
   value: "The value is empty or larger than 16 KiB.",
   receipt: "The host receipt does not authenticate.",
   envelope: "The sealed envelope is malformed.",
+  policy: "The broker settings do not make a valid injection policy.",
 };
 const fail = (code: SealErrorCode): never => {
   throw new SealError(code, messages[code]);
@@ -102,6 +109,7 @@ const fail = (code: SealErrorCode): never => {
 
 const namePattern = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const targetPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const digestPattern = /^[0-9a-f]{64}$/;
 
 function subtle(): SubtleCrypto {
   const s = globalThis.crypto?.subtle;
@@ -234,6 +242,184 @@ function signingInput(r: KeyRecord): Uint8Array {
     utf8(r.not_after),
     utf8(r.host_key),
   );
+}
+
+// ---- injection policy (hostproto.SecretPolicy) ---------------------------------
+
+// A secret's injection policy says where and how the host's broker may use
+// the value. The browser computes it from the form, shows it before sealing,
+// seals its digest with the value and refuses an answer whose settings make
+// another digest. The encoding below is internal/hostproto/policy.go's, byte
+// for byte; web/qa/secretseal.node.mjs checks it against the Go vectors.
+
+export const POLICY_FORMAT = "agentgate.secret-policy.v1";
+export const BROKER_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+const MAX_POLICY_RULES = 64;
+const MAX_FORWARD_HEADERS = 16;
+const upstreamPattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+(:[0-9]{1,5})?$/;
+const headerPattern = /^[A-Za-z0-9-]{1,64}$/;
+
+export type PolicyRule = { methods: string[]; path: string; match: string };
+export type PolicyUpstream = { host: string; port: number; base_path: string; private_addresses: string[] };
+export type SecretPolicy = {
+  upstreams: PolicyUpstream[];
+  header: string;
+  scheme: string;
+  username: string;
+  extra_headers: { name: string; value: string }[];
+  forward_headers: string[];
+  rules: PolicyRule[];
+  wildcard: boolean;
+};
+// PolicyInput is a secret's settings as the secrets API writes them (the
+// wildcard is the expanded rule with wildcard set).
+export type PolicyInput = {
+  upstreams: string[];
+  header: string;
+  scheme?: string;
+  username?: string;
+  rules: PolicyRule[];
+  extra_headers?: Record<string, string> | null;
+  forward_headers?: string[] | null;
+  wildcard?: boolean;
+};
+
+const bytewise = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+// newSecretPolicy is hostproto.NewSecretPolicy: it normalizes the settings
+// (explicit ports, lower-case header names, Bearer for an Authorization
+// header without a scheme, sorted extra and forwarded headers, rule methods
+// in BROKER_METHODS order) and refuses anything ambiguous.
+export function newSecretPolicy(input: PolicyInput): SecretPolicy {
+  const header = String(input.header ?? "");
+  const ups = input.upstreams ?? [];
+  if (!Array.isArray(ups) || ups.length < 1 || ups.length > 8 || !headerPattern.test(header)) fail("policy");
+  const p: SecretPolicy = {
+    upstreams: [],
+    header: header.toLowerCase(),
+    scheme: input.scheme ?? "",
+    username: input.username ?? "",
+    extra_headers: [],
+    forward_headers: [],
+    rules: [],
+    wildcard: !!input.wildcard,
+  };
+  const seen = new Set<string>();
+  for (const u of ups) {
+    if (typeof u !== "string" || u.length > 253 || !upstreamPattern.test(u)) fail("policy");
+    let host = u;
+    let port = 443;
+    const colon = u.lastIndexOf(":");
+    if (colon >= 0) {
+      host = u.slice(0, colon);
+      port = Number(u.slice(colon + 1));
+      if (!Number.isInteger(port) || port < 1 || port > 65535) fail("policy");
+    }
+    const key = host + ":" + port;
+    if (seen.has(key)) fail("policy");
+    seen.add(key);
+    p.upstreams.push({ host, port, base_path: "", private_addresses: [] });
+  }
+  if (p.scheme === "" && p.header === "authorization") p.scheme = "Bearer";
+  const names = new Set<string>();
+  for (const [name, value] of Object.entries(input.extra_headers ?? {})) {
+    const lower = name.toLowerCase();
+    if (!headerPattern.test(name) || names.has(lower) || typeof value !== "string") fail("policy");
+    names.add(lower);
+    p.extra_headers.push({ name: lower, value });
+  }
+  p.extra_headers.sort((a, b) => bytewise(a.name, b.name));
+  const forward = input.forward_headers ?? [];
+  if (forward.length > MAX_FORWARD_HEADERS) fail("policy");
+  const fw = new Set<string>();
+  for (const f of forward) {
+    const lower = String(f).toLowerCase();
+    if (!headerPattern.test(f) || fw.has(lower)) fail("policy");
+    fw.add(lower);
+    p.forward_headers.push(lower);
+  }
+  p.forward_headers.sort(bytewise);
+  const rules = input.rules ?? [];
+  if (rules.length > MAX_POLICY_RULES) fail("policy");
+  for (const r of rules) {
+    const methods: string[] = [];
+    for (const m of BROKER_METHODS) {
+      const n = r.methods.filter((x) => x === m).length;
+      if (n > 1) fail("policy");
+      if (n === 1) methods.push(m);
+    }
+    if (methods.length !== r.methods.length) fail("policy");
+    p.rules.push({ methods, path: r.path, match: r.match });
+  }
+  if (
+    p.wildcard &&
+    (p.rules.length !== 1 || p.rules[0].methods.length !== BROKER_METHODS.length || p.rules[0].path !== "/" || p.rules[0].match !== "prefix")
+  )
+    fail("policy");
+  return p;
+}
+
+const lpStrings = (values: string[]) => lp(...values.map(utf8));
+
+// canonicalPolicy is SecretPolicy.Canonical: nested length-prefixed fields
+//   lp(format, lp(lp(host, port, base_path, lp(private_address...))...),
+//      header, scheme, username, lp(lp(name, value)...), lp(forward...),
+//      lp(lp(lp(method...), path, match)...), "true" | "false")
+export function canonicalPolicy(p: SecretPolicy): Uint8Array {
+  const ups = p.upstreams.map((u) =>
+    lp(utf8(u.host), utf8(String(u.port)), utf8(u.base_path), lpStrings([...u.private_addresses].sort(bytewise))),
+  );
+  const extra = p.extra_headers.map((h) => lp(utf8(h.name), utf8(h.value)));
+  const rules = p.rules.map((r) => lp(lpStrings(r.methods), utf8(r.path), utf8(r.match)));
+  return lp(
+    utf8(POLICY_FORMAT),
+    lp(...ups),
+    utf8(p.header),
+    utf8(p.scheme),
+    utf8(p.username),
+    lp(...extra),
+    lpStrings(p.forward_headers),
+    lp(...rules),
+    utf8(p.wildcard ? "true" : "false"),
+  );
+}
+
+// policyDigest is SecretPolicy.Digest: the hex SHA-256 of the canonical
+// encoding, the policy_digest a sealed envelope, its receipt, the service and
+// the host all carry.
+export async function policyDigest(p: SecretPolicy): Promise<string> {
+  return hex(await sha256(canonicalPolicy(p)));
+}
+
+// settingsDigest is the digest of a secret's settings as the secrets API
+// returns them (a stored secret or a plan's secret): what a reviewer checks
+// against the policy_digest the same answer names.
+export async function settingsDigest(s: {
+  upstreams: string[];
+  header: string;
+  scheme?: string;
+  username?: string;
+  rules?: { methods: string[]; path: string; match?: string }[] | null;
+  wildcard_rules?: boolean;
+  extra_headers?: Record<string, string> | null;
+  forward_headers?: string[] | null;
+}): Promise<string | undefined> {
+  try {
+    return await policyDigest(
+      newSecretPolicy({
+        upstreams: s.upstreams,
+        header: s.header,
+        scheme: s.scheme,
+        username: s.username,
+        rules: (s.rules ?? []).map((r) => ({ methods: r.methods, path: r.path, match: r.match ?? "" })),
+        extra_headers: s.extra_headers,
+        forward_headers: s.forward_headers,
+        wildcard: s.wildcard_rules,
+      }),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 // ---- support -----------------------------------------------------------------
@@ -453,21 +639,31 @@ export const hpkeExport = (exporter: Uint8Array, context: Uint8Array, length: nu
 // ---- secretseal envelope --------------------------------------------------------
 
 export function envelopeAAD(e: Omit<Envelope, "sealed">): Uint8Array {
-  return lp(utf8(ENVELOPE_FORMAT), utf8(SUITE), utf8(e.target_id), utf8(e.name), u64(e.version), utf8(e.key_id), utf8(e.nonce));
+  return lp(utf8(ENVELOPE_FORMAT), utf8(SUITE), utf8(e.target_id), utf8(e.name), u64(e.version), utf8(e.key_id), utf8(e.nonce), utf8(e.policy_digest));
 }
 export const envelopeInfo = (keyID: string, targetID: string) => lp(utf8(ENVELOPE_FORMAT), utf8(SUITE), utf8(keyID), utf8(targetID));
 
 export type SealOptions = { ephemeralPrivate?: Uint8Array; nonce?: string };
 
-// seal is secretseal.SealAt: it seals value for one verified target key with
-// now (Unix milliseconds) as the version. The caller wipes value afterwards
-// and keeps confirm in memory only until the host receipt is checked.
-export async function seal(key: VerifiedKey, targetID: string, name: string, value: Uint8Array, now: number, options: SealOptions = {}): Promise<Sealed> {
-  if (!key || key.targetID !== targetID || !namePattern.test(name) || !targetPattern.test(targetID)) fail("context");
+// seal is secretseal.SealAt: it seals value for one verified target key, to
+// be used only under the injection policy whose digest is policyDigest (see
+// policyDigest), with now (Unix milliseconds) as the version. The caller
+// wipes value afterwards and keeps confirm in memory only until the host
+// receipt is checked.
+export async function seal(
+  key: VerifiedKey,
+  targetID: string,
+  name: string,
+  policyDigest: string,
+  value: Uint8Array,
+  now: number,
+  options: SealOptions = {},
+): Promise<Sealed> {
+  if (!key || key.targetID !== targetID || !namePattern.test(name) || !targetPattern.test(targetID) || !digestPattern.test(policyDigest)) fail("context");
   if (value.length === 0 || value.length > MAX_VALUE_BYTES) fail("value");
   const nonce = options.nonce ?? hex(globalThis.crypto.getRandomValues(new Uint8Array(16)));
   if (!/^[0-9a-f]{32}$/.test(nonce)) fail("envelope");
-  const head = { format: ENVELOPE_FORMAT, target_id: targetID, name, version: Math.floor(now), key_id: key.keyID, nonce };
+  const head = { format: ENVELOPE_FORMAT, target_id: targetID, name, version: Math.floor(now), key_id: key.keyID, nonce, policy_digest: policyDigest };
   const sealed = await hpkeSeal(key.publicKey, envelopeInfo(key.keyID, targetID), envelopeAAD(head), value, options.ephemeralPrivate);
   const confirm = await hpkeExport(sealed.exporter, utf8(EXPORT_RECEIPT), 32);
   sealed.exporter.fill(0);
@@ -477,7 +673,16 @@ export async function seal(key: VerifiedKey, targetID: string, name: string, val
 // encodeEnvelope is secretseal.Envelope.Encode: the unpadded base64url of
 // the envelope's JSON, the string the secrets API carries as ciphertext.
 export function encodeEnvelope(e: Envelope): string {
-  const ordered = { format: e.format, target_id: e.target_id, name: e.name, version: e.version, key_id: e.key_id, nonce: e.nonce, sealed: e.sealed };
+  const ordered = {
+    format: e.format,
+    target_id: e.target_id,
+    name: e.name,
+    version: e.version,
+    key_id: e.key_id,
+    nonce: e.nonce,
+    policy_digest: e.policy_digest,
+    sealed: e.sealed,
+  };
   return b64url(utf8(JSON.stringify(ordered)));
 }
 
@@ -506,14 +711,25 @@ export async function openEnvelope(hostPrivate: Uint8Array, e: Envelope): Promis
 }
 
 function receiptMAC(r: SealReceipt): Uint8Array {
-  return lp(utf8(RECEIPT_FORMAT), utf8(r.target_id), utf8(r.name), u64(r.version), utf8(r.key_id), utf8(r.nonce), utf8(r.fingerprint));
+  return lp(utf8(RECEIPT_FORMAT), utf8(r.target_id), utf8(r.name), u64(r.version), utf8(r.key_id), utf8(r.nonce), utf8(r.policy_digest), utf8(r.fingerprint));
 }
 
 // verifyReceipt is Sealed.VerifyReceipt: the host proves it opened exactly
-// this envelope. It returns the fingerprint the host reported.
+// this envelope and stored it under exactly the sealed policy. It returns the
+// fingerprint the host reported.
 export async function verifyReceipt(s: Sealed, r: SealReceipt): Promise<string> {
   const e = s.envelope;
-  if (!r || r.format !== RECEIPT_FORMAT || r.target_id !== e.target_id || r.name !== e.name || r.version !== e.version || r.key_id !== e.key_id || r.nonce !== e.nonce || !/^sfp1_[0-9a-f]{32}$/.test(r.fingerprint))
+  if (
+    !r ||
+    r.format !== RECEIPT_FORMAT ||
+    r.target_id !== e.target_id ||
+    r.name !== e.name ||
+    r.version !== e.version ||
+    r.key_id !== e.key_id ||
+    r.nonce !== e.nonce ||
+    r.policy_digest !== e.policy_digest ||
+    !/^sfp1_[0-9a-f]{32}$/.test(r.fingerprint)
+  )
     fail("receipt");
   let tag: Uint8Array;
   try {

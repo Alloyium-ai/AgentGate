@@ -63,9 +63,19 @@ func samplePlan() control.LaunchPlan {
 		Mounts: []hostproto.LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: "/var/lib/agentgate/mounts/repo"}},
 		Secrets: []control.PlanSecret{{Ref: "anthropic", SecretID: "s1", Env: "ANTHROPIC_BASE_URL", Upstreams: []string{"api.anthropic.com"}, Header: "x-api-key",
 			Rules: []hostproto.BrokerRule{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}}, ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
-			BaseURL: "http://172.30.7.2:8443/anthropic", ValueFingerprint: "sfp1_" + strings.Repeat("ab", 16)}},
+			PolicyDigest: samplePolicyDigest(), BaseURL: "http://172.30.7.2:8443/anthropic", ValueFingerprint: "sfp1_" + strings.Repeat("ab", 16)}},
 		Broker:  &control.PlanBroker{Address: "172.30.7.2", Port: 8443, Subnet: "172.30.7.0/29", TargetAddress: "172.30.7.3"},
 		Notices: []string{"the agent reaches its secrets only through the broker at 172.30.7.2:8443; the taskboard TCP endpoint is not allowed in this launch", "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel"}}
+}
+
+// samplePolicyDigest is the sealed policy of samplePlan's secret.
+func samplePolicyDigest() string {
+	p, err := hostproto.NewSecretPolicy([]string{"api.anthropic.com"}, "x-api-key", "", "", []hostproto.BrokerRule{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}},
+		map[string]string{"anthropic-version": "2023-06-01"}, nil, false)
+	if err != nil {
+		panic(err)
+	}
+	return p.Digest()
 }
 
 func sampleLaunch(state string) control.Launch {

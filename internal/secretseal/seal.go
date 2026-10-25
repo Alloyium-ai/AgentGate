@@ -9,12 +9,16 @@
 // obtained out of band and pinned, then seals the value with RFC 9180 HPKE
 // (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305, base mode) from
 // the Go standard library. The associated data binds the target, the secret
-// name, a version and a fresh nonce. The host opens the envelope, stores the
-// value in a root-owned 0600 file and returns a receipt: a keyed fingerprint of
-// the value and a tag derived from the HPKE exporter secret, which only the
-// sealing client can verify. A service that substitutes the host key fails the
-// signature check; a service that substitutes the ciphertext cannot produce a
-// receipt the client accepts.
+// name, a version, a fresh nonce and the digest of the secret's injection
+// policy (hostproto.SecretPolicy: where and how the host's broker may use the
+// value), which the client computes from what the operator intended. The host
+// opens the envelope only with the policy whose digest it seals, stores both
+// in root-owned 0600 files and returns a receipt: the policy digest, a keyed
+// fingerprint of the value and a tag derived from the HPKE exporter secret,
+// which only the sealing client can verify. A service that substitutes the
+// host key fails the signature check; one that substitutes the ciphertext or
+// the policy cannot produce a receipt the client accepts, and the host refuses
+// to store or use the value under any other policy.
 package secretseal
 
 import (
@@ -35,8 +39,8 @@ import (
 
 // Format names and limits.
 const (
-	EnvelopeFormat = "agentgate.secretseal.v1"
-	ReceiptFormat  = "agentgate.secretseal.receipt.v1"
+	EnvelopeFormat = "agentgate.secretseal.v2"
+	ReceiptFormat  = "agentgate.secretseal.receipt.v2"
 	Suite          = "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305"
 
 	MaxValueBytes    = 16 << 10
@@ -47,7 +51,7 @@ const (
 	// MaxSkew bounds a client clock ahead of the host.
 	MaxSkew = 5 * time.Minute
 
-	exportReceipt = "agentgate.secretseal.v1 receipt"
+	exportReceipt = "agentgate.secretseal.v2 receipt"
 )
 
 var (
@@ -81,6 +85,9 @@ type Envelope struct {
 	Version uint64 `json:"version"`
 	KeyID   string `json:"key_id"`
 	Nonce   string `json:"nonce"`
+	// PolicyDigest is the hex SHA-256 of the canonical injection policy
+	// (hostproto.SecretPolicy.Digest) the value may be used under.
+	PolicyDigest string `json:"policy_digest"`
 	// Sealed is base64url(enc || ciphertext) without padding.
 	Sealed string `json:"sealed"`
 }
@@ -88,14 +95,16 @@ type Envelope struct {
 // Receipt is the host's answer. The fingerprint is a keyed hash, so a
 // low-entropy value cannot be recovered by guessing without the host's key.
 type Receipt struct {
-	Format      string `json:"format"`
-	TargetID    string `json:"target_id"`
-	Name        string `json:"name"`
-	Version     uint64 `json:"version"`
-	KeyID       string `json:"key_id"`
-	Nonce       string `json:"nonce"`
-	Fingerprint string `json:"fingerprint"`
-	Tag         string `json:"tag"`
+	Format   string `json:"format"`
+	TargetID string `json:"target_id"`
+	Name     string `json:"name"`
+	Version  uint64 `json:"version"`
+	KeyID    string `json:"key_id"`
+	Nonce    string `json:"nonce"`
+	// PolicyDigest is the policy the host stored with the value.
+	PolicyDigest string `json:"policy_digest"`
+	Fingerprint  string `json:"fingerprint"`
+	Tag          string `json:"tag"`
 }
 
 // lp appends length-prefixed fields: an unambiguous encoding for AAD,
@@ -118,7 +127,8 @@ func u64(v uint64) []byte {
 }
 
 func (e *Envelope) aad() []byte {
-	return lp([]byte(EnvelopeFormat), []byte(Suite), []byte(e.TargetID), []byte(e.Name), u64(e.Version), []byte(e.KeyID), []byte(e.Nonce))
+	return lp([]byte(EnvelopeFormat), []byte(Suite), []byte(e.TargetID), []byte(e.Name), u64(e.Version), []byte(e.KeyID), []byte(e.Nonce),
+		[]byte(e.PolicyDigest))
 }
 
 func info(keyID, targetID string) []byte {
@@ -127,7 +137,7 @@ func info(keyID, targetID string) []byte {
 
 func (e *Envelope) validShape() error {
 	if e.Format != EnvelopeFormat || !targetPattern.MatchString(e.TargetID) || !namePattern.MatchString(e.Name) ||
-		e.Version == 0 || !keyIDPattern.MatchString(e.KeyID) || !noncePattern.MatchString(e.Nonce) ||
+		e.Version == 0 || !keyIDPattern.MatchString(e.KeyID) || !noncePattern.MatchString(e.Nonce) || !keyIDPattern.MatchString(e.PolicyDigest) ||
 		len(e.Sealed) == 0 || len(e.Sealed) > MaxEnvelopeBytes {
 		return ErrEnvelope
 	}
@@ -142,14 +152,15 @@ type Sealed struct {
 	confirm  []byte
 }
 
-// Seal encrypts value for one target with the current time as its version.
-func Seal(pub *PublicKey, targetID, name string, value []byte) (*Sealed, error) {
-	return SealAt(pub, targetID, name, value, time.Now())
+// Seal encrypts value for one target, to be used only under the injection
+// policy whose digest is policyDigest, with the current time as its version.
+func Seal(pub *PublicKey, targetID, name, policyDigest string, value []byte) (*Sealed, error) {
+	return SealAt(pub, targetID, name, policyDigest, value, time.Now())
 }
 
 // SealAt is Seal with an explicit clock.
-func SealAt(pub *PublicKey, targetID, name string, value []byte, now time.Time) (*Sealed, error) {
-	if pub == nil || pub.targetID != targetID || !namePattern.MatchString(name) || !targetPattern.MatchString(targetID) {
+func SealAt(pub *PublicKey, targetID, name, policyDigest string, value []byte, now time.Time) (*Sealed, error) {
+	if pub == nil || pub.targetID != targetID || !namePattern.MatchString(name) || !targetPattern.MatchString(targetID) || !keyIDPattern.MatchString(policyDigest) {
 		return nil, ErrContext
 	}
 	if len(value) == 0 || len(value) > MaxValueBytes {
@@ -159,11 +170,11 @@ func SealAt(pub *PublicKey, targetID, name string, value []byte, now time.Time) 
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return nil, err
 	}
-	return seal(pub, targetID, name, uint64(now.UnixMilli()), hex.EncodeToString(nonce[:]), value)
+	return seal(pub, targetID, name, policyDigest, uint64(now.UnixMilli()), hex.EncodeToString(nonce[:]), value)
 }
 
-func seal(pub *PublicKey, targetID, name string, version uint64, nonce string, value []byte) (*Sealed, error) {
-	env := Envelope{Format: EnvelopeFormat, TargetID: targetID, Name: name, Version: version, KeyID: pub.keyID, Nonce: nonce}
+func seal(pub *PublicKey, targetID, name, policyDigest string, version uint64, nonce string, value []byte) (*Sealed, error) {
+	env := Envelope{Format: EnvelopeFormat, TargetID: targetID, Name: name, Version: version, KeyID: pub.keyID, Nonce: nonce, PolicyDigest: policyDigest}
 	kdf, aead := suite()
 	enc, sender, err := hpke.NewSender(pub.pk, kdf, aead, info(pub.keyID, targetID))
 	if err != nil {
@@ -181,12 +192,13 @@ func seal(pub *PublicKey, targetID, name string, version uint64, nonce string, v
 	return &Sealed{Envelope: env, confirm: confirm}, nil
 }
 
-// VerifyReceipt checks that the host opened exactly this envelope and
-// returns the fingerprint it reported. The comparison is constant time.
+// VerifyReceipt checks that the host opened exactly this envelope and stored
+// it under exactly the policy this client sealed, and returns the fingerprint
+// it reported. The tag comparison is constant time.
 func (s *Sealed) VerifyReceipt(r *Receipt) (string, error) {
 	e := &s.Envelope
 	if r == nil || r.Format != ReceiptFormat || r.TargetID != e.TargetID || r.Name != e.Name || r.Version != e.Version ||
-		r.KeyID != e.KeyID || r.Nonce != e.Nonce || !validFingerprint(r.Fingerprint) {
+		r.KeyID != e.KeyID || r.Nonce != e.Nonce || r.PolicyDigest != e.PolicyDigest || !validFingerprint(r.Fingerprint) {
 		return "", ErrReceipt
 	}
 	tag, err := base64.RawURLEncoding.DecodeString(r.Tag)
@@ -202,7 +214,7 @@ func (s *Sealed) Wipe() { clear(s.confirm) }
 func receiptTag(confirm []byte, r *Receipt) []byte {
 	m := hmac.New(sha256.New, confirm)
 	m.Write(lp([]byte(ReceiptFormat), []byte(r.TargetID), []byte(r.Name), u64(r.Version), []byte(r.KeyID), []byte(r.Nonce),
-		[]byte(r.Fingerprint)))
+		[]byte(r.PolicyDigest), []byte(r.Fingerprint)))
 	return m.Sum(nil)
 }
 
@@ -265,7 +277,7 @@ func Open(key *HostKey, env *Envelope, lastVersion uint64, now time.Time) (*Open
 func (o *Opened) Receipt(fingerprint string) *Receipt {
 	e := &o.envelope
 	r := &Receipt{Format: ReceiptFormat, TargetID: e.TargetID, Name: e.Name, Version: e.Version, KeyID: e.KeyID, Nonce: e.Nonce,
-		Fingerprint: fingerprint}
+		PolicyDigest: e.PolicyDigest, Fingerprint: fingerprint}
 	r.Tag = base64.RawURLEncoding.EncodeToString(receiptTag(o.confirm, r))
 	return r
 }

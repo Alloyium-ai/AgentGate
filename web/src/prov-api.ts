@@ -145,6 +145,11 @@ export type PlanSecret = {
   rules: BrokerRule[];
   wildcard_rules: boolean;
   extra_headers: Record<string, string>;
+  forward_headers?: string[];
+  // policy_digest is the injection policy sealed with the value: these
+  // settings must make it (secretseal.ts settingsDigest), and the host
+  // refuses the launch under any other policy.
+  policy_digest: string;
   // base_url is what env receives inside the sandbox.
   base_url: string;
   value_fingerprint?: string;
@@ -263,8 +268,10 @@ export type Secret = {
   rules: BrokerRule[];
   wildcard_rules: boolean;
   extra_headers: Record<string, string>;
+  forward_headers?: string[];
+  policy_digest: string;
   ciphertext_sha256: string;
-  envelope?: { format: string; key_id: string; version: number; nonce: string };
+  envelope?: { format: string; key_id: string; version: number; nonce: string; policy_digest: string };
   value_fingerprint?: string;
   allowed_profiles: string[];
   allowed_launchers: string[];

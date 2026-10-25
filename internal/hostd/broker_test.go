@@ -177,13 +177,15 @@ func (h *brokerHarness) sealedPut(name, value string, at time.Time) (hostproto.J
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	sealed, err := secretseal.SealAt(pub, testTarget, name, []byte(value), at)
+	// The value is sealed for the policy the launch secret of these tests uses.
+	ls := testLaunchSecret()
+	sealed, err := secretseal.SealAt(pub, testTarget, name, ls.PolicyDigest, []byte(value), at)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	raw, _ := json.Marshal(sealed.Envelope)
-	payload, _ := json.Marshal(hostproto.SecretPutPayload{SecretID: strings.Repeat("1", 32), Name: name, Upstreams: []string{brokerUpstream},
-		Header: "x-api-key", Ciphertext: sealed.Envelope.Encode(), CiphertextSHA256: hostproto.SHA256Hex(raw)})
+	payload, _ := json.Marshal(hostproto.SecretPutPayload{SecretID: strings.Repeat("1", 32), Name: name, Upstreams: ls.Upstreams,
+		Header: ls.Header, Rules: ls.Rules, PolicyDigest: ls.PolicyDigest, Ciphertext: sealed.Envelope.Encode(), CiphertextSHA256: hostproto.SHA256Hex(raw)})
 	now := h.clock.now()
 	return hostproto.Job{Version: hostproto.JobVersion, ID: nextJobID(), Type: hostproto.JobSecretPut, TargetID: testTarget,
 		IssuedAtMS: now.UnixMilli(), DeadlineMS: now.Add(time.Hour).UnixMilli(), Payload: payload}, sealed
@@ -661,7 +663,7 @@ func TestHostEnvelopeCheckAgreesWithSecretseal(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, size := range []int{8, 100, broker.MaxSecretBytes, secretseal.MaxValueBytes} {
-		sealed, err := secretseal.SealAt(pub, testTarget, "model-api", bytes.Repeat([]byte("x"), size), h.clock.now())
+		sealed, err := secretseal.SealAt(pub, testTarget, "model-api", testLaunchSecret().PolicyDigest, bytes.Repeat([]byte("x"), size), h.clock.now())
 		if err != nil {
 			t.Fatal(err)
 		}

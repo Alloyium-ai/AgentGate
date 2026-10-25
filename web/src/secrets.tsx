@@ -5,7 +5,11 @@
 // target host's verified seal key (web/src/secretseal.ts) and only the sealed
 // envelope is sent. The value lives in one uncontrolled password field, never
 // in React state, the URL, storage, the console or error text, and the field
-// is cleared before the request is sent.
+// is cleared before the request is sent. The broker policy (upstreams,
+// header, scheme, rules, extra and forwarded headers) is shown before the
+// value is sealed and its digest is sealed with it: the host stores and uses
+// the value only under that policy, and an answer whose settings make another
+// digest is reported as a substitution.
 
 import React, { useEffect, useRef, useState } from "react";
 import { KeyRound, Lock, Plus, Trash2 } from "lucide-react";
@@ -16,9 +20,11 @@ import { ConfirmDialog, Digest, Gate, LiveRegion, StateBadge } from "./prov-comp
 import { ClientPager, useClientPages } from "./prov-paging";
 import { BASIC_USER, HeaderRow, RuleRow, SECRET_HEADER, headerIssues, ruleIssues, sealFailureText } from "./secret-rules";
 import {
+  BROKER_METHODS,
   SealError,
   SealReceipt,
   Sealed,
+  SecretPolicy,
   SignedKeyRecord,
   VerifiedKey,
   b64urlStrict,
@@ -27,9 +33,12 @@ import {
   envelopeDigest,
   hostKeyFingerprint,
   hostKeyID,
+  newSecretPolicy,
+  policyDigest,
   readPin,
   seal,
   sealSupport,
+  settingsDigest,
   utf8,
   verifyKeyRecord,
   verifyReceipt,
@@ -60,6 +69,68 @@ function parseReceipt(r: SealReceipt | string | undefined): SealReceipt | undefi
 type Verified = { target: Target; key: VerifiedKey; fingerprint: string; hostKeyID: string; pinned: boolean };
 
 const words = (s: string) => s.split(/[\s,]+/).filter(Boolean);
+
+// PolicyReview shows every field of the injection policy the digest covers.
+function PolicyReview({ policy, digest }: { policy: SecretPolicy; digest: string }) {
+  return (
+    <div className="metadata" data-policy-review="true">
+      <div>
+        <span>Upstreams</span>
+        <code>{policy.upstreams.map((u) => `https://${u.host}:${u.port}`).join(", ")}</code>
+      </div>
+      <div>
+        <span>Header</span>
+        <code>
+          {policy.header}
+          {policy.scheme ? ` (${policy.scheme}${policy.username ? `, user ${policy.username}` : ""})` : ""}
+        </code>
+      </div>
+      <div>
+        <span>Requests forwarded with the credential</span>
+        <span>
+          {policy.wildcard
+            ? "WILDCARD: every method on every path"
+            : policy.rules.length
+              ? policy.rules.map((r) => `${r.methods.join(",")} ${r.path} (${r.match})`).join("; ")
+              : "none: every launch is refused (deny by default)"}
+        </span>
+      </div>
+      <div>
+        <span>Extra headers set</span>
+        <span>{policy.extra_headers.length ? policy.extra_headers.map((h) => `${h.name}: ${h.value}`).join("; ") : "none"}</span>
+      </div>
+      <div>
+        <span>Request headers forwarded beyond the defaults</span>
+        <span>{policy.forward_headers.length ? policy.forward_headers.join(", ") : "none"}</span>
+      </div>
+      <div>
+        <span>Policy digest (sealed with the value)</span>
+        <code>{digest}</code>
+      </div>
+    </div>
+  );
+}
+
+// PolicyCheck recomputes a stored secret's policy from the settings the
+// service shows and compares it with the digest sealed with the value.
+function PolicyCheck({ secret }: { secret: Secret }) {
+  const [ok, setOk] = useState<boolean>();
+  useEffect(() => {
+    let live = true;
+    settingsDigest(secret).then((d) => live && setOk(Boolean(d) && d === secret.policy_digest));
+    return () => {
+      live = false;
+    };
+  }, [secret.id, secret.revision, secret.policy_digest]);
+  if (ok === undefined) return null;
+  return ok ? (
+    <small>
+      policy <Digest value={secret.policy_digest} />
+    </small>
+  ) : (
+    <small className="field-issue">The settings shown differ from the policy sealed with the value: no launch can use it. Delete it.</small>
+  );
+}
 
 function SealFailure({ error }: { error: unknown }) {
   // POST /secrets refusals; a missing seal key on GET (404) is explained by
@@ -102,6 +173,9 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
   const [wildcard, setWildcard] = useState(false);
   const [wildcardConfirmed, setWildcardConfirmed] = useState(false);
   const [extra, setExtra] = useState<HeaderRow[]>([]);
+  const [forward, setForward] = useState("");
+  const [policy, setPolicy] = useState<{ policy: SecretPolicy; digest: string }>();
+  const [policyResult, setPolicyResult] = useState<{ ok: boolean; text: string }>();
   const [allowedProfiles, setAllowedProfiles] = useState<string[]>([]);
   const [launchers, setLaunchers] = useState(actor.subject);
   const [reason, setReason] = useState("");
@@ -161,8 +235,15 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
       return;
     }
     verifyReceipt(sealedRef.current, relayed)
-      .then((fp) => setReceipt({ ok: true, text: `The host proved it opened exactly this envelope. Value fingerprint ${fp}.` }))
-      .catch(() => setReceipt({ ok: false, text: "The receipt does not authenticate: the host did not open the envelope this browser sealed. Treat the stored secret as untrusted and delete it." }))
+      .then((fp) =>
+        setReceipt({ ok: true, text: `The host proved it opened exactly this envelope and stored it under the sealed policy ${relayed.policy_digest}. Value fingerprint ${fp}.` }),
+      )
+      .catch(() =>
+        setReceipt({
+          ok: false,
+          text: "The receipt does not authenticate: the host did not open the envelope this browser sealed, or stored it under another policy. Treat the stored secret as untrusted and delete it.",
+        }),
+      )
       .finally(() => {
         wipe(sealedRef.current);
         sealedRef.current = null;
@@ -170,6 +251,39 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
   }, [stored?.receipt]);
   const ups = words(upstreams);
   const subjects = words(launchers);
+  const forwards = words(forward);
+  const ruleBody = wildcard
+    ? [{ methods: ["*"], path: "/" }]
+    : rules.map((r) => ({ methods: r.methods.split(/[\s,]+/).filter(Boolean).map((m) => m.toUpperCase()), path: r.path, match: r.match }));
+  const policyKey = JSON.stringify([ups, header, scheme, username, ruleBody, extra, forwards, wildcard]);
+  // The policy this form makes, as the host will enforce it.
+  useEffect(() => {
+    let live = true;
+    let made: SecretPolicy | undefined;
+    try {
+      made = newSecretPolicy({
+        upstreams: ups,
+        header,
+        scheme,
+        username: scheme === "Basic" ? username : "",
+        rules: wildcard ? [{ methods: BROKER_METHODS, path: "/", match: "prefix" }] : (ruleBody as { methods: string[]; path: string; match: string }[]),
+        extra_headers: extra.length ? Object.fromEntries(extra.map((h) => [h.name, h.value])) : undefined,
+        forward_headers: forwards,
+        wildcard,
+      });
+    } catch {
+      made = undefined;
+    }
+    if (!made) {
+      setPolicy(undefined);
+      return;
+    }
+    const p = made;
+    policyDigest(p).then((digest) => live && setPolicy({ policy: p, digest }));
+    return () => {
+      live = false;
+    };
+  }, [policyKey]);
   const metaIssues = [
     !targetID && "Choose a target.",
     !NAME.test(name) && "A secret name is 1 to 40 lowercase letters, digits and -.",
@@ -179,6 +293,8 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
     scheme === "Basic" && !BASIC_USER.test(username) && "The Basic scheme needs a user name of 1 to 64 visible ASCII characters without a colon.",
     ...ruleIssues(rules, wildcard, wildcardConfirmed),
     ...headerIssues(extra, header),
+    (forwards.length > 16 || forwards.some((f) => !HEADER.test(f)) || new Set(forwards.map((f) => f.toLowerCase())).size !== forwards.length) &&
+      "List at most 16 unique header names to forward.",
     (allowedProfiles.length < 1 || allowedProfiles.length > 32) && "Choose at least one profile that may use the secret.",
     (subjects.length < 1 || subjects.length > 64 || subjects.some((s) => !SUBJECT.test(s)) || new Set(subjects).size !== subjects.length) && "List 1 to 64 unique people (subjects such as local:alice) who may launch with it.",
     reason.trim().length < 3 && "Give a reason.",
@@ -251,7 +367,8 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
   const trusted = verified && (verified.pinned || (typedMatches && confirmed));
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!verified || !trusted || metaIssues.length || !valueRef.current) return;
+    if (!verified || !trusted || metaIssues.length || !valueRef.current || !policy) return;
+    const sealedPolicy = policy;
     setBusy("seal");
     setError(undefined);
     const raw = valueRef.current.value;
@@ -260,7 +377,7 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
     try {
       if (!brokerValueOK(value)) throw new SealError("value", "The broker can inject only 8 to 8192 visible ASCII characters (no spaces or line breaks). Nothing was sealed or sent.");
       if (!verified.pinned) writePin(verified.target.id, verified.hostKeyID);
-      const sealed = await seal(verified.key, verified.target.id, name, value, Date.now());
+      const sealed = await seal(verified.key, verified.target.id, name, sealedPolicy.digest, value, Date.now());
       value.fill(0);
       wipe(sealedRef.current);
       sealedRef.current = sealed;
@@ -271,9 +388,7 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
         target: verified.target.id,
         upstreams: ups,
         header,
-        rules: wildcard
-          ? [{ methods: ["*"], path: "/" }]
-          : rules.map((r) => ({ methods: r.methods.split(/[\s,]+/).filter(Boolean).map((m) => m.toUpperCase()), path: r.path, match: r.match })),
+        rules: ruleBody,
         ciphertext,
         allowed_profiles: allowedProfiles,
         allowed_launchers: subjects,
@@ -282,6 +397,7 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
       if (scheme) body.scheme = scheme;
       if (scheme === "Basic") body.username = username;
       if (extra.length) body.extra_headers = Object.fromEntries(extra.map((h) => [h.name, h.value]));
+      if (forwards.length) body.forward_headers = forwards;
       let out: StoredSecret;
       try {
         out = await api<StoredSecret>("secrets", "POST", body);
@@ -290,6 +406,17 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
         if (cause instanceof ApiError && cause.code === "seal_key_changed") setVerified(undefined);
         throw cause;
       }
+      // The service must record exactly the sealed policy: the digest it
+      // reports and the one its settings make.
+      const shown = await settingsDigest(out);
+      setPolicyResult(
+        out.policy_digest === sealedPolicy.digest && shown === sealedPolicy.digest
+          ? { ok: true, text: `The service recorded exactly the sealed policy ${sealedPolicy.digest}.` }
+          : {
+              ok: false,
+              text: `The service recorded other broker settings (policy ${out.policy_digest || "none"}) than the policy this browser sealed (${sealedPolicy.digest}). Treat the service as compromised and delete the secret; the host refuses every launch under another policy.`,
+            },
+      );
       setStored(out);
       setSentDigest(sent);
       setAnnounce(`Secret ${out.name} sent for ${verified.target.name}.`);
@@ -327,6 +454,11 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
             </span>
           </div>
         </div>
+        {policyResult && (
+          <p role={policyResult.ok ? "status" : "alert"} className={policyResult.ok ? "match ok" : "match bad"}>
+            {policyResult.text}
+          </p>
+        )}
         {receipt ? (
           <p role="status" className={receipt.ok ? "match ok" : "match bad"}>
             {receipt.text}
@@ -474,6 +606,14 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
             <Plus size={15} aria-hidden="true" /> Add an extra header
           </button>
         </fieldset>
+        <label>
+          Request headers to forward beyond the broker's defaults (optional)
+          <input value={forward} onChange={(e) => setForward(e.target.value)} placeholder="x-request-id" spellCheck={false} />
+          <small className="help">
+            The broker forwards Accept, Content-Type, User-Agent, Idempotency-Key and the model SDKs' headers. It never forwards credentials, cookies or proxy and
+            override headers, whatever is listed here.
+          </small>
+        </label>
         <fieldset>
           <legend>Profiles whose launches may use it</legend>
           {profiles.data?.items.map((x) => (
@@ -532,7 +672,13 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
             )}
           </div>
         )}
-        <h3 className="subheading">2. Enter the value</h3>
+        <h3 className="subheading">2. Review the broker policy sealed with the value</h3>
+        <p className="form-note">
+          The host stores the value with exactly this policy and refuses every launch under any other, so neither the service nor anyone with its database can send
+          the credential elsewhere or use it differently.
+        </p>
+        {policy ? <PolicyReview policy={policy.policy} digest={policy.digest} /> : <p className="form-note">Complete the broker settings above to see the policy.</p>}
+        <h3 className="subheading">3. Enter the value</h3>
         <label>
           Secret value
           <input
@@ -554,7 +700,7 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
           <button type="button" className="secondary" onClick={close}>
             Cancel
           </button>
-          <button disabled={!trusted || busy !== "" || metaIssues.length > 0 || !support?.ok}>{busy === "seal" ? "Sealing…" : "Seal in this browser and store"}</button>
+          <button disabled={!trusted || busy !== "" || metaIssues.length > 0 || !support?.ok || !policy}>{busy === "seal" ? "Sealing…" : "Seal in this browser and store"}</button>
         </div>
       </form>
     </Modal>
@@ -648,6 +794,7 @@ export function Secrets({ actor, epoch }: { actor: Actor; epoch: number }) {
                       <td>
                         <Digest value={s.ciphertext_sha256} />
                         {s.value_fingerprint && <small>value {s.value_fingerprint}</small>}
+                        <PolicyCheck secret={s} />
                       </td>
                       <td>
                         <StateBadge state={s.state} />

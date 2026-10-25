@@ -71,7 +71,8 @@
         ],
         "extra_headers": {
           "anthropic-version": "2023-06-01"
-        }
+        },
+        "policy_digest": "44785810df197b85c76b1d33a0b8c5999156a910a620730adb427ef1acdc02bc"
       }
     ]
   }

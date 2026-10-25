@@ -15,12 +15,35 @@ import { AccessSummary, Capabilities, CodeBlock, CopyButton, Digest, Gate, Issue
 import { LIFETIME, LaunchForm, MountMode, buildSpec, cliCommands, emptyForm, envNameIssue, lifetimeText, parseSpec, predictApproval, profileApprovalReason, specJSON } from "./launch-spec";
 import { webOf } from "./access-model";
 import { refusalHelp } from "./secret-rules";
+import { settingsDigest } from "./secretseal";
 
 type PlanResponse = { dry_run: boolean; plan: LaunchPlan; spec: unknown; policy: PolicyDocument };
 
 
+// usePlanPolicyCheck recomputes, in this browser, the injection policy each
+// planned secret's readable settings make and compares it with the
+// policy_digest the plan names (the one sealed with the value, which the host
+// enforces). A mismatch means the plan shows something other than what would
+// run: the launch must not be approved.
+export function usePlanPolicyCheck(plan?: LaunchPlan | null): { checked: boolean; bad: string[] } {
+  const [state, setState] = useState<{ key: string; bad: string[] }>({ key: "", bad: [] });
+  const secrets = plan?.secrets ?? [];
+  const key = JSON.stringify(secrets);
+  useEffect(() => {
+    let live = true;
+    Promise.all(secrets.map(async (s) => ((await settingsDigest(s)) === s.policy_digest && s.policy_digest ? "" : s.ref))).then((refs) => {
+      if (live) setState({ key, bad: refs.filter(Boolean) });
+    });
+    return () => {
+      live = false;
+    };
+  }, [key]);
+  return { checked: state.key === key, bad: state.key === key ? state.bad : [] };
+}
+
 export function PlanView({ plan, policy }: { plan: LaunchPlan; policy?: PolicyDocument }) {
   const perm = plan.permissions;
+  const policyCheck = usePlanPolicyCheck(plan);
   const list = (v?: string[] | null) => (v?.length ? v.join(", ") : "none");
   return (
     <div className="plan">
@@ -212,6 +235,17 @@ export function PlanView({ plan, policy }: { plan: LaunchPlan; policy?: PolicyDo
                       {s.ref}
                       <small>{s.secret_id}</small>
                       {s.value_fingerprint && <small>value {s.value_fingerprint}</small>}
+                      <small>
+                        sealed policy <code>{s.policy_digest || "none"}</code>
+                      </small>
+                      {policyCheck.checked &&
+                        (policyCheck.bad.includes(s.ref) ? (
+                          <small className="match bad" role="alert">
+                            These settings do not make the sealed policy digest: do not approve.
+                          </small>
+                        ) : (
+                          <small className="match ok">These settings are the policy sealed with the value.</small>
+                        ))}
                     </td>
                     <td>
                       <code>
@@ -233,6 +267,7 @@ export function PlanView({ plan, policy }: { plan: LaunchPlan; policy?: PolicyDo
                             .join("; ")}
                         </small>
                       )}
+                      {(s.forward_headers ?? []).length > 0 && <small>also forwards {s.forward_headers!.join(", ")}</small>}
                     </td>
                     <td>
                       {s.wildcard_rules ? (

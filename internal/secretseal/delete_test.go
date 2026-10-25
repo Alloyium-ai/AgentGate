@@ -14,16 +14,16 @@ import (
 // the envelope that set it (still inside MaxAge) must not set it again.
 func TestDeleteZeroesTheValueAndRefusesAReplayAfterwards(t *testing.T) {
 	f := newFixture(t, "local")
-	sealed, err := SealAt(f.pub, "local", "anthropic", []byte(fakeValue), now)
+	sealed, err := SealAt(f.pub, "local", "anthropic", testPolicy, []byte(fakeValue), now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.store.Accept(f.key, &sealed.Envelope, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	version, fp, ok, err := f.store.Stored("anthropic")
-	if err != nil || !ok || version != sealed.Envelope.Version || fp == "" {
-		t.Fatalf("stored %d %q %v %v", version, fp, ok, err)
+	st, ok, err := f.store.Stored("anthropic")
+	if err != nil || !ok || st.Version != sealed.Envelope.Version || st.Fingerprint == "" || st.PolicyDigest != testPolicy {
+		t.Fatalf("stored %+v %v %v", st, ok, err)
 	}
 	path, _ := f.store.SecretPath("anthropic")
 	link := filepath.Join(t.TempDir(), "held")
@@ -49,7 +49,7 @@ func TestDeleteZeroesTheValueAndRefusesAReplayAfterwards(t *testing.T) {
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the value file remains")
 	}
-	if _, _, ok, err := f.store.Stored("anthropic"); ok || err != nil {
+	if _, ok, err := f.store.Stored("anthropic"); ok || err != nil {
 		t.Fatalf("a deleted secret is still reported: %v", err)
 	}
 	meta, _ := os.ReadFile(filepath.Join(f.dir, "anthropic.meta.json"))
@@ -58,11 +58,11 @@ func TestDeleteZeroesTheValueAndRefusesAReplayAfterwards(t *testing.T) {
 		t.Fatalf("a replay after delete: %v", err)
 	}
 	// A newer envelope sets the name again.
-	fresh, _ := SealAt(f.pub, "local", "anthropic", []byte(fakeValue+"-rotated"), now.Add(4*time.Second))
+	fresh, _ := SealAt(f.pub, "local", "anthropic", testPolicy, []byte(fakeValue+"-rotated"), now.Add(4*time.Second))
 	if _, err := f.store.Accept(f.key, &fresh.Envelope, now.Add(5*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok, _ := f.store.Stored("anthropic"); !ok {
+	if _, ok, _ := f.store.Stored("anthropic"); !ok {
 		t.Fatal("a newer envelope did not set the name again")
 	}
 	// Deleting twice, or a name never set, succeeds.

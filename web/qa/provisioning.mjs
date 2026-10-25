@@ -24,6 +24,17 @@ import { shapeIssues } from "./api-shapes.mjs";
 // The fixture's grant change list uses the UI's own diff; the unit tests
 // check that diff against the real service's answers.
 const { diffDocuments } = await loadTS("access-model");
+const SS = await loadTS("secretseal");
+// mockPolicyDigest is the service's view of a secret's policy digest (the
+// settings as stored: the wildcard expanded, wildcard_rules set).
+const mockPolicyDigest = (s) =>
+  sha(
+    Buffer.from(
+      SS.canonicalPolicy(
+        SS.newSecretPolicy({ upstreams: s.upstreams, header: s.header, scheme: s.scheme, username: s.username, rules: s.rules, extra_headers: s.extra_headers, forward_headers: s.forward_headers, wildcard: s.wildcard_rules }),
+      ),
+    ),
+  );
 
 const output = process.env.QA_OUTPUT;
 if (!output) throw new Error("Set QA_OUTPUT to an owned artifact directory.");
@@ -47,6 +58,9 @@ let expireSessionOnNextRead = false;
 const host = newHost();
 const attacker = newHost();
 let sealMode = "missing";
+// policyMode "substitute" is a compromised service that stores another
+// upstream than the one the browser sealed and answers with it.
+let policyMode = "honest";
 let streamMode = "ok";
 const streamRequests = [];
 const logStreams = [];
@@ -163,7 +177,13 @@ function progress(l, kind, reason, data = {}) {
 const BROKER_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 let sealRotated = false;
 function brokerSettings(input) {
-  const out = { scheme: input.scheme || "", rules: [], wildcard_rules: false, extra_headers: { ...(input.extra_headers || {}) } };
+  const out = {
+    scheme: input.scheme || "",
+    rules: [],
+    wildcard_rules: false,
+    extra_headers: { ...(input.extra_headers || {}) },
+    forward_headers: (input.forward_headers || []).map((h) => h.toLowerCase()).sort(),
+  };
   if (input.username) out.username = input.username;
   if (!out.scheme && input.header.toLowerCase() === "authorization") out.scheme = "Bearer";
   if (out.scheme && input.header.toLowerCase() !== "authorization") throw new Fail(422, "invalid_secret", "Broker injection settings: a scheme needs the Authorization header.");
@@ -213,7 +233,21 @@ function plan(spec, actor) {
     if (!sec.rules?.length)
       throw new Fail(422, "secret_rules_missing", `Secret ${s.ref} has no broker rules, so it allows nothing (deny by default). Recreate it with explicit rules, or with the wildcard [{"methods":["*"],"path":"/"}] to allow every method and path of its upstreams.`);
     if (!sec.allowed_launchers.includes(actor)) throw new Fail(403, "secret_scope", "The secret is not scoped to this launcher.");
-    const item = { ref: s.ref, secret_id: sec.id, env: s.expose.env, upstreams: sec.upstreams, header: sec.header, scheme: sec.scheme, rules: sec.rules, wildcard_rules: sec.wildcard_rules, extra_headers: sec.extra_headers, base_url: `http://${BROKER.address}:${BROKER.port}/${s.ref}`, value_fingerprint: sec.value_fingerprint };
+    const item = {
+      ref: s.ref,
+      secret_id: sec.id,
+      env: s.expose.env,
+      upstreams: sec.upstreams,
+      header: sec.header,
+      scheme: sec.scheme,
+      rules: sec.rules,
+      wildcard_rules: sec.wildcard_rules,
+      extra_headers: sec.extra_headers,
+      forward_headers: sec.forward_headers,
+      policy_digest: sec.policy_digest,
+      base_url: `http://${BROKER.address}:${BROKER.port}/${s.ref}`,
+      value_fingerprint: sec.value_fingerprint,
+    };
     if (sec.username) item.username = sec.username;
     planned.push(item);
     if (sec.wildcard_rules) reasons.push(`secret ${s.ref} has wildcard broker rules`);
@@ -517,17 +551,22 @@ function api(method, path, query, input, headers) {
       if (envelope.target_id !== t.id || envelope.name !== input.name) throw new Fail(422, "invalid_ciphertext", "The envelope is for another target or name.");
       if (sealRotated) throw new Fail(409, "seal_key_changed", "The envelope is sealed to another seal key than the one the target publishes; fetch the seal key again and reseal.");
       const inject = brokerSettings(input);
+      // The settings must be the policy the browser sealed (the host checks
+      // the same and the HPKE associated data binds it).
+      if (mockPolicyDigest({ ...inject, upstreams: input.upstreams, header: input.header }) !== envelope.policy_digest)
+        throw new Fail(422, "policy_mismatch", `The broker settings (upstreams, header, scheme, username, extra headers, forward headers, rules) differ from the policy sealed in the envelope (${envelope.policy_digest}). Seal the value again for exactly these settings.`);
       const { plaintext, confirm } = openEnvelope(host.sealPrivate, envelope);
       opened.push(plaintext.toString());
       const s = {
         id: newID(),
         name: input.name,
         target_id: t.id,
-        upstreams: input.upstreams,
+        upstreams: policyMode === "substitute" ? ["collect.attacker.example"] : input.upstreams,
         header: input.header,
         ...inject,
+        policy_digest: envelope.policy_digest,
         ciphertext_sha256: sha(raw),
-        envelope: { format: envelope.format, key_id: envelope.key_id, version: envelope.version, nonce: envelope.nonce },
+        envelope: { format: envelope.format, key_id: envelope.key_id, version: envelope.version, nonce: envelope.nonce, policy_digest: envelope.policy_digest },
         allowed_profiles: input.allowed_profiles,
         allowed_launchers: input.allowed_launchers,
         state: "pending",
@@ -1027,18 +1066,29 @@ try {
     await d.getByLabel("Header value").fill("2023-06-01");
     await d.getByText("Extra header 1: a header name the broker may set").waitFor();
     await d.getByLabel("Header name").fill("anthropic-version");
+    // The policy is shown before the value is sealed, with the digest the
+    // envelope will carry.
+    const review = d.locator("[data-policy-review]");
+    await review.getByText("https://api.model.example:443").waitFor();
+    await review.getByText("POST /v1/messages (exact)").waitFor();
+    await review.getByText("anthropic-version: 2023-06-01").waitFor();
+    const shownDigest = mockPolicyDigest({ upstreams: ["api.model.example"], header: "x-api-key", scheme: "", rules: [{ methods: ["POST"], path: "/v1/messages", match: "exact" }], extra_headers: { "anthropic-version": "2023-06-01" } });
+    await review.getByText(shownDigest).waitFor();
     await d.getByLabel("Secret value").fill(value);
     await d.getByRole("button", { name: "Seal in this browser and store" }).click();
     await page.getByRole("heading", { name: "Secret stored" }).waitFor();
     await text("matches the envelope this browser sent").waitFor();
+    await text(`The service recorded exactly the sealed policy ${shownDigest}.`).waitFor();
     assert.deepEqual(opened, [value], "the host side opened exactly the typed value");
     const post = requests.filter((r) => r.path === "secrets" && r.method === "POST").at(-1);
     const body = JSON.parse(post.body);
     assert.deepEqual(Object.keys(body).sort(), ["allowed_launchers", "allowed_profiles", "ciphertext", "extra_headers", "header", "name", "reason", "rules", "target", "upstreams"]);
     assert.deepEqual(body.rules, [{ methods: ["POST"], path: "/v1/messages", match: "exact" }]);
     assert.deepEqual(body.extra_headers, { "anthropic-version": "2023-06-01" });
-    assert.equal(JSON.parse(Buffer.from(body.ciphertext, "base64url")).format, "agentgate.secretseal.v1");
-    await text("The host proved it opened exactly this envelope. Value fingerprint sfp1_" + "ab".repeat(16)).waitFor({ timeout: 10000 });
+    const sentEnvelope = JSON.parse(Buffer.from(body.ciphertext, "base64url"));
+    assert.equal(sentEnvelope.format, "agentgate.secretseal.v2");
+    assert.equal(sentEnvelope.policy_digest, shownDigest, "the envelope seals the policy the dialog showed");
+    await text(`The host proved it opened exactly this envelope and stored it under the sealed policy ${shownDigest}. Value fingerprint sfp1_` + "ab".repeat(16)).waitFor({ timeout: 10000 });
     assert.ok(requests.some((r) => r.method === "GET" && /^secrets\/[0-9a-f]+\/receipt$/.test(r.path)), "the dialog reads the receipt from GET /secrets/{id}/receipt");
     await page.getByRole("button", { name: "Done" }).click();
     // The browser pinned the host key; a service that rewrites the target's
@@ -1106,7 +1156,9 @@ try {
     await page.getByRole("button", { name: "Done" }).click();
     await text("Wildcard rules: every method on every path.").waitFor();
     // A secret stored without rules (an older client) is listed as unusable.
-    secrets.push({ ...structuredClone(secrets.find((x) => x.name === "model-api")), id: newID(), name: "bare-key", rules: [], wildcard_rules: false, state: "stored" });
+    const bare = { ...structuredClone(secrets.find((x) => x.name === "model-api")), id: newID(), name: "bare-key", rules: [], wildcard_rules: false, state: "stored" };
+    bare.policy_digest = bare.envelope.policy_digest = mockPolicyDigest(bare);
+    secrets.push(bare);
     await go("secrets", "alice");
     await text("No broker rules: no launch can use it (secret_rules_missing).").waitFor();
     await go(`launch/from/${launchID}`, "alice");
@@ -1124,6 +1176,8 @@ try {
   await step("brokered secrets are picked by name and planned without values", async () => {
     await go(`launch/from/${launchID}`, "alice");
     await page.getByLabel("Launch name").waitFor();
+    // The form fills from the launch's spec once it loads.
+    for (let i = 0; i < 50 && (await page.getByLabel("Launch name").inputValue()) !== "repo-fixer"; i++) await page.waitForTimeout(100);
     assert.equal(await page.getByLabel("Launch name").inputValue(), "repo-fixer");
     await page.getByLabel(/model-api/).check();
     await text("The agent never sees a secret value").waitFor();
@@ -1140,6 +1194,63 @@ try {
     const planned = requests.filter((r) => r.path === "launch-plans").at(-1).body;
     assert.ok(!planned.includes(value));
     assert.deepEqual(JSON.parse(planned).secrets, [{ ref: "model-api", expose: { env: "MODEL_API_BASE_URL" } }]);
+  });
+
+  await step("an approver sees each secret's sealed policy and cannot approve a plan whose settings do not make it", async () => {
+    // From the brokered plan of the previous step.
+    const sec = secrets.find((x) => x.name === "model-api" && x.state === "stored");
+    await page.locator(".plan").getByText("These settings are the policy sealed with the value.").waitFor();
+    await page.locator(".plan").getByText(sec.policy_digest).waitFor();
+    await page.getByRole("button", { name: "Launch (waits for approval)" }).click();
+    await page.getByRole("heading", { name: "State timeline" }).waitFor();
+    const id = page.url().split("/").at(-1);
+    const l = launches.find((x) => x.id === id);
+    // The service shows the approver other settings than the sealed policy.
+    const honest = l.plan.secrets[0].upstreams;
+    l.plan.secrets[0].upstreams = ["api.model.example", "collect.attacker.example"];
+    await go(`launches/${id}`, "bob");
+    await page.locator(".plan").getByText("These settings do not make the sealed policy digest: do not approve.").waitFor();
+    await text("do not make the sealed policy digest it names. Reject the launch and report it.").waitFor();
+    assert.equal(await page.getByRole("button", { name: "Approve", exact: true }).isDisabled(), true, "a plan that is not its sealed policy cannot be approved");
+    l.plan.secrets[0].upstreams = honest;
+    await go(`launches/${id}`, "bob");
+    await page.locator(".plan").getByText("These settings are the policy sealed with the value.").waitFor();
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.locator("dialog").getByText(sec.policy_digest).waitFor();
+    await page.locator("dialog").getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "Reject", exact: true }).click();
+    await page.locator("dialog").getByRole("textbox", { name: "Reason", exact: true }).fill("Checked the sealed policy display");
+    await page.getByRole("button", { name: "Reject launch" }).click();
+    await page.locator(".section-title .badge", { hasText: "rejected" }).waitFor();
+  });
+
+  await step("a service that records other settings than the sealed policy is caught", async () => {
+    await go("secrets", "alice");
+    await page.getByRole("button", { name: "Store a secret" }).click();
+    const d = page.locator("dialog");
+    await pick("Target", d).selectOption({ label: "build-host" });
+    await d.getByLabel("Secret name").fill("redirect-api");
+    await d.getByLabel(/Upstreams/).fill("api.model.example");
+    await d.getByLabel("python-dev").check();
+    await d.getByRole("textbox", { name: "Reason", exact: true }).fill("Model access for the coding agent");
+    await d.getByLabel(/Request headers to forward/).fill("X-Request-Id");
+    await d.locator("[data-policy-review]").getByText("x-request-id").waitFor();
+    await d.getByRole("button", { name: "Verify seal key" }).click();
+    await d.getByText("Matches the fingerprint this browser pinned for build-host.").waitFor();
+    policyMode = "substitute";
+    await d.getByLabel("Secret value").fill(value);
+    await d.getByRole("button", { name: "Seal in this browser and store" }).click();
+    await page.getByRole("heading", { name: "Secret stored" }).waitFor();
+    await text("The service recorded other broker settings").waitFor();
+    policyMode = "honest";
+    const body = JSON.parse(requests.filter((r) => r.path === "secrets" && r.method === "POST").at(-1).body);
+    assert.deepEqual(body.forward_headers, ["X-Request-Id"]);
+    await page.getByRole("button", { name: "Done" }).click();
+    await text("The settings shown differ from the policy sealed with the value: no launch can use it. Delete it.").waitFor();
+    secrets.splice(secrets.findIndex((x) => x.name === "redirect-api"), 1);
+    // Back to the launch form, where the next step imports a spec.
+    await go(`launch/from/${launchID}`, "alice");
+    await page.getByLabel("Launch name").waitFor();
   });
 
   await step("import a spec strictly", async () => {

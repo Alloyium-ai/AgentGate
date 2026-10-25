@@ -75,16 +75,24 @@ type LaunchMount struct {
 // Scheme, Username, Rules and ExtraHeaders say how the broker injects it and
 // which requests it forwards: every route needs explicit rules (deny by
 // default); the service expands an operator's wildcard into the full rule.
+//
+// The settings are the secret's sealed injection policy (see SecretPolicy):
+// PolicyDigest must equal their digest, and the host refuses the launch
+// unless it also equals the digest it stored with the value, then builds the
+// broker from its own stored policy, never from this copy.
 type LaunchSecret struct {
-	Ref          string            `json:"ref"`
-	SecretID     string            `json:"secret_id"`
-	Env          string            `json:"env"`
-	Upstreams    []string          `json:"upstreams"`
-	Header       string            `json:"header"`
-	Scheme       string            `json:"scheme,omitempty"`
-	Username     string            `json:"username,omitempty"`
-	Rules        []BrokerRule      `json:"rules"`
-	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
+	Ref            string            `json:"ref"`
+	SecretID       string            `json:"secret_id"`
+	Env            string            `json:"env"`
+	Upstreams      []string          `json:"upstreams"`
+	Header         string            `json:"header"`
+	Scheme         string            `json:"scheme,omitempty"`
+	Username       string            `json:"username,omitempty"`
+	Rules          []BrokerRule      `json:"rules"`
+	ExtraHeaders   map[string]string `json:"extra_headers,omitempty"`
+	ForwardHeaders []string          `json:"forward_headers,omitempty"`
+	Wildcard       bool              `json:"wildcard,omitempty"`
+	PolicyDigest   string            `json:"policy_digest"`
 }
 
 // BrokerRule allows a set of methods on one route-relative path
@@ -137,14 +145,25 @@ type CollectPayload struct {
 // secretseal.Envelope.Encode() of an envelope sealed to this host's published,
 // host-signed seal key for this target and name; CiphertextSHA256 is the
 // SHA-256 of the decoded envelope bytes. The service cannot decrypt it. The
-// host answers with a SecretReceipt in the job result.
+// settings are the secret's injection policy: their digest must equal
+// PolicyDigest and the envelope's policy_digest, which the HPKE associated
+// data binds, so the host stores exactly the policy the client sealed (and
+// refuses anything else). The host answers with a SecretReceipt in the job
+// result.
 type SecretPutPayload struct {
-	SecretID         string   `json:"secret_id"`
-	Name             string   `json:"name"`
-	Upstreams        []string `json:"upstreams"`
-	Header           string   `json:"header"`
-	Ciphertext       string   `json:"ciphertext"`
-	CiphertextSHA256 string   `json:"ciphertext_sha256"`
+	SecretID         string            `json:"secret_id"`
+	Name             string            `json:"name"`
+	Upstreams        []string          `json:"upstreams"`
+	Header           string            `json:"header"`
+	Scheme           string            `json:"scheme,omitempty"`
+	Username         string            `json:"username,omitempty"`
+	Rules            []BrokerRule      `json:"rules"`
+	ExtraHeaders     map[string]string `json:"extra_headers,omitempty"`
+	ForwardHeaders   []string          `json:"forward_headers,omitempty"`
+	Wildcard         bool              `json:"wildcard,omitempty"`
+	PolicyDigest     string            `json:"policy_digest"`
+	Ciphertext       string            `json:"ciphertext"`
+	CiphertextSHA256 string            `json:"ciphertext_sha256"`
 }
 
 // SecretDeletePayload removes a stored secret value from the host.
@@ -324,6 +343,23 @@ func (j Job) decode() (any, error) {
 		if sealed.TargetID != j.TargetID || sealed.Name != p.Name {
 			return nil, errors.New("hostproto: secret-put envelope is sealed for another target or name")
 		}
+		// A secret may be stored without rules; every launch that uses it is
+		// refused (deny by default). Its other settings are checked all the
+		// same, against a placeholder rule.
+		rules := p.Rules
+		if len(rules) == 0 {
+			rules = []BrokerRule{{Methods: []string{"GET"}, Path: "/", Match: "exact"}}
+		}
+		if err := CheckInjection(p.Header, p.Scheme, p.Username, rules, p.ExtraHeaders); err != nil {
+			return nil, fmt.Errorf("hostproto: secret-put policy: %w", err)
+		}
+		if err := checkForwardHeaders(p.ForwardHeaders); err != nil {
+			return nil, err
+		}
+		policy, err := p.Policy()
+		if err != nil || policy.Digest() != p.PolicyDigest || sealed.PolicyDigest != p.PolicyDigest {
+			return nil, errors.New("hostproto: secret-put policy differs from the policy digest the envelope seals")
+		}
 		return p, nil
 	case JobSecretDelete:
 		var p SecretDeletePayload
@@ -376,6 +412,12 @@ func checkSecrets(secrets []LaunchSecret) error {
 		if err := CheckInjection(s.Header, s.Scheme, s.Username, s.Rules, s.ExtraHeaders); err != nil {
 			return fmt.Errorf("hostproto: secret %s: %w", s.Ref, err)
 		}
+		if err := checkForwardHeaders(s.ForwardHeaders); err != nil {
+			return err
+		}
+		if policy, err := s.Policy(); err != nil || !validDigest(s.PolicyDigest) || policy.Digest() != s.PolicyDigest {
+			return fmt.Errorf("hostproto: secret %s: its settings differ from its policy digest", s.Ref)
+		}
 		seen[s.Ref], envs[s.Env] = true, true
 	}
 	return nil
@@ -421,6 +463,20 @@ func CheckInjection(header, scheme, username string, rules []BrokerRule, extra m
 		}
 		if value == "" || len(value) > 256 || strings.TrimSpace(value) != value || !printable(value, 256) || !asciiOnly(value) {
 			return errors.New("extra header values are 1 to 256 printable ASCII characters")
+		}
+	}
+	return nil
+}
+
+// checkForwardHeaders is the structural check of a secret's forward_headers;
+// the broker refuses every header it never forwards.
+func checkForwardHeaders(names []string) error {
+	if len(names) > MaxForwardHeaders {
+		return errors.New("hostproto: at most 16 forward headers")
+	}
+	for _, n := range names {
+		if !HeaderPattern.MatchString(n) {
+			return errors.New("hostproto: a forward header is a header name")
 		}
 	}
 	return nil

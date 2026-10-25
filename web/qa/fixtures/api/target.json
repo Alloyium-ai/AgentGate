@@ -7,17 +7,17 @@
     "brokered-secrets",
     "pocpolicy-v2"
   ],
-  "created_at": "2026-10-25T02:07:43.074972558Z",
+  "created_at": "2026-10-25T02:51:18.657346095Z",
   "created_by": "oidc:ada",
-  "encryption_key": "7nExWMxarQQkbUljwC-z66QvJMlqv7Lvp343Fyq-uhw",
+  "encryption_key": "UMBWp7ASrt5rE7TDlUup27sZaP1I4I_6fR68ZDTN8QU",
   "heartbeat_seconds": 10,
-  "host_key_id": "ed25519:0d5c097aec4e494f6ad8e43740d065f9",
-  "host_public_key": "zKyE9gggmJQSE-jSF4lWTiW5DUrdu9jlk_map8Xu_kI",
+  "host_key_id": "ed25519:c29dfd069b4da5f49e257f9b6a55b61e",
+  "host_public_key": "Dge5WcW0djMyRccalXmKGL2nJOWg2dMrU93dxNdyl4I",
   "hostname": "host-1",
-  "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
-  "job_key_id": "ed25519:d84158bb2095b4600f1d6e7ef05debfa",
+  "id": "3051ed3763d89e3871ce3d313dc46788",
+  "job_key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
   "kernel_verified": false,
-  "last_seen_at": "2026-10-25T02:07:43.018Z",
+  "last_seen_at": "2026-10-25T02:51:18.619Z",
   "mount_roots": [
     "/srv/repos"
   ],
@@ -27,18 +27,18 @@
   "seal_key": {
     "record": {
       "format": "agentgate.sealkey.v1",
-      "host_key": "SHA256:DVwJeuxOSU9q2OQ3QNBl+bY+kjCOEiw5bJw5wpbI63Y",
-      "key_id": "08143bf6833807bcfec4aa4f0a943dd502e1dc639e8328f17ee4da283a310e5f",
-      "not_after": "2026-11-24T02:07:43Z",
-      "not_before": "2026-10-25T02:07:43Z",
-      "public_key": "7nExWMxarQQkbUljwC-z66QvJMlqv7Lvp343Fyq-uhw",
+      "host_key": "SHA256:wp39BptNpfSeJX+balW2HikeDgye8UKy2DTcwwfskRE",
+      "key_id": "517a2ca45f52aead67bfa92b025161a47627e9637aefc43d89e44fdd7a851981",
+      "not_after": "2026-11-24T02:51:18Z",
+      "not_before": "2026-10-25T02:51:18Z",
+      "public_key": "UMBWp7ASrt5rE7TDlUup27sZaP1I4I_6fR68ZDTN8QU",
       "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
-      "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377"
+      "target_id": "3051ed3763d89e3871ce3d313dc46788"
     },
-    "signature": "7oRHEdDxviMcfDtLBa3udn55UEgd_Z_2YT1xYAdLkFhPB0NDCAyUkXyuQBc4arvVMYn4GM6Qs0menZYerWzzCQ"
+    "signature": "6VN0RFWkjhNZ08qGpgOckG0NL6F3kVU2lAjvtlCCzD1JTaMXgcGTgkKvFqj2zNhFiePh2bK4MXEgQ6xd-xIvAA"
   },
-  "seal_key_id": "08143bf6833807bcfec4aa4f0a943dd502e1dc639e8328f17ee4da283a310e5f",
-  "seal_key_not_after": "2026-11-24T02:07:43Z",
+  "seal_key_id": "517a2ca45f52aead67bfa92b025161a47627e9637aefc43d89e44fdd7a851981",
+  "seal_key_not_after": "2026-11-24T02:51:18Z",
   "state": "active",
-  "updated_at": "2026-10-25T02:07:43.109190214Z"
+  "updated_at": "2026-10-25T02:51:18.693147410Z"
 }

@@ -115,7 +115,7 @@ func TestSecretCreationRefusesEnvelopesTheHostWouldRefuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	early, _ := secretseal.SealAt(verified, target.ID, "model-api", []byte("synthetic-credential-0123456789"), f.now())
+	early, _ := secretseal.SealAt(verified, target.ID, "model-api", defaultPolicyDigest(), []byte("synthetic-credential-0123456789"), f.now())
 	in = secretInput("model-api", early, p.Name)
 	if _, err := f.s.CreateSecret(f.admin(), in); errCode(err) != "seal_key_unavailable" {
 		t.Fatalf("a secret was accepted before the host published a seal key: %v", err)
@@ -159,16 +159,18 @@ func TestSecretCreationRefusesEnvelopesTheHostWouldRefuse(t *testing.T) {
 		}
 	}
 	// Bearer is stored explicitly for an Authorization header.
-	in = secretInput("model-api", sealed, p.Name)
+	in = secretInput("model-api", nil, p.Name)
 	in.Header = "Authorization"
-	sec := must(f.s.CreateSecret(f.admin(), in)).(Secret)
+	sec := must(f.s.CreateSecret(f.admin(), f.sealInput(h, in, "synthetic-credential-0123456789"))).(Secret)
 	if sec.Scheme != "Bearer" {
 		t.Fatalf("scheme %q", sec.Scheme)
 	}
 	// The HTTP API takes the same shape.
 	tok := f.token(f.admin(), "admin")
+	httpIn := f.sealInput(h, SecretInput{Name: "http-api", Target: "local", Upstreams: []string{"api.model.example"}, Header: "x-api-key",
+		Rules: []SecretRuleInput{{Methods: []string{"*"}, Path: "/"}}, ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"}}, "synthetic-credential-0123456789")
 	body, _ := json.Marshal(map[string]any{"name": "http-api", "target": "local", "upstreams": []string{"api.model.example"}, "header": "x-api-key",
-		"ciphertext": f.sealFor(h, "http-api", "synthetic-credential-0123456789").Envelope.Encode(), "rules": []any{map[string]any{"methods": []string{"*"}, "path": "/"}},
+		"ciphertext": httpIn.Ciphertext, "rules": []any{map[string]any{"methods": []string{"*"}, "path": "/"}},
 		"extra_headers": map[string]string{"anthropic-version": "2023-06-01"}, "allowed_profiles": []string{"dev"}, "allowed_launchers": []string{"oidc:lin"}, "reason": "Store over HTTP"})
 	resp, out := f.apiRequest("POST", "/api/v1/secrets", tok, body)
 	if resp.StatusCode != 200 || out["wildcard_rules"] != true || out["scheme"] != "" {
@@ -215,13 +217,36 @@ func TestSecretPutReceiptMustAnswerTheRelayedEnvelope(t *testing.T) {
 	put := h.poll()[0]
 	// A receipt for another envelope (an older version) does not store it.
 	other := hostproto.SecretReceipt{Format: hostproto.SecretReceiptFormat, TargetID: h.id, Name: "model-api", Version: sealed.Envelope.Version - 1,
-		KeyID: sealed.Envelope.KeyID, Nonce: sealed.Envelope.Nonce, Fingerprint: "sfp1_" + strings.Repeat("a", 32), Tag: hostproto.EncodeSealed(make([]byte, 32))}
+		KeyID: sealed.Envelope.KeyID, Nonce: sealed.Envelope.Nonce, PolicyDigest: sealed.Envelope.PolicyDigest, Fingerprint: "sfp1_" + strings.Repeat("a", 32), Tag: hostproto.EncodeSealed(make([]byte, 32))}
 	r := ev(1, f, hostproto.EventResult)
 	r.Result = &hostproto.JobResult{Status: hostproto.ResultSucceeded, Reason: "stored", SecretReceipt: &other}
 	must(h.events(put.ID, r))
 	got := must(scanSecret(f.s.DB.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE id=?", sec.ID)))
 	if got.State != "failed" || len(got.Receipt) != 0 || auditCount(f, "secret.store.failed") != 1 {
 		t.Fatalf("a mismatched receipt stored the secret: %+v", got)
+	}
+	// A receipt for the relayed envelope that names another policy (a host
+	// that stored the value under settings the client did not seal) does not
+	// store it either.
+	sealed = f.sealFor(h, "model-api", "synthetic-credential-0123456789")
+	repolicied := must(f.s.CreateSecret(f.admin(), secretInput("model-api", sealed, p.Name))).(Secret)
+	put = h.poll()[0]
+	var relayed hostproto.SecretPutPayload
+	json.Unmarshal(put.Payload, &relayed)
+	env, err := secretseal.DecodeEnvelope(relayed.Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := h.hostStore().Accept(h.sealKey, env, f.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := hostproto.SecretReceipt(*accepted)
+	wrong.PolicyDigest = strings.Repeat("0", 64)
+	r.Result = &hostproto.JobResult{Status: hostproto.ResultSucceeded, Reason: "stored", SecretReceipt: &wrong}
+	must(h.events(put.ID, r))
+	if got := must(scanSecret(f.s.DB.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE id=?", repolicied.ID))); got.State != "failed" || len(got.Receipt) != 0 {
+		t.Fatalf("a receipt for another policy stored the secret: %+v", got)
 	}
 	// A success without a receipt fails closed too.
 	sealed = f.sealFor(h, "model-api", "synthetic-credential-0123456789")
@@ -244,9 +269,9 @@ func TestBrokerLaunchPlansRulesEndpointAndPolicy(t *testing.T) {
 	h, _ := f.enrolledTarget()
 	p := f.profile("dev", false)
 	h.poll()
-	noRules := secretInput("bare-api", f.sealFor(h, "bare-api", "synthetic-credential-0123456789"), p.Name)
+	noRules := secretInput("bare-api", nil, p.Name)
 	noRules.Rules = nil
-	f.storeSecret(h, noRules, nil)
+	f.storeSecret(h, f.sealInput(h, noRules, "synthetic-credential-0123456789"), nil)
 	m := specMap("dev")
 	m["secrets"] = []any{map[string]any{"ref": "bare-api", "expose": map[string]any{"env": "BARE_BASE_URL"}}}
 	if _, err := f.s.CreateLaunch(f.launcher(), specBytes(t, m)); errCode(err) != "secret_rules_missing" {
@@ -255,9 +280,9 @@ func TestBrokerLaunchPlansRulesEndpointAndPolicy(t *testing.T) {
 	if _, err := f.s.PlanLaunch(f.launcher(), specBytes(t, m)); errCode(err) != "secret_rules_missing" {
 		t.Fatalf("a dry run planned a secret without rules: %v", err)
 	}
-	wild := secretInput("wild-api", f.sealFor(h, "wild-api", "synthetic-credential-0123456789"), p.Name)
+	wild := secretInput("wild-api", nil, p.Name)
 	wild.Rules = []SecretRuleInput{{Methods: []string{"*"}, Path: "/"}}
-	f.storeSecret(h, wild, nil)
+	f.storeSecret(h, f.sealInput(h, wild, "synthetic-credential-0123456789"), nil)
 	exact := f.storeSecret(h, secretInput("model-api", f.sealFor(h, "model-api", "synthetic-credential-0123456789"), p.Name), nil)
 	m["secrets"] = []any{map[string]any{"ref": "model-api", "expose": map[string]any{"env": "MODEL_BASE_URL"}}, map[string]any{"ref": "wild-api", "expose": map[string]any{"env": "WILD_BASE_URL"}}}
 	l, plan := f.launch(f.launcher(), m)

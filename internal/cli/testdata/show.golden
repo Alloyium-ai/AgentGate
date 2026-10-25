@@ -29,7 +29,7 @@ What this agent may do
   anonymous exec    no
   mount repo        /srv/repos/app -> /var/lib/agentgate/mounts/repo (read-only, live)
   broker            172.30.7.2:8443 on network 172.30.7.0/29 (agent at 172.30.7.3); the one private endpoint the agent may reach
-  secret anthropic  $ANTHROPIC_BASE_URL = http://172.30.7.2:8443/anthropic -> api.anthropic.com (header x-api-key; only POST /v1/messages (exact); sets anthropic-version; value sfp1_abababababababababababababababab; the value never enters the sandbox)
+  secret anthropic  $ANTHROPIC_BASE_URL = http://172.30.7.2:8443/anthropic -> api.anthropic.com (header x-api-key; only POST /v1/messages (exact); sets anthropic-version; value sfp1_abababababababababababababababab; sealed policy 836c14d9fbfa4fb15f01683ef39890f7cefac72502ef6b3653d1c4bd38a19041; the value never enters the sandbox)
 
 Approval: required
   - brokered secrets anthropic

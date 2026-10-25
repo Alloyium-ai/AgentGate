@@ -833,7 +833,7 @@ func (s *Store) finishSecretPut(tx *sql.Tx, t Target, job *JobRecord, r hostprot
 		case rec == nil:
 			reason = "receipt_missing"
 		case sec.Envelope == nil || rec.TargetID != t.ID || rec.Name != sec.Name || rec.Format != hostproto.SecretReceiptFormat ||
-			rec.Version != sec.Envelope.Version || rec.KeyID != sec.Envelope.KeyID || rec.Nonce != sec.Envelope.Nonce:
+			rec.Version != sec.Envelope.Version || rec.KeyID != sec.Envelope.KeyID || rec.Nonce != sec.Envelope.Nonce || rec.PolicyDigest != sec.Envelope.PolicyDigest:
 			reason = "receipt_mismatch"
 		default:
 			raw, _ := json.Marshal(rec)
@@ -849,6 +849,7 @@ func (s *Store) finishSecretPut(tx *sql.Tx, t Target, job *JobRecord, r hostprot
 		action = "secret.stored"
 		after["value_fingerprint"] = r.SecretReceipt.Fingerprint
 		after["seal_key_id"] = r.SecretReceipt.KeyID
+		after["policy_digest"] = r.SecretReceipt.PolicyDigest
 	}
 	_, err = appendAudit(tx, Operation{Actor: actor, Action: action, Resource: "secret:" + sec.ID, Reason: "The host answered a secret-put", RequestID: "hostd-" + newID(), Before: map[string]string{"state": "pending"}, After: after}, "committed")
 	return err

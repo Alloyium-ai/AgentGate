@@ -2,46 +2,46 @@
   "jobs": [
     {
       "attempts": 1,
-      "created_at": "2026-10-25T02:07:43.178348143Z",
-      "deadline": "2026-10-25T03:12:43.018Z",
+      "created_at": "2026-10-25T02:51:18.753998727Z",
+      "deadline": "2026-10-25T03:56:18.619Z",
       "event_seq": 2,
-      "id": "02461ddf328b6cb65733ed308e7985ab",
-      "key_id": "ed25519:d84158bb2095b4600f1d6e7ef05debfa",
-      "launch_id": "7d573d2feb027d59743a5fbf52a50097",
+      "id": "f0ee527fd7839b6c457584c06492489d",
+      "key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+      "launch_id": "beba822b4713eed36ef53aa835ae5774",
       "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
       "state": "delivered",
-      "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+      "target_id": "3051ed3763d89e3871ce3d313dc46788",
       "type": "launch"
     },
     {
       "attempts": 1,
-      "completed_at": "2026-10-25T02:07:43.209419366Z",
-      "created_at": "2026-10-25T02:07:43.205383092Z",
-      "deadline": "2026-10-26T02:07:43.018Z",
+      "completed_at": "2026-10-25T02:51:18.765538810Z",
+      "created_at": "2026-10-25T02:51:18.761241577Z",
+      "deadline": "2026-10-26T02:51:18.619Z",
       "event_seq": 1,
-      "id": "d45d327e940eea00bbedd5e719d6a3b7",
-      "key_id": "ed25519:d84158bb2095b4600f1d6e7ef05debfa",
-      "launch_id": "7d573d2feb027d59743a5fbf52a50097",
+      "id": "3579501c6493bf9fb0baa9363e583b67",
+      "key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+      "launch_id": "beba822b4713eed36ef53aa835ae5774",
       "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
       "result": {
         "evidence_missing": "",
         "reason": "stopped",
-        "receipt_digest": "4d71bdbef535fdbc964d9f41df9dae32032704c3f8d11cfd321ddc12871a9c0b",
+        "receipt_digest": "475b477fb58ed0bf1640e4b6681afd88037fa745e3c7a0f4b921ef56b77cb3c1",
         "status": "succeeded"
       },
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
       "state": "succeeded",
-      "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+      "target_id": "3051ed3763d89e3871ce3d313dc46788",
       "type": "stop"
     }
   ],
   "launch": {
     "approval_required": false,
-    "created_at": "2026-10-25T02:07:43.177597798Z",
-    "ended_at": "2026-10-25T02:07:43.209543241Z",
-    "expires_at": "2026-10-25T03:07:43.018Z",
-    "id": "7d573d2feb027d59743a5fbf52a50097",
+    "created_at": "2026-10-25T02:51:18.753320889Z",
+    "ended_at": "2026-10-25T02:51:18.765716304Z",
+    "expires_at": "2026-10-25T03:51:18.619Z",
+    "id": "beba822b4713eed36ef53aa835ae5774",
     "kernel_verified": false,
     "lifetime_seconds": 3600,
     "mode": "session",
@@ -110,15 +110,15 @@
         "approved_digest": "9d06a5d87bcc579ecc027ac11fb1062413a9865118a933c6ea6103847376da51",
         "approved_version": 1,
         "digest": "9d06a5d87bcc579ecc027ac11fb1062413a9865118a933c6ea6103847376da51",
-        "id": "a55af4b2f16dc68506464967a22b8991",
+        "id": "94e8588537639566a728e9be25f1c719",
         "name": "dev",
         "version": 1,
-        "version_id": "8f16c4d8fc6fe13993fb9b0941b69c88"
+        "version_id": "502aaafd9cf7017d1c1443adac158292"
       },
       "secrets": [],
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
       "target": {
-        "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+        "id": "3051ed3763d89e3871ce3d313dc46788",
         "name": "local"
       },
       "workdir": "/var/lib/agentgate/workspace"
@@ -187,26 +187,26 @@
       }
     },
     "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
-    "profile_version_id": "8f16c4d8fc6fe13993fb9b0941b69c88",
-    "queued_at": "2026-10-25T02:07:43.178064061Z",
+    "profile_version_id": "502aaafd9cf7017d1c1443adac158292",
+    "queued_at": "2026-10-25T02:51:18.753715310Z",
     "receipt": {
       "bpf_objects": {
         "network.bpf.o": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       },
       "broker_counts": {},
       "domain_empty": true,
-      "ended_at_ms": 1792894063018,
+      "ended_at_ms": 1792896678619,
       "enforcement_released": true,
       "exit_code": 0,
       "guard_digest": "",
       "kernel_verified": false,
-      "launch_id": "7d573d2feb027d59743a5fbf52a50097",
+      "launch_id": "beba822b4713eed36ef53aa835ae5774",
       "mounts": [],
       "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
       "reason": "exited",
       "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
-      "started_at_ms": 1792894063018,
-      "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+      "started_at_ms": 1792896678619,
+      "target_id": "3051ed3763d89e3871ce3d313dc46788",
       "version": "agentgate.receipt.v1"
     },
     "requested_by": "oidc:lin",
@@ -238,11 +238,11 @@
       "version": "agentgate.launch.v1"
     },
     "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
-    "started_at": "2026-10-25T02:07:43.198382463Z",
+    "started_at": "2026-10-25T02:51:18.758878622Z",
     "state": "stopped",
     "stop_reason": "Done",
-    "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+    "target_id": "3051ed3763d89e3871ce3d313dc46788",
     "terminal_reason": "The host confirmed an empty domain and released enforcement",
-    "updated_at": "2026-10-25T02:07:43.209543241Z"
+    "updated_at": "2026-10-25T02:51:18.765716304Z"
   }
 }

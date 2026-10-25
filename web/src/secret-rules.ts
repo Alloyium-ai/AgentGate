@@ -62,6 +62,8 @@ export function sealFailureText(code: string, message: string): string | undefin
       return "The service refused the sealed envelope: it names another target, name or format. Nothing was stored; verify and seal again (an envelope is never reused).";
     case "invalid_secret":
       return `The broker would refuse these settings: ${message} Nothing was stored.`;
+    case "policy_mismatch":
+      return "The service received other broker settings than the policy this browser sealed with the value. Nothing was stored. If you did not change the form while sealing, do not store secrets through this service until you know why.";
   }
   return undefined;
 }
@@ -76,6 +78,8 @@ export function refusalHelp(code: string): string | undefined {
       return "The secret is not stored on this target (or is being removed). Pick a secret listed for the target, or ask an administrator to store it there.";
     case "secret_scope":
       return "The secret is not scoped to this profile or to you. Use a reviewed profile and a secret whose scope includes you, or ask an administrator to widen the scope.";
+    case "secret_policy_mismatch":
+      return "The secret's stored broker settings are not the policy sealed with its value (or it was sealed before policies were), so no launch may use it. An administrator stores it again with a new envelope.";
   }
   return undefined;
 }

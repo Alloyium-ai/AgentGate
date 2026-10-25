@@ -19,7 +19,7 @@ import (
 
 type secretFlags struct {
 	upstreams, profiles, launchers listFlag
-	rules, extraHeaders            multiFlag
+	rules, extraHeaders, forward   multiFlag
 	header, scheme, basicUser      string
 	target, reason                 string
 	anyPath, wait                  bool
@@ -37,6 +37,8 @@ func init() {
                            POST:/v1/messages or GET,POST:/v1/:prefix (repeatable; deny by default)
   --allow-any-path         the explicit wildcard: every method on every path of the upstreams
   --extra-header NAME=VALUE  a non-secret header the broker sets on every request (repeatable)
+  --forward-header NAME    a request header the broker forwards beyond its defaults (repeatable, up to 16;
+                           credential, cookie, proxy and override headers are never forwarded)
   --target NAME            target that stores it (default local)
   --allow-profile NAME     profile whose launches may use it (repeatable, required)
   --allow-launcher SUBJECT human who may launch with it (repeatable; default: you)
@@ -44,6 +46,8 @@ func init() {
   --wait-timeout DUR       default 2m
   --reason TEXT
 The target's seal key must be signed by the host key pinned on this machine (docs/CLI.md).
+The broker policy (upstreams, header, scheme, rules, extra and forwarded headers) is shown before
+the value is read and sealed with it: the host stores and uses the value only under that policy.
 The broker forwards nothing by default: give at least one --rule, or --allow-any-path for the
 explicit wildcard (every method and path; every plan that uses it warns and needs approval).
 The value is never read from arguments or the environment. On a terminal it is prompted twice
@@ -55,6 +59,7 @@ with echo off; otherwise it is read from standard input (one trailing newline is
 			fs.Var(&f.launchers, "allow-launcher", "")
 			fs.Var(&f.rules, "rule", "")
 			fs.Var(&f.extraHeaders, "extra-header", "")
+			fs.Var(&f.forward, "forward-header", "")
 			fs.StringVar(&f.header, "header", "x-api-key", "")
 			fs.StringVar(&f.scheme, "scheme", "", "")
 			fs.StringVar(&f.basicUser, "username", "", "")
@@ -187,7 +192,32 @@ func secretInjection(f secretFlags) (map[string]any, error) {
 		}
 		body["extra_headers"] = extra
 	}
+	if len(f.forward) > hostproto.MaxForwardHeaders {
+		return nil, usageError("give at most %d --forward-header names", hostproto.MaxForwardHeaders)
+	}
+	for _, name := range f.forward {
+		if !hostproto.HeaderPattern.MatchString(name) {
+			return nil, usageError("--forward-header takes a header name (got %q)", name)
+		}
+	}
+	if len(f.forward) > 0 {
+		body["forward_headers"] = []string(f.forward)
+	}
 	return body, nil
+}
+
+// flagPolicy is the injection policy the flags make: what this run seals
+// with the value.
+func flagPolicy(f secretFlags, injection map[string]any) (hostproto.SecretPolicy, error) {
+	scheme, _ := injection["scheme"].(string)
+	username, _ := injection["username"].(string)
+	rules, _ := injection["rules"].([]BrokerRule)
+	extra, _ := injection["extra_headers"].(map[string]string)
+	p, err := newPolicy(f.upstreams, f.header, scheme, username, rules, f.anyPath, extra, f.forward)
+	if err != nil {
+		return p, usageError("the broker settings are not a valid policy: %s", strings.TrimPrefix(err.Error(), "hostproto: "))
+	}
+	return p, nil
 }
 
 func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
@@ -212,6 +242,11 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 	if err != nil {
 		return err
 	}
+	policy, err := flagPolicy(f, injection)
+	if err != nil {
+		return err
+	}
+	digest := policy.Digest()
 	c, err := e.authed()
 	if err != nil {
 		return err
@@ -259,13 +294,19 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 			return err
 		}
 	}
+	if !e.g.json {
+		// The operator reviews the policy before the value is read: the host
+		// will use the value under exactly this policy and no other.
+		e.p.line("Secret %s for target %s will be sealed with this broker policy; the host uses it under no other:", name, t.Name)
+		e.p.fields("  ", policyFields(policy))
+	}
 	value, err := e.readNewSecret(ctx, "Value for secret "+name, true)
 	if err != nil {
 		return err
 	}
 	sealed, err := func() (*sealedValue, error) {
 		defer zero(value)
-		return plan.seal(name, value)
+		return plan.seal(name, digest, value)
 	}()
 	if err != nil {
 		return err
@@ -287,7 +328,13 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 		return trustError("ciphertext_changed", "The service recorded ciphertext SHA-256 "+out.Fingerprint+" for secret "+out.Name+", but this machine sent "+local+".",
 			"Remove the secret (agentgate secret rm "+out.Name+" --target "+t.Name+") and do not store secrets through this service until you know why.")
 	}
-	result := map[string]any{"secret": out, "seal": plan, "sealed_sha256": local}
+	// The service must show the settings this machine sealed: their policy is
+	// the one sealed, and the digest it reports is the sealed digest.
+	if shown, err := secretPolicyOf(out); err != nil || shown.Digest() != digest || out.PolicyDigest != digest {
+		return trustError("policy_changed", "The service recorded broker settings for secret "+out.Name+" (policy "+orNone(out.PolicyDigest)+") that differ from the policy this machine sealed ("+digest+").",
+			"Remove the secret (agentgate secret rm "+out.Name+" --target "+t.Name+") and do not store secrets through this service until you know why; the host refuses every launch under another policy.")
+	}
+	result := map[string]any{"secret": out, "seal": plan, "sealed_sha256": local, "policy": policy, "policy_digest": digest}
 	if !e.g.json {
 		e.p.line("Stored secret %s for target %s (id %s, state %s until the host confirms).", out.Name, t.Name, out.ID, e.p.state(out.State))
 		rules := []string{}
@@ -307,6 +354,10 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 			}
 			pairs = append(pairs, [2]string{"extra headers", strings.Join(sortedStrings(names), ", ")})
 		}
+		if len(out.ForwardHeaders) > 0 {
+			pairs = append(pairs, [2]string{"forward headers", strings.Join(out.ForwardHeaders, ", ")})
+		}
+		pairs = append(pairs, [2]string{"policy digest", out.PolicyDigest})
 		pairs = append(pairs, [2]string{"profiles", strings.Join(out.AllowedProfiles, ", ")}, [2]string{"launchers", strings.Join(out.AllowedLaunchers, ", ")})
 		e.p.fields("  ", pairs)
 		if out.Wildcard {
@@ -327,7 +378,7 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 		}
 		result["value_fingerprint"], result["receipt_verified"] = fp, true
 		if !e.g.json {
-			e.p.line("The host's receipt verifies: it stored exactly this value (fingerprint %s).", fp)
+			e.p.line("The host's receipt verifies: it stored exactly this value under this policy (fingerprint %s, policy %s).", fp, digest)
 		}
 	} else if !e.g.json {
 		e.p.note("Run with --wait to verify the host's receipt for this value (only this run holds the secret that checks it).")

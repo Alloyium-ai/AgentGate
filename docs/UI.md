@@ -87,6 +87,8 @@ sets, the profiles and people (subjects) that may use it, and a reason, and say 
   warns and needs a second person's approval.
 - **Extra headers (not secret)**: at most 8 headers the broker sets on every forwarded request, such as an API
   version. The credential header, Authorization, X-Api-Key, Host, Cookie, `Proxy-*` and `X-Forwarded-*` are refused.
+- **Request headers to forward beyond the broker's defaults** (optional, at most 16). The broker never forwards
+  credential, cookie, proxy or override headers, whatever is listed.
 
 These are checked in the browser as `hostproto.CheckInjection` checks them, and again by the service with the broker's
 own validator. Then:
@@ -96,24 +98,32 @@ own validator. Then:
    the seal key record; the record names this target, uses the documented suite, has a matching key id and is in date.
    At first use in this browser you type the fingerprint from the host console (`ed25519:…` or `SHA256:…`) and confirm
    it; the browser pins it (`localStorage`, key `agentgate.known-targets.v1`). A pin is never replaced silently.
-2. **Enter the value** (enabled only after verification): 8 to 8192 visible ASCII characters, which is what the broker
+2. **Review the broker policy sealed with the value.** The dialog shows the injection policy the settings make, as the
+   host will enforce it (every upstream as `https://host:port`, the header and scheme, the rules, the extra and
+   forwarded headers) and its policy digest, computed in the browser byte for byte as `hostproto.SecretPolicy`
+   (`web/src/secretseal.ts` `newSecretPolicy`, `canonicalPolicy`, `policyDigest`). The host stores and uses the value
+   only under this policy; changing it later means storing the secret again.
+3. **Enter the value** (enabled only after verification): 8 to 8192 visible ASCII characters, which is what the broker
    can inject (`broker.ValidSecret`).
-3. **Seal in this browser and store.** The value is sealed with RFC 9180 HPKE (DHKEM(X25519, HKDF-SHA256),
+4. **Seal in this browser and store.** The value is sealed with RFC 9180 HPKE (DHKEM(X25519, HKDF-SHA256),
    HKDF-SHA256, ChaCha20-Poly1305, base mode) exactly as `internal/secretseal.Seal`: the associated data binds the
-   format, suite, target id, secret name, version (the sealing time in milliseconds), key id and a fresh nonce. The
-   request carries `ciphertext` = `Envelope.Encode()` (base64url of the envelope JSON) and never the value. The page
-   checks that the `ciphertext_sha256` the service records equals the SHA-256 of what it sent, and, when the host has
-   stored it, reads `GET /secrets/{id}/receipt` while the dialog is open and verifies the receipt's tag with the HPKE
-   exporter secret it kept in memory, then shows the host's value fingerprint (`sfp1_…`).
+   format (`agentgate.secretseal.v2`), suite, target id, secret name, version (the sealing time in milliseconds), key
+   id, a fresh nonce and the policy digest. The request carries `ciphertext` = `Envelope.Encode()` (base64url of the
+   envelope JSON) and never the value. The page checks that the `ciphertext_sha256` the service records equals the
+   SHA-256 of what it sent and that the settings it recorded make the sealed policy digest (otherwise it says the
+   service recorded other broker settings and to delete the secret), and, when the host has stored it, reads
+   `GET /secrets/{id}/receipt` while the dialog is open and verifies the receipt's tag (which covers the policy the host
+   stored) with the HPKE exporter secret it kept in memory, then shows the host's value fingerprint (`sfp1_…`).
 
 The service's refusals are explained: `seal_key_changed` (the host published a new seal key after this browser
 verified it; the page drops the verification so you verify the new key and seal again), `seal_key_unavailable` (the
-host has not published a signed seal key), `invalid_ciphertext` (the envelope names another target or name) and
-`invalid_secret` (the broker would refuse the settings; the service's message names the field). Nothing is stored in
-any of these cases.
+host has not published a signed seal key), `invalid_ciphertext` (the envelope names another target or name),
+`invalid_secret` (the broker would refuse the settings; the service's message names the field) and `policy_mismatch`
+(the settings sent are not the policy sealed). Nothing is stored in any of these cases.
 
 The secrets list shows each secret's upstreams, header, scheme and user, its rules (or *Wildcard rules*), the
-ciphertext digest and the host's value fingerprint. A secret stored without rules by an older client is marked
+ciphertext digest, the host's value fingerprint and its sealed policy digest, which the browser recomputes from the
+settings shown; a secret whose settings do not make it is marked as unusable, to be deleted. A secret stored without rules by an older client is marked
 "No broker rules: no launch can use it (secret_rules_missing)".
 
 The value lives only in one uncontrolled password field: never in React state, the URL, storage, the console or error
@@ -167,9 +177,13 @@ cursor; Previous returns to exactly the page seen before.
 The launch page shows:
 
 - the state, the spec and policy digests, the lifetime and expiry (or the end time), the decision and reasons;
-- **Approve** and **Reject** for an approver who did not request the launch, with the plan's digests and approval
-  reasons in the confirmation. A disabled button says why: no approver role, not waiting for approval, or "You
-  requested this launch. A different person must decide it.";
+- **Approve** and **Reject** for an approver who did not request the launch, with the plan's digests, each brokered
+  secret's sealed policy digest and the approval reasons in the confirmation. A disabled button says why: no approver
+  role, not waiting for approval, "You requested this launch. A different person must decide it.", or that the plan's
+  broker settings for a secret do not make the sealed policy digest it names (the browser recomputes each digest from
+  the settings the plan shows; such a plan shows something other than what the host would run, and only **Reject**
+  is offered). The plan marks each secret "These settings are the policy sealed with the value." or "These settings do
+  not make the sealed policy digest: do not approve.";
 - **Stop** with confirmation; it is idempotent. While stopping, the page says the launch ends stopped or expired only
   when the host confirms an empty domain and released enforcement;
 - the **state timeline**: every event with its sequence, from → to, actor, reason and data (digests, expiry), live
@@ -282,9 +296,12 @@ The browser QA needs a build and Playwright's Chromium. Where the pinned Playwri
   fallback, 401); logs; receipt parsing; broker rule and extra header checks against `hostproto` (methods and bounds
   read from `jobs.go`); the explanations of every secret refusal in the recorded service answers.
 - `qa/secretseal.node.mjs`: the RFC 9180 A.2.1 vector reproduced byte for byte with its ephemeral key; ChaCha20-Poly1305
-  against OpenSSL; the Go known-answer vector (`fixtures/secretseal-vector-v1.json`, a copy of
-  `internal/secretseal/testdata/vector-v1.json` that the test compares with the original) verified, opened and its
-  receipt checked; browser-sealed envelopes opened by an independent node:crypto implementation (`qa/hpke-node.mjs`);
+  against OpenSSL; the Go known-answer vector (`fixtures/secretseal-vector-v2.json`, a copy of
+  `internal/secretseal/testdata/vector-v2.json` that the test compares with the original) verified, opened and its
+  receipt checked, and refused under another policy digest; every Go policy vector
+  (`fixtures/secret-policy-vectors.json`, written by `internal/hostproto` with `AGENTGATE_WRITE_WEB_FIXTURES=1`)
+  reproduced (normalized policy, canonical bytes and digest) and every refused vector refused; browser-sealed
+  envelopes opened by an independent node:crypto implementation (`qa/hpke-node.mjs`);
   key substitution, forged signatures, swapped seal keys, other targets, expired records and bad receipts refused.
 - `qa/provisioning.mjs`: an owned API fixture drives every flow in Chromium: add target and approve key; profile from a
   preset, the service's grant dry run, grant, conflict shown verbatim, version diff; launch form rules, plan, stale
@@ -292,7 +309,9 @@ The browser QA needs a build and Playwright's Chromium. Where the pinned Playwri
   logs as text; stop, receipt and evidence; `evidence_missing`; secret sealing with missing, substituted, forged and
   rewritten keys refused, the value never sent, stored or logged, and the host's receipt verified; broker rules, the
   wildcard confirmation, Basic, `seal_key_changed` and `secret_rules_missing`; brokered secrets in a plan with the
-  broker endpoint; strict import; API tokens; overview; launch list filters and paging; a viewer's disabled controls;
+  broker endpoint; the sealed policy shown before sealing and carried by the envelope; a plan whose settings do not
+  make its sealed digest cannot be approved; a service that records other settings than the sealed policy is caught;
+  strict import; API tokens; overview; launch list filters and paging; a viewer's disabled controls;
   session expiry; retiring a target; CSRF on every write; labelled inputs; 390 px layouts. Its last step compares
   every answer the fixture gave with the real service's recorded answers (`qa/api-shapes.mjs`): no invented field, no
   field of another type, and every field the service always sends.

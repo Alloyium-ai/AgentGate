@@ -35,13 +35,16 @@ type Store struct {
 }
 
 type secretMeta struct {
-	Format      string `json:"format"`
-	TargetID    string `json:"target_id"`
-	Name        string `json:"name"`
-	Version     uint64 `json:"version"`
-	Nonce       string `json:"nonce"`
-	Fingerprint string `json:"fingerprint"`
-	UpdatedAt   string `json:"updated_at"`
+	Format   string `json:"format"`
+	TargetID string `json:"target_id"`
+	Name     string `json:"name"`
+	Version  uint64 `json:"version"`
+	Nonce    string `json:"nonce"`
+	// PolicyDigest is the injection policy the value was sealed for (the
+	// HPKE associated data bound it); the value may be used only under it.
+	PolicyDigest string `json:"policy_digest"`
+	Fingerprint  string `json:"fingerprint"`
+	UpdatedAt    string `json:"updated_at"`
 	// Deleted marks a tombstone: the value is gone, the version stays, so an
 	// earlier envelope relayed again is still refused as a replay.
 	Deleted bool `json:"deleted,omitempty"`
@@ -141,7 +144,7 @@ func (s *Store) Accept(key *HostKey, env *Envelope, now time.Time) (*Receipt, er
 		return nil, err
 	}
 	meta, _ := json.Marshal(secretMeta{Format: EnvelopeFormat + ".meta", TargetID: env.TargetID, Name: env.Name, Version: env.Version,
-		Nonce: env.Nonce, Fingerprint: fp, UpdatedAt: now.UTC().Format(time.RFC3339)})
+		Nonce: env.Nonce, PolicyDigest: env.PolicyDigest, Fingerprint: fp, UpdatedAt: now.UTC().Format(time.RFC3339)})
 	if err := writePrivate(metaPath, meta, false); err != nil {
 		return nil, err
 	}
@@ -179,27 +182,36 @@ func (s *Store) meta(name string) (*secretMeta, error) {
 	return &m, nil
 }
 
-// Stored reports the accepted version and fingerprint of name. ok is false
-// when no value is held (never set, or deleted). It never reads the value.
-func (s *Store) Stored(name string) (version uint64, fingerprint string, ok bool, err error) {
+// StoredSecret is what the store records of a held value: never the value.
+type StoredSecret struct {
+	Version      uint64
+	Fingerprint  string
+	PolicyDigest string
+}
+
+// Stored reports the accepted version, fingerprint and policy digest of name.
+// ok is false when no value is held (never set, or deleted). It never reads
+// the value. A value stored under an earlier format without a policy digest
+// is refused (ErrStore): it must be sealed again.
+func (s *Store) Stored(name string) (StoredSecret, bool, error) {
 	if !namePattern.MatchString(name) {
-		return 0, "", false, ErrContext
+		return StoredSecret{}, false, ErrContext
 	}
 	unlock, err := s.lock()
 	if err != nil {
-		return 0, "", false, err
+		return StoredSecret{}, false, err
 	}
 	defer unlock()
 	m, err := s.meta(name)
 	if err != nil || m == nil || m.Deleted {
-		return 0, "", false, err
+		return StoredSecret{}, false, err
 	}
 	var st unix.Stat_t
 	if unix.Lstat(filepath.Join(s.dir, name), &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0o077 != 0 ||
-		int(st.Uid) != os.Geteuid() || st.Nlink != 1 {
-		return 0, "", false, ErrStore
+		int(st.Uid) != os.Geteuid() || st.Nlink != 1 || !keyIDPattern.MatchString(m.PolicyDigest) {
+		return StoredSecret{}, false, ErrStore
 	}
-	return m.Version, m.Fingerprint, true, nil
+	return StoredSecret{Version: m.Version, Fingerprint: m.Fingerprint, PolicyDigest: m.PolicyDigest}, true, nil
 }
 
 // Delete overwrites the value of name with zeros, removes it, and keeps a

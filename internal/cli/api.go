@@ -167,6 +167,8 @@ type PlanSecret struct {
 	Rules            []BrokerRule      `json:"rules,omitempty"`
 	Wildcard         bool              `json:"wildcard_rules,omitempty"`
 	ExtraHeaders     map[string]string `json:"extra_headers,omitempty"`
+	ForwardHeaders   []string          `json:"forward_headers,omitempty"`
+	PolicyDigest     string            `json:"policy_digest,omitempty"`
 	BaseURL          string            `json:"base_url,omitempty"`
 	ValueFingerprint string            `json:"value_fingerprint,omitempty"`
 }
@@ -313,6 +315,8 @@ type Secret struct {
 	Rules            []BrokerRule      `json:"rules,omitempty"`
 	Wildcard         bool              `json:"wildcard_rules,omitempty"`
 	ExtraHeaders     map[string]string `json:"extra_headers,omitempty"`
+	ForwardHeaders   []string          `json:"forward_headers,omitempty"`
+	PolicyDigest     string            `json:"policy_digest,omitempty"`
 	Fingerprint      string            `json:"ciphertext_sha256"`
 	Envelope         *SecretEnvelope   `json:"envelope,omitempty"`
 	ValueFingerprint string            `json:"value_fingerprint,omitempty"`
@@ -350,10 +354,11 @@ type TargetSecrets struct {
 
 // SecretEnvelope is the public context of a relayed sealed envelope.
 type SecretEnvelope struct {
-	Format  string `json:"format"`
-	KeyID   string `json:"key_id"`
-	Version uint64 `json:"version"`
-	Nonce   string `json:"nonce"`
+	Format       string `json:"format"`
+	KeyID        string `json:"key_id"`
+	Version      uint64 `json:"version"`
+	Nonce        string `json:"nonce"`
+	PolicyDigest string `json:"policy_digest"`
 }
 
 // SecretReceiptAnswer is GET /secrets/{id}/receipt.

@@ -669,8 +669,17 @@ func (e *env) printPlan(p LaunchPlan, name, launchID string, dryRun bool) {
 			}
 			how += "; sets " + strings.Join(sortedStrings(names), ", ")
 		}
+		if len(s.ForwardHeaders) > 0 {
+			how += "; forwards " + strings.Join(s.ForwardHeaders, ", ")
+		}
 		if s.ValueFingerprint != "" {
 			how += "; value " + s.ValueFingerprint
+		}
+		if s.PolicyDigest != "" {
+			how += "; sealed policy " + s.PolicyDigest
+			if p, err := planPolicyOf(s); err != nil || p.Digest() != s.PolicyDigest {
+				how += " (DOES NOT MATCH these settings: do not approve)"
+			}
 		}
 		rows = append(rows, [2]string{"secret " + s.Ref, "$" + s.Env + " = " + where + " (" + how + "; the value never enters the sandbox)"})
 	}
@@ -1169,11 +1178,19 @@ func (e *env) decide(ctx context.Context, id string, approve bool, reason string
 		return &Error{Exit: ExitConflict, Code: "not_pending", Message: "Launch " + l.ID + " is " + l.State + "; it is not waiting for a decision.", Hint: "agentgate show " + l.ID}
 	}
 	interactive := e.app.Term.IsTerminal(0) && e.app.Term.IsTerminal(2)
+	var plan LaunchPlan
+	if err = json.Unmarshal(l.Plan, &plan); err != nil && approve {
+		return failure("launch %s has no readable plan to approve", l.ID)
+	}
 	if approve && interactive && !e.g.json {
-		var plan LaunchPlan
-		if json.Unmarshal(l.Plan, &plan) == nil {
-			e.printPlan(plan, l.Name, l.ID, false)
-			e.p.line("")
+		e.printPlan(plan, l.Name, l.ID, false)
+		e.p.line("")
+	}
+	// Each secret's readable settings must make the policy digest the plan
+	// names (the one sealed with the value, which the host enforces).
+	if approve {
+		if err = checkPlanPolicies(plan); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(reason) == "" {

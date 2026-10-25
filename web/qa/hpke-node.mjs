@@ -60,11 +60,11 @@ export function nodeOpen(skR, enc, info, aad, sealed) {
   d.setAAD(Buffer.from(aad), { plaintextLength: ct.length });
   d.setAuthTag(Buffer.from(sealed.subarray(sealed.length - 16)));
   const plaintext = Buffer.concat([d.update(ct), d.final()]);
-  return { plaintext, confirm: lExpand(hpkeSuite, exporter, "sec", Buffer.from("agentgate.secretseal.v1 receipt"), 32) };
+  return { plaintext, confirm: lExpand(hpkeSuite, exporter, "sec", Buffer.from("agentgate.secretseal.v2 receipt"), 32) };
 }
 
-const envelopeAAD = (e) => lp("agentgate.secretseal.v1", SUITE, e.target_id, e.name, u64(e.version), e.key_id, e.nonce);
-const envelopeInfo = (e) => lp("agentgate.secretseal.v1", SUITE, e.key_id, e.target_id);
+const envelopeAAD = (e) => lp("agentgate.secretseal.v2", SUITE, e.target_id, e.name, u64(e.version), e.key_id, e.nonce, e.policy_digest);
+const envelopeInfo = (e) => lp("agentgate.secretseal.v2", SUITE, e.key_id, e.target_id);
 
 // openEnvelope opens a secretseal envelope (object) with the seal private key.
 export function openEnvelope(sealPrivate, e) {
@@ -73,8 +73,17 @@ export function openEnvelope(sealPrivate, e) {
 }
 
 export function hostReceipt(envelope, confirm, fingerprint) {
-  const r = { format: "agentgate.secretseal.receipt.v1", target_id: envelope.target_id, name: envelope.name, version: envelope.version, key_id: envelope.key_id, nonce: envelope.nonce, fingerprint };
-  const mac = lp(r.format, r.target_id, r.name, u64(r.version), r.key_id, r.nonce, r.fingerprint);
+  const r = {
+    format: "agentgate.secretseal.receipt.v2",
+    target_id: envelope.target_id,
+    name: envelope.name,
+    version: envelope.version,
+    key_id: envelope.key_id,
+    nonce: envelope.nonce,
+    policy_digest: envelope.policy_digest,
+    fingerprint,
+  };
+  const mac = lp(r.format, r.target_id, r.name, u64(r.version), r.key_id, r.nonce, r.policy_digest, r.fingerprint);
   return { ...r, tag: hmac(confirm, mac).toString("base64url") };
 }
 

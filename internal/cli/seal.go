@@ -22,7 +22,8 @@ import (
 //	GET /targets/{id}/seal-key -> {host_public_key, host_key_fingerprint, record}
 //	hostproto.KeyID(host_public_key) == pinned host_key_id
 //	record (secretseal.SignedKeyRecord) signed by host_public_key, this target, in date
-//	-> secretseal (RFC 9180 HPKE) envelope, Envelope.Encode() in the ciphertext field
+//	-> secretseal (RFC 9180 HPKE) envelope, Envelope.Encode() in the ciphertext field,
+//	   its associated data binding the digest of the broker policy (policy.go)
 //
 // The host publishes the signed record (agentgate-hostd heartbeat) and the
 // service serves it at the seal-key endpoint; a service or host without it
@@ -49,7 +50,7 @@ type sealPlan struct {
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
 	SealKeyID          string `json:"seal_key_id,omitempty"`
 	Verified           bool   `json:"host_signed"`
-	seal               func(name string, value []byte) (*sealedValue, error)
+	seal               func(name, policyDigest string, value []byte) (*sealedValue, error)
 }
 
 // sealedValue is one sealed value plus the secret that verifies the host's
@@ -69,7 +70,7 @@ func (v *sealedValue) verify(raw []byte) (string, error) {
 			return fp, nil
 		}
 	}
-	return "", trustError("receipt_invalid", "The host's receipt does not match the envelope this machine sealed: the service relayed a different ciphertext, or the receipt was altered.",
+	return "", trustError("receipt_invalid", "The host's receipt does not match the envelope this machine sealed: the service relayed a different ciphertext or broker policy, or the receipt was altered.",
 		"Remove the secret (agentgate secret rm NAME) and do not store secrets through this service until you know why.")
 }
 
@@ -129,8 +130,8 @@ func planSeal(pin *KnownTarget, t Target, sk *sealKeyAnswer, now time.Time) (*se
 		}
 		return nil, trustError("seal_key_unverified", msg, "Do not store secrets through this service until the host publishes a fresh signed seal key (restart agentgate-hostd).")
 	}
-	return &sealPlan{Method: sealMethodSigned, TargetID: t.ID, HostKeyID: pin.HostKeyID, HostKeyFingerprint: secretseal.HostKeyFingerprint(hostPub), SealKeyID: pub.KeyID(), Verified: true, seal: func(name string, value []byte) (*sealedValue, error) {
-		sealed, err := secretseal.SealAt(pub, t.ID, name, value, now)
+	return &sealPlan{Method: sealMethodSigned, TargetID: t.ID, HostKeyID: pin.HostKeyID, HostKeyFingerprint: secretseal.HostKeyFingerprint(hostPub), SealKeyID: pub.KeyID(), Verified: true, seal: func(name, policyDigest string, value []byte) (*sealedValue, error) {
+		sealed, err := secretseal.SealAt(pub, t.ID, name, policyDigest, value, now)
 		if err != nil {
 			return nil, failure("cannot seal the value: %v", err)
 		}

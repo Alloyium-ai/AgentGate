@@ -412,15 +412,26 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
   fingerprint it obtained out of band (the value `agentgate-hostd` prints at enrollment) and pinned client side
   (`~/.config/agentgate/known-targets.json`, mode 0600). Trust on first use happens only when the operator asks for it
   and never replaces a different pin.
+- **Injection policy.** Before it reads the value, the client shows the operator the secret's injection policy (its
+  upstreams with ports, header and scheme, rules, extra headers and forwarded request headers) and its
+  `policy_digest`, the SHA-256 of the canonical encoding in [BROKER.md](BROKER.md#sealed-relay-for-secret-put-internalsecretseal).
+  The service refuses `POST /secrets` settings whose digest is not the envelope's (`422 policy_mismatch`), stores the
+  digest with the secret (immutable, like its settings), shows it in every plan, and refuses to plan or queue a launch
+  whose stored settings, sealed digest and receipt disagree (`secret_policy_mismatch`). The client refuses an answer
+  whose settings make another digest. To change a policy, store the secret again with a new envelope.
 - **Envelope.** The client seals with RFC 9180 HPKE (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305, base
   mode). The associated data binds the secret name (the `ref`), the target id, a version (the sealing time in Unix
-  milliseconds) and a fresh 128-bit nonce. The envelope holds only ciphertext and that public context. The service
-  keeps nothing it can decrypt: it relays the envelope in the `secret-put` job, then keeps only its SHA-256 and the
-  host's fingerprint.
-- **Host acceptance.** The host refuses a different target or key, a version not newer than the stored one (replay or
+  milliseconds), a fresh 128-bit nonce and the policy digest (format `agentgate.secretseal.v2`). The envelope holds only
+  ciphertext and that public context. The service keeps nothing it can decrypt: it relays the envelope and the policy
+  settings in the `secret-put` job, then keeps only its SHA-256 and the host's fingerprint.
+- **Host acceptance.** The host refuses relayed settings whose digest is not the envelope's (`policy_mismatch`; the
+  AEAD would not open under another digest either) and stores the policy with the value. At launch it refuses a secret
+  whose job settings or digest differ from that stored policy, and builds the broker from the stored policy, so neither
+  the service nor its database decides where a credential goes. It refuses a different target or key, a version not newer than the stored one (replay or
   rollback of a rotated secret), an envelope older than 24 hours or more than 5 minutes ahead, and (with `Store.Validate` set to
   `broker.ValidSecret`) a value the broker cannot inject (it needs 8 to 8192 bytes of visible ASCII). It writes the value atomically to its 0600 file.
-- **Receipt.** The job result carries `{target_id, name, version, key_id, nonce, fingerprint, tag}`. The fingerprint
+- **Receipt.** The job result carries `{target_id, name, version, key_id, nonce, policy_digest, fingerprint, tag}`; the
+  service refuses a receipt whose policy digest is not the envelope's (`receipt_mismatch`). The fingerprint
   is a keyed hash (HMAC-SHA256 under a random key that never leaves the host, truncated to 128 bits), so a short or
   guessable secret cannot be recovered by guessing, and an unchanged value keeps its fingerprint. The tag is keyed by
   the HPKE exporter secret that only the sealing client shares with the host; the client verifies it, so a service
@@ -519,8 +530,23 @@ a BPF change), brokers in the one-command appliance. The earlier `hostproto.Seal
 
 ## Trusted computing base
 
-The service, its database, its job key and the administrator are trusted. **`agentgate-hostd` is fully trusted for
-its target**: it holds the host key, the secret values for that target and Docker, BPF and cgroup control. A
+The service, its database, its job key and the administrator are trusted for authorization: who may launch what,
+which launches are approved and queued, and the audit log. They are **not** trusted with secret values or with where
+and how a stored credential is used. A compromised service, or anyone who can write its database or sign jobs with
+its job key, cannot read a stored credential (it relays only sealed envelopes) and cannot redirect it: the injection
+policy (upstreams, header, scheme, extra and forwarded headers, rules) is sealed with the value by the operator's
+client, and the host stores and uses the value only under that policy (see [BROKER.md](BROKER.md#sealed-relay-for-secret-put-internalsecretseal)).
+Such a party can still:
+
+- choose which launches to queue within the approval rules it enforces (it decides who is a launcher or approver,
+  and it can queue a launch nobody approved), and so have the host run any profile with a credential under its sealed
+  policy;
+- deny service: drop jobs, secret-puts or results, or refuse every request;
+- show a client a plan whose readable broker settings differ from the sealed policy. The CLI (`agentgate approve`) and
+  the web UI recompute the digest from the settings shown and refuse to approve on a mismatch; a client that does
+  not compare them can be misled about what it approves, though the host still enforces only the sealed policy.
+
+**`agentgate-hostd` is fully trusted for its target**: it holds the host key, the secret values for that target and Docker, BPF and cgroup control. A
 compromised `agentgate-hostd` (or root on its host) can:
 
 - run any job differently from its payload, or run agents the service never asked for;
@@ -719,8 +745,9 @@ curl -sS -X DELETE "$U/api/v1/targets/old-host" -H "Authorization: Bearer $T" -H
 ```
 
 Store a secret (admin). The client fetches the seal key, verifies it against the host key it pinned and seals the
-value with `secretseal.SealForTarget(known, false, &record, hostPublicKey, targetID, name, value, now)`; `agentgate
-secret set` does all of this. The service never sees the value:
+value with `secretseal.SealForTarget(known, false, &record, hostPublicKey, targetID, name, policyDigest, value, now)`,
+where `policyDigest` is `hostproto.NewSecretPolicy(...).Digest()` of exactly the settings it then posts; `agentgate
+secret set` does all of this. The service never sees the value and cannot change the settings:
 
 ```sh
 curl -sS "$U/api/v1/targets/local/seal-key" -H "Authorization: Bearer $T"
@@ -738,8 +765,9 @@ curl -sS -X POST "$U/api/v1/secrets" -H "Authorization: Bearer $T" -H 'Content-T
   "extra_headers":{"docs-version":"2"},"ciphertext":"<Envelope.Encode()>","allowed_profiles":["python-dev"],
   "allowed_launchers":["local:lin"],"reason":"Docs access"}'
 # Refusals: 409 seal_key_changed (reseal to the current key), 409 seal_key_unavailable, 422 invalid_ciphertext,
-# 422 invalid_secret (the broker would refuse the settings); a plan with a secret stored without rules: 422
-# secret_rules_missing.
+# 422 invalid_secret (the broker would refuse the settings), 422 policy_mismatch (the settings are not the policy
+# sealed in the envelope); a plan with a secret stored without rules: 422 secret_rules_missing; with a secret whose
+# stored settings, sealed digest and receipt disagree: 422 secret_policy_mismatch.
 curl -sS "$U/api/v1/secrets/<id>/receipt" -H "Authorization: Bearer $T"   # verify with Sealed.VerifyReceipt
 curl -sS -X DELETE "$U/api/v1/secrets/<id>" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
   -d '{"reason":"Rotate"}'

@@ -32,6 +32,19 @@ type webFixtures struct {
 	files map[string]any
 }
 
+// sealBody seals the synthetic value for the settings of a POST /secrets
+// body, as the browser does once the operator has filled in the form.
+func (w *webFixtures) sealBody(h *fakeHost, body map[string]any) string {
+	w.t.Helper()
+	raw, _ := json.Marshal(body)
+	var in SecretInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		w.t.Fatal(err)
+	}
+	in.Ciphertext = ""
+	return w.f.sealInput(h, in, "synthetic-credential-0123456789").Ciphertext
+}
+
 func (w *webFixtures) call(method, path, token string, body any, status int) map[string]any {
 	w.t.Helper()
 	var raw []byte
@@ -184,9 +197,9 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	f.profile("dev", false)
 	launcher := f.token(f.launcher(), "launcher")
 	f.storeSecret(h, secretInput("model-api", f.sealTo(h, "local", "model-api", "synthetic-credential-0123456789"), "python-dev"), nil)
-	bare := secretInput("bare-key", f.sealTo(h, "local", "bare-key", "synthetic-credential-0123456789"), "python-dev")
+	bare := secretInput("bare-key", nil, "python-dev")
 	bare.Rules = nil
-	f.storeSecret(h, bare, nil)
+	f.storeSecret(h, f.sealInput(h, bare, "synthetic-credential-0123456789"), nil)
 	w.record("target-secrets.json", w.call("GET", "/api/v1/targets/"+target.ID+"/secrets?profile=python-dev", launcher, nil, 200))
 
 	// The secret flow as an administrator drives it: target, seal key,
@@ -198,15 +211,17 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	w.record("seal-key.json", w.call("GET", "/api/v1/targets/"+target.ID+"/seal-key", admin, nil, 200))
 	create := map[string]any{"name": "docs-api", "target": target.ID, "upstreams": []string{"api.docs.example"}, "header": "Authorization", "scheme": "Basic", "username": "agent",
 		"rules":         []any{map[string]any{"methods": []string{"GET", "HEAD"}, "path": "/v2/", "match": "prefix"}, map[string]any{"methods": []string{"POST"}, "path": "/v2/search", "match": "exact"}},
-		"extra_headers": map[string]string{"docs-version": "2"}, "ciphertext": f.sealTo(h, target.ID, "docs-api", "synthetic-credential-0123456789").Envelope.Encode(),
+		"extra_headers": map[string]string{"docs-version": "2"}, "forward_headers": []string{"X-Request-Id"},
 		"allowed_profiles": []string{"python-dev"}, "allowed_launchers": []string{"oidc:lin"}, "reason": "Store the docs API key"}
+	create["ciphertext"] = w.sealBody(h, create)
 	created := w.call("POST", "/api/v1/secrets", admin, create, 200)
 	acceptPut(f, h)
 	create["ciphertext"] = "(Envelope.Encode() of the value sealed in the browser)"
 	w.record("secret-created.json", map[string]any{"request": create, "response": created})
 	wild := map[string]any{"name": "wild-api", "target": target.ID, "upstreams": []string{"api.wild.example"}, "header": "x-api-key",
-		"rules": []any{map[string]any{"methods": []string{"*"}, "path": "/"}}, "ciphertext": f.sealTo(h, target.ID, "wild-api", "synthetic-credential-0123456789").Envelope.Encode(),
+		"rules":            []any{map[string]any{"methods": []string{"*"}, "path": "/"}},
 		"allowed_profiles": []string{"python-dev"}, "allowed_launchers": []string{"oidc:lin"}, "reason": "Store a key with the wildcard"}
+	wild["ciphertext"] = w.sealBody(h, wild)
 	wildOut := w.call("POST", "/api/v1/secrets", admin, wild, 200)
 	acceptPut(f, h)
 	wild["ciphertext"] = create["ciphertext"]
@@ -302,13 +317,20 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	bad["name"], bad["extra_headers"] = "bad-api", map[string]string{"x-api-key": "not-here"}
 	bad["ciphertext"] = f.sealTo(h, target.ID, "bad-api", "synthetic-credential-0123456789").Envelope.Encode()
 	refuse("invalid_secret", "invalid_secret", "POST", "/api/v1/secrets", admin, bad, 422)
+	// Settings that differ from the policy the browser sealed: here the
+	// upstream an attacker would move the credential to.
+	bad["extra_headers"] = create["extra_headers"]
+	bad["ciphertext"] = w.sealBody(h, bad)
+	bad["upstreams"] = []string{"collector.attacker.example"}
+	refuse("policy_mismatch", "policy_mismatch", "POST", "/api/v1/secrets", admin, bad, 422)
+	bad["upstreams"] = create["upstreams"]
 	bad["extra_headers"], bad["ciphertext"] = map[string]string{}, hostproto.EncodeSealed(bytes.Repeat([]byte{1}, 120))
 	refuse("invalid_ciphertext", "invalid_ciphertext", "POST", "/api/v1/secrets", admin, bad, 422)
 	pub, _ := secretseal.GenerateHostKey(target.ID, h.key, f.now(), time.Hour)
 	rec := pub.Published()
 	hostPub := h.key.Public().(ed25519.PublicKey)
 	verified := must(secretseal.VerifyKeyRecord(&rec, hostPub, secretseal.HostKeyFingerprint(hostPub), target.ID, f.now()))
-	stale := must(secretseal.SealAt(verified, target.ID, "bad-api", []byte("synthetic-credential-0123456789"), f.now()))
+	stale := must(secretseal.SealAt(verified, target.ID, "bad-api", defaultPolicyDigest(), []byte("synthetic-credential-0123456789"), f.now()))
 	bad["ciphertext"] = stale.Envelope.Encode()
 	refuse("seal_key_changed", "seal_key_changed", "POST", "/api/v1/secrets", admin, bad, 409)
 	fresh := must(f.s.CreateTarget(f.admin(), TargetInput{Name: "fresh-host", Reason: "Enroll a host that has not polled"}))
@@ -321,7 +343,7 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	rec = early.Published()
 	unpolledPub := unpolled.key.Public().(ed25519.PublicKey)
 	verified = must(secretseal.VerifyKeyRecord(&rec, unpolledPub, secretseal.HostKeyFingerprint(unpolledPub), enrolled.TargetID, f.now()))
-	bad["target"], bad["ciphertext"] = enrolled.TargetID, must(secretseal.SealAt(verified, enrolled.TargetID, "bad-api", []byte("synthetic-credential-0123456789"), f.now())).Envelope.Encode()
+	bad["target"], bad["ciphertext"] = enrolled.TargetID, must(secretseal.SealAt(verified, enrolled.TargetID, "bad-api", defaultPolicyDigest(), []byte("synthetic-credential-0123456789"), f.now())).Envelope.Encode()
 	refuse("seal_key_unavailable", "seal_key_unavailable", "POST", "/api/v1/secrets", admin, bad, 409)
 	w.record("errors.json", errs)
 
@@ -335,10 +357,11 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	awaiting := must(f.s.CreateTarget(f.admin(), TargetInput{Name: "waiting-host", Reason: "Enroll a host that waits for approval"}))
 	waiting := must(newHost(f).enroll(awaiting.(map[string]any)["enrollment"].(map[string]any)["token"].(string)))
 	w.record("target-awaiting.json", w.call("GET", "/api/v1/targets/"+waiting.TargetID, admin, nil, 200))
-	w.call("POST", "/api/v1/secrets", admin, map[string]any{"name": "pending-key", "target": target.ID, "upstreams": []string{"api.model.example"}, "header": "x-api-key",
-		"rules":      []any{map[string]any{"methods": []string{"POST"}, "path": "/v1/messages", "match": "exact"}},
-		"ciphertext": f.sealTo(h, target.ID, "pending-key", "synthetic-credential-0123456789").Envelope.Encode(), "allowed_profiles": []string{"python-dev"}, "allowed_launchers": []string{"oidc:lin"},
-		"reason": "Store a key the host has not confirmed"}, 200)
+	pendingKey := map[string]any{"name": "pending-key", "target": target.ID, "upstreams": []string{"api.model.example"}, "header": "x-api-key",
+		"rules":            []any{map[string]any{"methods": []string{"POST"}, "path": "/v1/messages", "match": "exact"}},
+		"allowed_profiles": []string{"python-dev"}, "allowed_launchers": []string{"oidc:lin"}, "reason": "Store a key the host has not confirmed"}
+	pendingKey["ciphertext"] = w.sealBody(h, pendingKey)
+	w.call("POST", "/api/v1/secrets", admin, pendingKey, 200)
 	w.record("secrets.json", w.call("GET", "/api/v1/secrets", admin, nil, 200))
 	old := f.secondTarget("old-host")
 	held := secretInput("old-key", f.sealTo(old, old.id, "old-key", "synthetic-credential-0123456789"), "python-dev")

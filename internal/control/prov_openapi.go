@@ -71,7 +71,9 @@ func provisioningSchemas() map[string]any {
 				})},
 			"extra_headers": map[string]any{"type": "object", "maxProperties": hostproto.MaxBrokerExtraHeaders, "description": "Non-secret headers the broker sets on every forwarded request (for example an API version).",
 				"additionalProperties": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}},
-			"ciphertext": map[string]any{"type": "string", "maxLength": (hostproto.MaxSealedBytes*4 + 2) / 3, "description": "secretseal.Envelope.Encode(): the value sealed to the target's host-signed seal key (GET /targets/{id}/seal-key), for this target id and secret name."},
+			"forward_headers": map[string]any{"type": "array", "maxItems": hostproto.MaxForwardHeaders, "description": "Request headers the broker forwards beyond its defaults (never a credential, override, forwarding, proxy, cookie or range header).",
+				"items": map[string]any{"type": "string", "pattern": hostproto.HeaderPattern.String()}},
+			"ciphertext": map[string]any{"type": "string", "maxLength": (hostproto.MaxSealedBytes*4 + 2) / 3, "description": "secretseal.Envelope.Encode(): the value sealed to the target's host-signed seal key (GET /targets/{id}/seal-key), for this target id and secret name, and for the injection policy these settings make (hostproto.SecretPolicy): a policy_digest that differs from the settings is refused (422 policy_mismatch)."},
 			"reason":     reasonSchema(),
 		}),
 		"APITokenInput": object([]string{"name", "roles", "expires_in_seconds", "reason"}, map[string]any{

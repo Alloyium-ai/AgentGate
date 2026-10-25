@@ -394,8 +394,11 @@ func specWithSecret(mode string, lifetime int) []byte {
 }
 
 func testLaunchSecret() hostproto.LaunchSecret {
-	return hostproto.LaunchSecret{Ref: "model-api", SecretID: strings.Repeat("1", 32), Env: "MODEL_BASE_URL", Upstreams: []string{"api.model.example"},
+	s := hostproto.LaunchSecret{Ref: "model-api", SecretID: strings.Repeat("1", 32), Env: "MODEL_BASE_URL", Upstreams: []string{"api.model.example"},
 		Header: "x-api-key", Rules: []hostproto.BrokerRule{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}}}
+	policy, _ := s.Policy()
+	s.PolicyDigest = policy.Digest()
+	return s
 }
 
 // withSpecMounts makes a spec without mounts request exactly the resolved

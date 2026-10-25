@@ -127,6 +127,10 @@ func brokerEndpoint(endpoint *pocpolicy.Broker, pool netip.Prefix) (netip.Prefix
 // planBroker builds the broker configuration for a verified launch exactly as
 // the broker validates it, and the base URLs the agent receives. Secrets are
 // referenced by their path inside the broker container; values never appear.
+// It works from the job's copy of each secret's settings and is a pre-check
+// only: newBrokerLaunch refuses settings that differ from the policy sealed
+// with the stored value and builds the configuration the broker runs from
+// that stored policy.
 func planBroker(job hostproto.Job, p hostproto.LaunchPayload, doc pocpolicy.Document, targetID string, cfg *BrokerConfig, now time.Time) (*launcherBroker, []byte, error) {
 	if doc.Broker == nil {
 		return nil, nil, errors.New("a launch with secrets needs the broker endpoint in its signed policy")
@@ -145,7 +149,7 @@ func planBroker(job hostproto.Job, p hostproto.LaunchPayload, doc pocpolicy.Docu
 			rules = append(rules, broker.Rule{Methods: r.Methods, Path: r.Path, Match: r.Match})
 		}
 		secrets = append(secrets, broker.LaunchSecret{Ref: s.Ref, Env: s.Env, Upstreams: s.Upstreams, Header: s.Header, Scheme: s.Scheme,
-			Username: s.Username, Rules: rules, SecretFile: brokerSecretMount + "/" + s.Ref, Extra: s.ExtraHeaders})
+			Username: s.Username, Rules: rules, SecretFile: brokerSecretMount + "/" + s.Ref, Extra: s.ExtraHeaders, Forward: s.ForwardHeaders})
 	}
 	raw, _, env, err := broker.BuildLaunchConfig(broker.LaunchInput{LaunchID: job.LaunchID, TargetID: targetID, Deadline: time.UnixMilli(p.ExpiresAtMS),
 		Listen:    broker.Listen{Network: "tcp", Address: addr.String(), Port: doc.Broker.Port, Subnet: subnet.String()},
@@ -193,6 +197,10 @@ func (d *Daemon) brokerDir(launchID string) string { return filepath.Join(d.brok
 
 // newBrokerLaunch binds the planned broker to this host: the store files of
 // exactly the secrets the service relayed for these ids, and its directories.
+// It refuses, failing the launch closed, any secret whose settings in the job
+// do not produce exactly the policy digest stored with its value, and builds
+// the broker configuration from the stored policies (the job supplies only
+// the refs, the agent's variable names and the endpoint).
 func (d *Daemon) newBrokerLaunch(job hostproto.Job, p hostproto.LaunchPayload, plan *launcherBroker, config []byte) (*BrokerLaunch, error) {
 	cfg := d.Config.Broker
 	store, err := d.secretStore()
@@ -204,20 +212,47 @@ func (d *Daemon) newBrokerLaunch(job hostproto.Job, p hostproto.LaunchPayload, p
 		return nil, err
 	}
 	b := &BrokerLaunch{LaunchID: job.LaunchID, TargetID: d.Identity.TargetID, Network: plan.Network, Container: plan.Network, Port: plan.Port,
-		Config: config, ConfigSHA256: broker.ConfigDigest(config), Deadline: time.UnixMilli(p.ExpiresAtMS), Image: cfg.Image,
+		Deadline: time.UnixMilli(p.ExpiresAtMS), Image: cfg.Image,
 		RunAs: broker.Identity{UID: cfg.UID, GID: cfg.GID}, Egress: cfg.EgressNetwork, Dir: d.brokerDir(job.LaunchID)}
 	b.Subnet = netip.MustParsePrefix(plan.Subnet)
 	b.Address, b.TargetAddress = netip.MustParseAddr(plan.Address), netip.MustParseAddr(plan.TargetAddress)
 	base := b.Subnet.Addr().As4()
 	b.Gateway = netip.AddrFrom4([4]byte{base[0], base[1], base[2], base[3] + 1})
 	b.ConfigPath, b.StatsDir = filepath.Join(b.Dir, brokerConfigName), filepath.Join(b.Dir, "stats")
+	secrets := make([]broker.LaunchSecret, 0, len(p.Secrets))
 	for _, s := range p.Secrets {
-		path, err := d.boundSecret(store, bindings, s.Ref, s.SecretID)
+		path, stored, err := d.boundSecret(store, bindings, s.Ref, s.SecretID)
 		if err != nil {
 			return nil, err
 		}
+		requested, err := s.Policy()
+		if err != nil || s.PolicyDigest != stored.Digest() || requested.Digest() != stored.Digest() {
+			return nil, fmt.Errorf("secret %s: the launch's broker settings differ from the policy sealed with the stored value (policy %s); refusing the launch", s.Ref, stored.Digest())
+		}
+		rules := make([]broker.Rule, 0, len(stored.Rules))
+		for _, r := range stored.Rules {
+			rules = append(rules, broker.Rule{Methods: r.Methods, Path: r.Path, Match: r.Match})
+		}
+		secrets = append(secrets, broker.LaunchSecret{Ref: s.Ref, Env: s.Env, Upstreams: stored.UpstreamNames(), Header: stored.Header, Scheme: stored.Scheme,
+			Username: stored.Username, Rules: rules, SecretFile: brokerSecretMount + "/" + s.Ref, Extra: stored.ExtraHeaderMap(), Forward: stored.ForwardHeaders})
 		b.Secrets = append(b.Secrets, BrokerSecretFile{Ref: s.Ref, HostPath: path, ContainerPath: brokerSecretMount + "/" + s.Ref})
 	}
+	raw, _, env, err := broker.BuildLaunchConfig(broker.LaunchInput{LaunchID: job.LaunchID, TargetID: d.Identity.TargetID, Deadline: time.UnixMilli(p.ExpiresAtMS),
+		Listen:    broker.Listen{Network: "tcp", Address: plan.Address, Port: plan.Port, Subnet: plan.Subnet},
+		StatsPath: brokerContainerStats + "/" + brokerStatsName, RunAs: broker.Identity{UID: cfg.UID, GID: cfg.GID}, Secrets: secrets}, d.Now())
+	if err != nil {
+		return nil, fmt.Errorf("the broker refuses the stored secret policy: %w", err)
+	}
+	for name, url := range env {
+		if plan.Env[name] != url {
+			return nil, errors.New("the broker routes built from the stored policies differ from the launch's")
+		}
+	}
+	if len(env) != len(plan.Env) {
+		return nil, errors.New("the broker routes built from the stored policies differ from the launch's")
+	}
+	_ = config // the job-derived configuration was a pre-check only
+	b.Config, b.ConfigSHA256 = raw, broker.ConfigDigest(raw)
 	return b, nil
 }
 

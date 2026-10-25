@@ -323,15 +323,20 @@ sends a complete `agentgate.launch.v1` document as it is and cannot be combined 
 ```sh
 agentgate secret set NAME --upstream HOST [--upstream HOST] [--header x-api-key|Authorization] \
   [--scheme Bearer|Basic [--username U]] (--rule METHODS:PATH[:exact|prefix]... | --allow-any-path) \
-  [--extra-header NAME=VALUE]... [--target local] --allow-profile PROFILE [--allow-launcher SUBJECT] \
-  [--wait [--wait-timeout 2m]] [--reason R]
+  [--extra-header NAME=VALUE]... [--forward-header NAME]... [--target local] --allow-profile PROFILE \
+  [--allow-launcher SUBJECT] [--wait [--wait-timeout 2m]] [--reason R]
 ```
 
 The value is read from a hidden prompt (entered twice) on a terminal, or from standard input otherwise; never from
 arguments or the environment. `--allow-launcher` defaults to your own subject.
 
-How the broker uses the credential is part of the secret (`POST /secrets` fields `scheme`, `username`, `rules`,
-`extra_headers`), checked by the service with the broker's own validator before anything is stored:
+How the broker uses the credential is part of the secret (`POST /secrets` fields `upstreams`, `header`, `scheme`,
+`username`, `rules`, `extra_headers`, `forward_headers`), checked by the service with the broker's own validator before
+anything is stored. Together these settings are the secret's **injection policy**: before it reads the value, the CLI
+prints the policy (every upstream as `https://host:port`, the header and scheme, the rules, the extra and forwarded
+headers) and its `policy digest`, and seals that digest with the value (`internal/hostproto` `SecretPolicy`,
+[BROKER.md](BROKER.md#sealed-relay-for-secret-put-internalsecretseal)). The host stores and uses the value only under
+that policy. To change any of these settings later, remove the secret and store it again: the value is sealed anew.
 
 - The broker forwards nothing by default, so `secret set` needs at least one `--rule` or the explicit wildcard.
   `--rule POST:/v1/messages` allows exactly that path; `--rule GET,HEAD:/v1/models:prefix` allows the path and
@@ -346,18 +351,27 @@ How the broker uses the credential is part of the secret (`POST /secrets` fields
 - `--extra-header NAME=VALUE` (at most 8) sets a header that is not secret, such as an API version, on every
   forwarded request. It may not name the credential header, Authorization, X-Api-Key, Host, Cookie, `Proxy-*` or
   `X-Forwarded-*`; values are 1 to 256 printable ASCII characters.
-- A secret stored without rules by an older client is listed as unusable, and every plan or launch that references
-  it is refused with `secret_rules_missing` until it is stored again with rules.
+- `--forward-header NAME` (at most 16) forwards a request header beyond the broker's defaults (`Accept`,
+  `Content-Type`, `User-Agent`, `Idempotency-Key` and the `Anthropic-*`, `OpenAI-*` and `X-Stainless-*` headers of the
+  model SDKs). The broker never forwards credential, cookie, proxy, forwarding or method-override headers, whatever is
+  listed.
+- A secret stored without rules is listed as unusable, and every plan or launch that references it is refused with
+  `secret_rules_missing` until it is stored again with rules.
+- If the service answers with settings whose policy digest is not the one sealed, or reports another digest, the CLI
+  stops with exit 13 (`policy_changed`) and says to remove the secret: a service that stored other settings than you
+  chose is not to be trusted with secrets. The host would refuse every launch under them anyway.
 - `--wait` polls `GET /secrets/{id}/receipt` for the host's `secretseal.Receipt` and verifies its tag with the
   sealing secret this run holds (`Sealed.VerifyReceipt`): only the host that opened exactly this envelope can produce
-  it, so a relay that swapped the ciphertext is detected (exit 13). It then prints the host's keyed value fingerprint
+  it, and the receipt names the policy the host stored, so a relay that swapped the ciphertext or the policy is
+  detected (exit 13, `receipt_invalid`). It then prints the host's keyed value fingerprint
   (`sfp1_...`). The sealing secret never leaves the process, so a later run cannot verify the receipt.
 
 The service's refusals are shown with what to do: `409 seal_key_changed` (the host published a new seal key after the
 CLI fetched it: run the command again, which fetches and verifies the new key), `409 seal_key_unavailable` (the host
 has not published a signed seal key: start a current `agentgate-hostd` and wait for its next poll),
-`422 invalid_ciphertext` (the envelope names another target or name, or is not a `secretseal` envelope) and
-`422 invalid_secret` (the broker would refuse the settings; the message names the field, never a value).
+`422 invalid_ciphertext` (the envelope names another target or name, or is not a `secretseal` envelope),
+`422 invalid_secret` (the broker would refuse the settings; the message names the field, never a value) and
+`422 policy_mismatch` (the settings sent are not the policy sealed in the envelope).
 
 Before it reads the value, the CLI checks the target, and every failure is exit 13 with nothing read or sent:
 
@@ -378,11 +392,16 @@ Before it reads the value, the CLI checks the target, and every failure is exit 
    `secret set` refuses. There is no option to seal to an unsigned key: the earlier `hostproto.SealSecret` format is
    retired.
 
-The value is sealed with `internal/secretseal` (RFC 9180 HPKE; the associated data binds the target, the name, a
-version and a nonce), and only the envelope (`Envelope.Encode()`) is submitted, in the `ciphertext` field. The buffers
+The value is sealed with `internal/secretseal` (RFC 9180 HPKE, envelope format `agentgate.secretseal.v2`; the
+associated data binds the target, the name, a version, a nonce and the policy digest), and only the envelope (`Envelope.Encode()`) is submitted, in the `ciphertext` field. The buffers
 holding the value are zeroed after sealing, the submission is never retried, and the CLI prints the pinned host key
-and its fingerprint, the seal method, the seal key id and the ciphertext SHA-256. If the service records a different
-ciphertext SHA-256 than the one sent, the CLI reports it with exit 13.
+and its fingerprint, the seal method, the seal key id, the ciphertext SHA-256 and the policy digest. If the service
+records a different ciphertext SHA-256 than the one sent, the CLI reports it with exit 13.
+
+`show`, `launch --dry-run` and `approve` print each planned secret's sealed policy digest next to its settings, and
+mark it `DOES NOT MATCH these settings: do not approve` when the settings shown do not make it. `approve` recomputes
+the digest of every planned secret and refuses (exit 13, `policy_digest_mismatch`, nothing sent) when one differs or
+is missing: what you approve is then what the host enforces. `reject` always works.
 
 ## What the CLI does not do
 

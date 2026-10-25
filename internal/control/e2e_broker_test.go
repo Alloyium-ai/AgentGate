@@ -617,7 +617,7 @@ func (e *e2e) sealKey() (*secretseal.SignedKeyRecord, ed25519.PublicKey) {
 func (e *e2e) seal(name string, at time.Time) *secretseal.Sealed {
 	e.t.Helper()
 	rec, pub := e.sealKey()
-	sealed, status, err := secretseal.SealForTarget(e.known, false, rec, pub, e.targetID, name, []byte(e2eSecret), at)
+	sealed, status, err := secretseal.SealForTarget(e.known, false, rec, pub, e.targetID, name, e2ePolicyDigest(e.t), []byte(e2eSecret), at)
 	if err != nil || status != secretseal.PinMatch {
 		e.t.Fatalf("seal: %v %v", status, err)
 	}
@@ -629,6 +629,14 @@ func (e *e2e) putSecret(name string, sealed *secretseal.Sealed, launchers []stri
 	return e.call("POST", "/api/v1/secrets", e.admin, map[string]any{"name": name, "target": "local", "upstreams": []string{e2eUpstream},
 		"header": "x-api-key", "ciphertext": sealed.Envelope.Encode(), "rules": rules, "extra_headers": map[string]string{"anthropic-version": "2023-06-01"},
 		"allowed_profiles": []string{"dev"}, "allowed_launchers": launchers, "reason": "Model access for the coding agent"}, 200)
+}
+
+// e2ePolicyDigest is the policy putSecret's settings with messageRules make:
+// what the operator's client computes and seals with the value.
+func e2ePolicyDigest(t testing.TB) string {
+	return inputPolicyDigest(t, SecretInput{Upstreams: []string{e2eUpstream}, Header: "x-api-key",
+		Rules:        []SecretRuleInput{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}, {Methods: []string{"GET"}, Path: "/v1/models", Match: "prefix"}},
+		ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"}})
 }
 
 func messageRules() []any {
@@ -875,18 +883,18 @@ func TestBrokeredSecretRefusesASubstitutedSealKey(t *testing.T) {
 	_, service, _ := ed25519.GenerateKey(rand.Reader)
 	own, _ := secretseal.GenerateHostKey(e.targetID, service, time.Now(), time.Hour)
 	forged := own.Published()
-	if _, _, err := secretseal.SealForTarget(e.known, false, &forged, pub, e.targetID, "anthropic", []byte(e2eSecret), time.Now()); !errors.Is(err, secretseal.ErrSignature) {
+	if _, _, err := secretseal.SealForTarget(e.known, false, &forged, pub, e.targetID, "anthropic", e2ePolicyDigest(e.t), []byte(e2eSecret), time.Now()); !errors.Is(err, secretseal.ErrSignature) {
 		t.Fatalf("a record not signed by the pinned host key was sealed to: %v", err)
 	}
 	// ... or substitutes the host key as well, signing with its own.
-	if _, _, err := secretseal.SealForTarget(e.known, false, &forged, service.Public().(ed25519.PublicKey), e.targetID, "anthropic", []byte(e2eSecret), time.Now()); !errors.Is(err, secretseal.ErrFingerprint) {
+	if _, _, err := secretseal.SealForTarget(e.known, false, &forged, service.Public().(ed25519.PublicKey), e.targetID, "anthropic", e2ePolicyDigest(e.t), []byte(e2eSecret), time.Now()); !errors.Is(err, secretseal.ErrFingerprint) {
 		t.Fatalf("a substituted host key passed the pin: %v", err)
 	}
 	// A tampered record (another public key, same signature) fails too.
 	tampered := *rec
 	tampered.Record.PublicKey = forged.Record.PublicKey
 	tampered.Record.KeyID = forged.Record.KeyID
-	if _, _, err := secretseal.SealForTarget(e.known, false, &tampered, pub, e.targetID, "anthropic", []byte(e2eSecret), time.Now()); err == nil {
+	if _, _, err := secretseal.SealForTarget(e.known, false, &tampered, pub, e.targetID, "anthropic", e2ePolicyDigest(e.t), []byte(e2eSecret), time.Now()); err == nil {
 		t.Fatal("a tampered seal key record was sealed to")
 	}
 	// The service cannot store a forged record as the host's either: the
@@ -896,12 +904,12 @@ func TestBrokeredSecretRefusesASubstitutedSealKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec2, pub2 := e.sealKey()
-	if _, _, err := secretseal.SealForTarget(e.known, false, rec2, pub2, e.targetID, "anthropic", []byte(e2eSecret), time.Now()); err == nil {
+	if _, _, err := secretseal.SealForTarget(e.known, false, rec2, pub2, e.targetID, "anthropic", e2ePolicyDigest(e.t), []byte(e2eSecret), time.Now()); err == nil {
 		t.Fatal("a client sealed to a record the database substituted")
 	}
 	e.cycle()
 	rec3, pub3 := e.sealKey()
-	if _, _, err := secretseal.SealForTarget(e.known, false, rec3, pub3, e.targetID, "anthropic", []byte(e2eSecret), time.Now()); err != nil {
+	if _, _, err := secretseal.SealForTarget(e.known, false, rec3, pub3, e.targetID, "anthropic", e2ePolicyDigest(e.t), []byte(e2eSecret), time.Now()); err != nil {
 		t.Fatalf("the host's own record is not served after its next poll: %v", err)
 	}
 }

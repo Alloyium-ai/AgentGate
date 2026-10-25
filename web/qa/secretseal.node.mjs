@@ -3,7 +3,8 @@
 
 // Known-answer and adversarial tests for the browser secret sealing client
 // (web/src/secretseal.ts) against internal/secretseal. Fixtures:
-//   fixtures/secretseal-vector-v1.json  copy of internal/secretseal/testdata/vector-v1.json
+//   fixtures/secretseal-vector-v2.json  copy of internal/secretseal/testdata/vector-v2.json
+//   fixtures/secret-policy-vectors.json written by internal/hostproto (AGENTGATE_WRITE_WEB_FIXTURES=1)
 //   fixtures/hpke-rfc9180-a2-1.json     RFC 9180 A.2.1 (X25519, HKDF-SHA256, ChaCha20Poly1305)
 // The independent opener (hpke-node.mjs) uses only node:crypto (OpenSSL), so a
 // passing round trip shows the browser's bytes open with a second implementation.
@@ -16,7 +17,8 @@ import { ed25519FromSeed, hostReceipt, makeRecord, nodeOpen, rawPublic } from ".
 
 const S = await loadTS("secretseal");
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
-const goVector = fixture("secretseal-vector-v1.json");
+const goVector = fixture("secretseal-vector-v2.json");
+const policyVectors = fixture("secret-policy-vectors.json");
 const rfc = fixture("hpke-rfc9180-a2-1.json");
 const fromHex = (s) => new Uint8Array(Buffer.from(s, "hex"));
 const at = Date.parse("2026-10-02T00:00:01Z");
@@ -27,11 +29,88 @@ const x25519Raw = (priv) => new Uint8Array(rawPublic(priv));
 test("the fixture is the Go known-answer vector", () => {
   let go;
   try {
-    go = readFileSync(new URL("../../internal/secretseal/testdata/vector-v1.json", import.meta.url), "utf8");
+    go = readFileSync(new URL("../../internal/secretseal/testdata/vector-v2.json", import.meta.url), "utf8");
   } catch {
     return;
   }
-  assert.equal(readFileSync(new URL("./fixtures/secretseal-vector-v1.json", import.meta.url), "utf8"), go);
+  assert.equal(readFileSync(new URL("./fixtures/secretseal-vector-v2.json", import.meta.url), "utf8"), go);
+});
+
+// ---- the injection policy (hostproto.SecretPolicy) ------------------------------------
+test("the policy vectors are the ones internal/hostproto writes", () => {
+  let go;
+  try {
+    go = readFileSync(new URL("../../internal/hostproto/testdata/secret-policy-vectors.json", import.meta.url), "utf8");
+  } catch {
+    return;
+  }
+  assert.equal(readFileSync(new URL("./fixtures/secret-policy-vectors.json", import.meta.url), "utf8"), go);
+});
+
+test("every policy vector has Go's normalized policy, canonical bytes and digest", async () => {
+  assert.equal(policyVectors.format, S.POLICY_FORMAT);
+  assert.ok(policyVectors.cases.length >= 5);
+  for (const c of policyVectors.cases) {
+    const p = S.newSecretPolicy({
+      upstreams: c.upstreams,
+      header: c.header,
+      scheme: c.scheme,
+      username: c.username,
+      rules: c.rules,
+      extra_headers: c.extra_headers,
+      forward_headers: c.forward_headers,
+      wildcard: c.wildcard,
+    });
+    assert.deepEqual(p, c.policy, c.name);
+    assert.equal(Buffer.from(S.canonicalPolicy(p)).toString("hex"), c.canonical_hex, c.name);
+    assert.equal(await S.policyDigest(p), c.digest, c.name);
+    // The normalized policy as the vector writes it encodes to the same bytes.
+    assert.equal(Buffer.from(S.canonicalPolicy(c.policy)).toString("hex"), c.canonical_hex, c.name);
+  }
+});
+
+test("every refused policy vector is refused", () => {
+  assert.ok(policyVectors.refused.length >= 10);
+  for (const c of policyVectors.refused) {
+    assert.throws(
+      () =>
+        S.newSecretPolicy({
+          upstreams: c.upstreams ?? [],
+          header: c.header,
+          scheme: c.scheme,
+          username: c.username,
+          rules: c.rules ?? [],
+          extra_headers: c.extra_headers,
+          forward_headers: c.forward_headers,
+          wildcard: c.wildcard,
+        }),
+      { code: "policy" },
+      c.name,
+    );
+  }
+});
+
+test("every field of the policy changes its digest; two spellings of one policy share it", async () => {
+  const base = { upstreams: ["api.example.test"], header: "Authorization", rules: [{ methods: ["POST"], path: "/v1/messages", match: "exact" }], extra_headers: { "Anthropic-Version": "1" } };
+  const digest = async (input) => S.policyDigest(S.newSecretPolicy(input));
+  const want = await digest(base);
+  assert.equal(await digest({ ...base, upstreams: ["api.example.test:443"], header: "authorization", scheme: "Bearer", extra_headers: { "anthropic-version": "1" } }), want);
+  for (const change of [
+    { upstreams: ["collect.attacker.example"] },
+    { upstreams: ["api.example.test", "collect.attacker.example"] },
+    { upstreams: ["api.example.test:8443"] },
+    { header: "x-api-key" },
+    { scheme: "Basic", username: "u" },
+    { extra_headers: { "anthropic-version": "2" } },
+    { forward_headers: ["x-debug"] },
+    { rules: [{ methods: ["POST"], path: "/v1/", match: "prefix" }] },
+    { rules: [{ methods: ["POST", "DELETE"], path: "/v1/messages", match: "exact" }] },
+    { rules: [{ methods: S.BROKER_METHODS, path: "/", match: "prefix" }], wildcard: true },
+  ])
+    assert.notEqual(await digest({ ...base, ...change }), want, JSON.stringify(change));
+  // A stored secret's settings (wildcard_rules) give the digest of its policy.
+  assert.equal(await S.settingsDigest({ upstreams: ["api.example.test"], header: "Authorization", scheme: "Bearer", rules: base.rules, extra_headers: { "anthropic-version": "1" } }), want);
+  assert.equal(await S.settingsDigest({ upstreams: [], header: "x" }), undefined);
 });
 
 // ---- RFC 9180 ------------------------------------------------------------------
@@ -81,19 +160,29 @@ test("the Go vector's signed record verifies against the pinned host key", async
 });
 
 test("the browser opens the Go envelope and verifies the Go receipt", async () => {
+  // The vector's policy is the one its envelope and receipt seal.
+  assert.equal(await S.policyDigest(goVector.policy), goVector.policy_digest);
+  assert.equal(goVector.envelope.policy_digest, goVector.policy_digest);
+  assert.equal(goVector.receipt.policy_digest, goVector.policy_digest);
   const opened = await S.openEnvelope(fromHex(goVector.seal_x25519_private), goVector.envelope);
   assert.equal(Buffer.from(opened.value).toString(), goVector.plaintext);
   const fingerprint = await S.verifyReceipt({ envelope: goVector.envelope, confirm: opened.confirm }, goVector.receipt);
   assert.equal(fingerprint, goVector.fingerprint);
+  // The policy digest is in the associated data and the receipt tag.
+  await assert.rejects(S.openEnvelope(fromHex(goVector.seal_x25519_private), { ...goVector.envelope, policy_digest: "0".repeat(64) }));
+  await assert.rejects(S.verifyReceipt({ envelope: goVector.envelope, confirm: opened.confirm }, { ...goVector.receipt, policy_digest: "0".repeat(64) }), { code: "receipt" });
+  const substituted = { envelope: { ...goVector.envelope, policy_digest: "0".repeat(64) }, confirm: opened.confirm };
+  await assert.rejects(S.verifyReceipt(substituted, { ...goVector.receipt, policy_digest: "0".repeat(64) }), { code: "receipt" });
 });
 
 test("a browser-sealed envelope opens with the Go host key in an independent implementation", async () => {
   const { pub } = ed25519FromSeed(goVector.host_ed25519_seed);
   const key = await S.verifyKeyRecord(goVector.record, pub, await S.hostKeyFingerprint(pub), goVector.target_id, at);
   const value = S.utf8("sk-test-FAKE-browser-value");
-  const sealed = await S.seal(key, goVector.target_id, "browser", value, at);
+  const sealed = await S.seal(key, goVector.target_id, "browser", goVector.policy_digest, value, at);
   const e = sealed.envelope;
-  assert.equal(e.format, "agentgate.secretseal.v1");
+  assert.equal(e.format, "agentgate.secretseal.v2");
+  assert.equal(e.policy_digest, goVector.policy_digest);
   assert.equal(e.version, at);
   assert.equal(e.key_id, goVector.record.record.key_id);
   assert.match(e.nonce, /^[0-9a-f]{32}$/);
@@ -103,11 +192,13 @@ test("a browser-sealed envelope opens with the Go host key in an independent imp
   // The host's receipt verifies with the browser's in-memory confirm secret.
   const receipt = hostReceipt(e, independent.confirm, "sfp1_" + "ab".repeat(16));
   assert.equal(await S.verifyReceipt(sealed, receipt), receipt.fingerprint);
-  // A receipt for another nonce, or with a forged tag, fails.
+  // A receipt for another nonce or policy, or with a forged tag, fails.
   await assert.rejects(S.verifyReceipt(sealed, { ...receipt, nonce: "0".repeat(32) }), { code: "receipt" });
+  await assert.rejects(S.verifyReceipt(sealed, hostReceipt({ ...e, policy_digest: "0".repeat(64) }, independent.confirm, receipt.fingerprint)), { code: "receipt" });
   await assert.rejects(S.verifyReceipt(sealed, { ...receipt, tag: S.b64url(new Uint8Array(32)) }), { code: "receipt" });
-  // The associated data binds target, name and version: changing any fails.
-  for (const change of [{ name: "other" }, { target_id: "other-target" }, { version: e.version + 1 }, { nonce: "1".repeat(32) }]) {
+  // The associated data binds target, name, version, nonce and policy:
+  // changing any fails.
+  for (const change of [{ name: "other" }, { target_id: "other-target" }, { version: e.version + 1 }, { nonce: "1".repeat(32) }, { policy_digest: "1".repeat(64) }]) {
     await assert.rejects(S.openEnvelope(fromHex(goVector.seal_x25519_private), { ...e, ...change }));
   }
   S.wipe(sealed);
@@ -138,10 +229,13 @@ test("a substituted host key or seal key is refused", async () => {
   await assert.rejects(S.verifyKeyRecord({ ...goVector.record, signature: goVector.record.signature + "=" }, pub, pinned, goVector.target_id, at), { code: "signature" });
   // 5. A seal for a key that was never verified for this target is refused.
   const key = await S.verifyKeyRecord(goVector.record, pub, pinned, goVector.target_id, at);
-  await assert.rejects(S.seal(key, "another-target", "x", S.utf8("v"), at), { code: "context" });
-  await assert.rejects(S.seal(key, goVector.target_id, "Bad Name", S.utf8("v"), at), { code: "context" });
-  await assert.rejects(S.seal(key, goVector.target_id, "x", new Uint8Array(0), at), { code: "value" });
-  await assert.rejects(S.seal(key, goVector.target_id, "x", new Uint8Array(S.MAX_VALUE_BYTES + 1), at), { code: "value" });
+  const pd = goVector.policy_digest;
+  await assert.rejects(S.seal(key, "another-target", "x", pd, S.utf8("v"), at), { code: "context" });
+  await assert.rejects(S.seal(key, goVector.target_id, "Bad Name", pd, S.utf8("v"), at), { code: "context" });
+  await assert.rejects(S.seal(key, goVector.target_id, "x", "", S.utf8("v"), at), { code: "context" });
+  await assert.rejects(S.seal(key, goVector.target_id, "x", pd.toUpperCase(), S.utf8("v"), at), { code: "context" });
+  await assert.rejects(S.seal(key, goVector.target_id, "x", pd, new Uint8Array(0), at), { code: "value" });
+  await assert.rejects(S.seal(key, goVector.target_id, "x", pd, new Uint8Array(S.MAX_VALUE_BYTES + 1), at), { code: "value" });
 });
 
 test("a fresh record from a host key verifies; the same record under another pin does not", async () => {
@@ -152,7 +246,7 @@ test("a fresh record from a host key verifies; the same record under another pin
   const now = Date.now();
   const rec = await makeRecord(host.privateKey, hostPub, sealPub, "0123456789abcdef0123456789abcdef", new Date(now - 60000).toISOString().replace(/\.\d+Z$/, "Z"), new Date(now + 86400000).toISOString().replace(/\.\d+Z$/, "Z"));
   const key = await S.verifyKeyRecord(rec, hostPub, await S.hostKeyFingerprint(hostPub), "0123456789abcdef0123456789abcdef", now);
-  const sealed = await S.seal(key, "0123456789abcdef0123456789abcdef", "model-api", S.utf8("value"), now);
+  const sealed = await S.seal(key, "0123456789abcdef0123456789abcdef", "model-api", "a".repeat(64), S.utf8("value"), now);
   const raw = S.b64urlStrict(sealed.envelope.sealed);
   const skR = new Uint8Array(Buffer.from(sealPriv.export({ format: "jwk" }).d, "base64url"));
   assert.equal(nodeOpen(skR, raw.subarray(0, 32), S.envelopeInfo(key.keyID, key.targetID), S.envelopeAAD(sealed.envelope), raw.subarray(32)).plaintext.toString(), "value");
@@ -175,7 +269,8 @@ test("the envelope's wire form is secretseal.Envelope.Encode and its digest is o
   const encoded = S.encodeEnvelope(goVector.envelope);
   const json = Buffer.from(encoded, "base64url").toString();
   // Go's json.Marshal writes the fields in struct order without spaces.
-  assert.equal(json, JSON.stringify({ format: goVector.envelope.format, target_id: goVector.envelope.target_id, name: goVector.envelope.name, version: goVector.envelope.version, key_id: goVector.envelope.key_id, nonce: goVector.envelope.nonce, sealed: goVector.envelope.sealed }));
+  const e = goVector.envelope;
+  assert.equal(json, JSON.stringify({ format: e.format, target_id: e.target_id, name: e.name, version: e.version, key_id: e.key_id, nonce: e.nonce, policy_digest: e.policy_digest, sealed: e.sealed }));
   assert.doesNotMatch(encoded, /[=+/]/);
   const digest = await S.envelopeDigest(encoded);
   assert.equal(digest, Buffer.from(await crypto.subtle.digest("SHA-256", Buffer.from(json))).toString("hex"));

@@ -117,6 +117,31 @@ func TestSecretPutBindsTheEnvelopeToTargetAndName(t *testing.T) {
 	if _, err := bad.Check(targetID, now); err == nil {
 		t.Fatal("an envelope sealed for another target was relayed")
 	}
+	// The relayed policy must be the one the envelope seals: a service that
+	// rewrites the upstream (or the digest) is refused before the host opens it.
+	for name, change := range map[string]func(*SecretPutPayload){
+		"upstream": func(q *SecretPutPayload) { q.Upstreams = []string{"collect.attacker.example"} },
+		"rules": func(q *SecretPutPayload) {
+			q.Rules = []BrokerRule{{Methods: []string{"GET"}, Path: "/", Match: "prefix"}}
+		},
+		"header":        func(q *SecretPutPayload) { q.Header = "authorization" },
+		"extra header":  func(q *SecretPutPayload) { q.ExtraHeaders = map[string]string{"anthropic-beta": "x"} },
+		"forward":       func(q *SecretPutPayload) { q.ForwardHeaders = []string{"x-debug"} },
+		"wildcard flag": func(q *SecretPutPayload) { q.Wildcard = true },
+		"digest only":   func(q *SecretPutPayload) { q.PolicyDigest = strings.Repeat("e", 64) },
+		"both, consistently": func(q *SecretPutPayload) {
+			q.Upstreams = []string{"collect.attacker.example"}
+			pol, _ := q.Policy()
+			q.PolicyDigest = pol.Digest()
+		},
+	} {
+		q := p
+		change(&q)
+		bad.Payload = raw(t, q)
+		if _, err := bad.Check(targetID, now); err == nil {
+			t.Errorf("%s: a secret-put whose policy differs from its envelope was relayed", name)
+		}
+	}
 }
 
 func TestLaunchSecretsNeedExplicitValidInjectionRules(t *testing.T) {
@@ -166,6 +191,8 @@ func TestLaunchSecretsNeedExplicitValidInjectionRules(t *testing.T) {
 		secret := p.Secrets[0]
 		secret.ExtraHeaders = map[string]string{}
 		change(&secret)
+		// The digest follows the change, so the injection check refuses it.
+		secret = withDigest(secret)
 		bad.Secrets = []LaunchSecret{secret}
 		job := launch
 		job.Payload = raw(t, bad)
@@ -177,8 +204,16 @@ func TestLaunchSecretsNeedExplicitValidInjectionRules(t *testing.T) {
 	basic := p.Secrets[0]
 	basic.Header, basic.Scheme, basic.Username = "Authorization", "Basic", "x-access-token"
 	basic.Rules = []BrokerRule{{Methods: []string{"GET", "POST"}, Path: "/example-org/app.git", Match: "prefix"}, {Methods: []string{"GET"}, Path: "/", Match: "exact"}}
-	good.Secrets = []LaunchSecret{basic}
+	stale := basic
+	stale.PolicyDigest = p.Secrets[0].PolicyDigest
+	good.Secrets = []LaunchSecret{stale}
 	job := launch
+	job.Payload = raw(t, good)
+	if _, err := job.Check(targetID, now); err == nil {
+		t.Fatal("settings that differ from their policy digest were accepted")
+	}
+	basic = withDigest(basic)
+	good.Secrets = []LaunchSecret{basic}
 	job.Payload = raw(t, good)
 	if _, err := job.Check(targetID, now); err != nil {
 		t.Fatalf("a Basic secret with rules: %v", err)
@@ -195,7 +230,7 @@ func TestLaunchSecretsNeedExplicitValidInjectionRules(t *testing.T) {
 
 func TestSecretReceiptShapeAndResultRules(t *testing.T) {
 	r := SecretReceipt{Format: SecretReceiptFormat, TargetID: targetID, Name: "model-api", Version: 7, KeyID: strings.Repeat("ab", 32),
-		Nonce: strings.Repeat("0f", 16), Fingerprint: "sfp1_" + strings.Repeat("1", 32), Tag: b64.EncodeToString(make([]byte, 32))}
+		Nonce: strings.Repeat("0f", 16), PolicyDigest: fixturePolicyDigest(), Fingerprint: "sfp1_" + strings.Repeat("1", 32), Tag: b64.EncodeToString(make([]byte, 32))}
 	if err := r.Check(); err != nil {
 		t.Fatal(err)
 	}
@@ -203,6 +238,7 @@ func TestSecretReceiptShapeAndResultRules(t *testing.T) {
 		"format": func(r *SecretReceipt) { r.Format = "x" }, "fingerprint": func(r *SecretReceipt) { r.Fingerprint = "sha256:1" },
 		"tag": func(r *SecretReceipt) { r.Tag = "short" }, "version": func(r *SecretReceipt) { r.Version = 0 },
 		"name": func(r *SecretReceipt) { r.Name = "A" }, "key": func(r *SecretReceipt) { r.KeyID = "k" },
+		"policy": func(r *SecretReceipt) { r.PolicyDigest = "" },
 	} {
 		bad := r
 		change(&bad)
@@ -226,9 +262,14 @@ func TestSecretReceiptShapeAndResultRules(t *testing.T) {
 	}
 	var e SealedEnvelope
 	json.Unmarshal(sealedFixture(t), &e)
-	answer := SecretReceipt{TargetID: e.TargetID, Name: e.Name, Version: e.Version, KeyID: e.KeyID, Nonce: e.Nonce}
+	answer := SecretReceipt{TargetID: e.TargetID, Name: e.Name, Version: e.Version, KeyID: e.KeyID, Nonce: e.Nonce, PolicyDigest: e.PolicyDigest}
 	if !answer.Answers(e) {
 		t.Fatal("a receipt for the envelope does not answer it")
+	}
+	other := answer
+	other.PolicyDigest = strings.Repeat("e", 64)
+	if other.Answers(e) {
+		t.Fatal("a receipt for another policy answers the envelope")
 	}
 	answer.Version++
 	if answer.Answers(e) {

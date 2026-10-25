@@ -22,7 +22,7 @@ func (f *provFixture) sealTo(h *fakeHost, target, name, value string) *secretsea
 	if err := known.Pin(h.id, secretseal.HostKeyFingerprint(pub)); err != nil {
 		f.t.Fatal(err)
 	}
-	sealed, _, err := secretseal.SealForTarget(known, false, rec, pub, h.id, name, []byte(value), f.now())
+	sealed, _, err := secretseal.SealForTarget(known, false, rec, pub, h.id, name, defaultPolicyDigest(), []byte(value), f.now())
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -53,9 +53,9 @@ func TestLaunchersSeeOnlyNamesAndScopeOfATargetsSecrets(t *testing.T) {
 	git := secretInput("git-token", f.sealTo(h, "local", "git-token", value), "ops")
 	git.AllowedLaunchers = []string{"oidc:ada"}
 	f.storeSecret(h, git, nil)
-	bare := secretInput("bare-key", f.sealTo(h, "local", "bare-key", value), "dev")
+	bare := secretInput("bare-key", nil, "dev")
 	bare.Rules = nil
-	f.storeSecret(h, bare, nil)
+	f.storeSecret(h, f.sealInput(h, bare, value), nil)
 	must(f.s.CreateSecret(f.admin(), secretInput("late-key", f.sealTo(h, "local", "late-key", value), "dev")))
 	other := f.secondTarget("other")
 	f.storeSecret(other, func() SecretInput {

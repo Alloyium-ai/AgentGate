@@ -85,11 +85,16 @@ func (d *Daemon) secretStore() (*secretseal.Store, error) {
 }
 
 // secretBinding ties a stored name to the service's secret id, so a launch
-// can only use the value the service relayed for exactly that secret.
+// can only use the value the service relayed for exactly that secret, and to
+// the injection policy the client sealed with the value (its digest is in the
+// HPKE associated data the host opened it with). Every broker for the secret
+// is built from Policy, never from a launch job's copy of the settings.
 type secretBinding struct {
-	SecretID    string `json:"secret_id"`
-	Version     uint64 `json:"version"`
-	Fingerprint string `json:"fingerprint"`
+	SecretID     string                  `json:"secret_id"`
+	Version      uint64                  `json:"version"`
+	Fingerprint  string                  `json:"fingerprint"`
+	PolicyDigest string                  `json:"policy_digest,omitempty"`
+	Policy       *hostproto.SecretPolicy `json:"policy,omitempty"`
 }
 
 func (d *Daemon) loadBindings() (map[string]secretBinding, error) {
@@ -154,6 +159,15 @@ func (d *Daemon) secretPutJob(job hostproto.Job, p hostproto.SecretPutPayload) {
 		d.finish(job.ID, hostproto.ResultRejected, "envelope_wrong_context", "the envelope is sealed for another target or name; nothing was stored", nil, "")
 		return
 	}
+	// The relayed settings must be exactly the policy the client sealed: their
+	// digest equals the envelope's policy_digest, which the AEAD below
+	// authenticates. A service that changed the upstream, header, scheme,
+	// rules or any other setting gets nothing stored.
+	policy, err := p.Policy()
+	if err != nil || policy.Digest() != p.PolicyDigest || policy.Digest() != env.PolicyDigest {
+		d.finish(job.ID, hostproto.ResultRejected, "policy_mismatch", "the relayed broker settings differ from the policy sealed with the value; nothing was stored", nil, "")
+		return
+	}
 	key, err := d.currentSealKey()
 	if err != nil {
 		d.finish(job.ID, hostproto.ResultFailed, "seal_key_unavailable", "this host has no seal key; nothing was stored", nil, "")
@@ -175,7 +189,7 @@ func (d *Daemon) secretPutJob(job hostproto.Job, p hostproto.SecretPutPayload) {
 		d.finish(job.ID, status, code, "the host refused the sealed secret: "+code+"; the stored secret is unchanged", nil, "")
 		return
 	}
-	bindings[p.Name] = secretBinding{SecretID: p.SecretID, Version: receipt.Version, Fingerprint: receipt.Fingerprint}
+	bindings[p.Name] = secretBinding{SecretID: p.SecretID, Version: receipt.Version, Fingerprint: receipt.Fingerprint, PolicyDigest: receipt.PolicyDigest, Policy: &policy}
 	if err = d.saveBindings(bindings); err != nil {
 		// The value is stored but not bound: every launch refuses it.
 		d.finish(job.ID, hostproto.ResultFailed, "binding_unsaved", "the secret was stored but could not be bound to its id: "+err.Error(), nil, "")
@@ -183,7 +197,7 @@ func (d *Daemon) secretPutJob(job hostproto.Job, p hostproto.SecretPutPayload) {
 	}
 	answer := hostproto.SecretReceipt(*receipt)
 	d.finishResult(job.ID, hostproto.JobResult{Status: hostproto.ResultSucceeded, Reason: "stored", SecretReceipt: &answer},
-		fmt.Sprintf("stored secret %s version %d (fingerprint %s)", p.Name, receipt.Version, receipt.Fingerprint))
+		fmt.Sprintf("stored secret %s version %d (fingerprint %s, policy %s)", p.Name, receipt.Version, receipt.Fingerprint, receipt.PolicyDigest))
 }
 
 // secretDeleteJob zeroes and removes one value, keeping a tombstone so the
@@ -235,15 +249,22 @@ func (d *Daemon) secretInUse(name string) bool {
 }
 
 // boundSecret checks that the store holds exactly the value the service
-// relayed for secretID under name, and returns the store file.
-func (d *Daemon) boundSecret(store *secretseal.Store, bindings map[string]secretBinding, name, secretID string) (string, error) {
+// relayed for secretID under name, and returns the store file and the policy
+// stored with it. The binding's policy must reproduce the digest both the
+// binding and the store's own record hold (the store recorded the digest the
+// envelope sealed), so a damaged or edited binding is refused too.
+func (d *Daemon) boundSecret(store *secretseal.Store, bindings map[string]secretBinding, name, secretID string) (string, *hostproto.SecretPolicy, error) {
 	b, ok := bindings[name]
 	if !ok || b.SecretID != secretID {
-		return "", fmt.Errorf("secret %s is not stored on this host for secret id %s", name, secretID)
+		return "", nil, fmt.Errorf("secret %s is not stored on this host for secret id %s", name, secretID)
 	}
-	version, fingerprint, held, err := store.Stored(name)
-	if err != nil || !held || version != b.Version || fingerprint != b.Fingerprint {
-		return "", fmt.Errorf("secret %s on this host differs from its binding", name)
+	stored, held, err := store.Stored(name)
+	if err != nil || !held || stored.Version != b.Version || stored.Fingerprint != b.Fingerprint {
+		return "", nil, fmt.Errorf("secret %s on this host differs from its binding", name)
 	}
-	return store.SecretPath(name)
+	if b.Policy == nil || b.PolicyDigest == "" || b.Policy.Digest() != b.PolicyDigest || stored.PolicyDigest != b.PolicyDigest {
+		return "", nil, fmt.Errorf("secret %s on this host has no sealed broker policy that matches its value; store it again", name)
+	}
+	path, err := store.SecretPath(name)
+	return path, b.Policy, err
 }

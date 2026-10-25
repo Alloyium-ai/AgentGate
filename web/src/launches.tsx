@@ -12,7 +12,7 @@ import { Empty, ErrorBox, Loading, SectionTitle } from "./components";
 import { Items, Job, LAUNCH_STATES, Launch, LaunchEvent, LaunchPage, LogPage, Target, isTerminal, permissions, roleText, targetName, useResource } from "./prov-api";
 import { CodeBlock, ConfirmDialog, CopyButton, Digest, Gate, KernelNotice, LiveRegion, ServerMessages, StateBadge } from "./prov-components";
 import { CursorPager, useCursorPages } from "./prov-paging";
-import { PlanView } from "./launch-form";
+import { PlanView, usePlanPolicyCheck } from "./launch-form";
 import { LogStatus, StreamStatus, followLaunch, followLog } from "./launch-stream";
 import { LogBuffer, TRUNCATION_MARKER, filterLines, toText, visible } from "./log-view";
 import { missingText, readEvidence } from "./evidence";
@@ -502,6 +502,7 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
   const [, setNow] = useState(0);
   const reload = useRef(detail.reload);
   reload.current = detail.reload;
+  const policyCheck = usePlanPolicyCheck(detail.data?.launch.plan);
   useEffect(() => {
     const t = setInterval(() => setNow((x) => x + 1), 30000);
     return () => clearInterval(t);
@@ -540,6 +541,14 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
       : mine
         ? "You requested this launch. A different person must decide it."
         : undefined;
+  // A plan whose broker settings do not make the sealed policy digest it names
+  // shows something other than what the host would run: never approve it.
+  const policyRefusal = !policyCheck.checked
+    ? "Checking the plan's sealed broker policies…"
+    : policyCheck.bad.length
+      ? `The plan's broker settings for ${policyCheck.bad.join(", ")} do not make the sealed policy digest it names. Reject the launch and report it.`
+      : undefined;
+  const approveBlocked = approveReason ?? policyRefusal;
   const stopReason = !p.launch
     ? `Stopping needs the launcher role. Your roles: ${roleText(actor)}.`
     : terminal
@@ -626,7 +635,7 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
           </div>
         </div>
         <div className="version-actions">
-          <Gate allowed={!approveReason} reason={approveReason} onClick={() => setDialog("approve")}>
+          <Gate allowed={!approveBlocked} reason={approveBlocked} onClick={() => setDialog("approve")}>
             Approve
           </Gate>
           <Gate className="secondary danger" allowed={!approveReason} reason={approveReason} onClick={() => setDialog("reject")}>
@@ -719,6 +728,13 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
               <span>Policy digest</span>
               <code>{l.policy_digest}</code>
             </div>
+            {dialog === "approve" &&
+              (l.plan?.secrets ?? []).map((s) => (
+                <div key={s.ref}>
+                  <span>Secret {s.ref}: sealed broker policy (checked against the settings shown in the plan)</span>
+                  <code>{s.policy_digest}</code>
+                </div>
+              ))}
           </div>
           <ServerMessages title="Why approval is needed" items={l.plan?.approval_reasons} tone="warn" />
         </ConfirmDialog>

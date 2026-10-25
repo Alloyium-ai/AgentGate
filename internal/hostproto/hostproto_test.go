@@ -45,10 +45,27 @@ func raw(t *testing.T, v any) json.RawMessage {
 // sealedFixture is a fixed secretseal envelope shape (format, context and an
 // opaque ciphertext), so the golden files stay reproducible. Real envelopes
 // come from secretseal; the cross-package checks live in internal/hostd.
+// fixtureSecret is the launch secret of the fixtures with its policy digest.
+func fixtureSecret() LaunchSecret {
+	return withDigest(LaunchSecret{Ref: "model-api", SecretID: "11111111111111111111111111111111", Env: "MODEL_API_BASE_URL", Upstreams: []string{"api.model.example"}, Header: "x-api-key",
+		Rules: fixtureRules(), ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"}})
+}
+
+// withDigest sets a launch secret's policy digest from its settings (when
+// they form a policy at all).
+func withDigest(s LaunchSecret) LaunchSecret {
+	if p, err := s.Policy(); err == nil {
+		s.PolicyDigest = p.Digest()
+	}
+	return s
+}
+
+func fixturePolicyDigest() string { return fixtureSecret().PolicyDigest }
+
 func sealedFixture(t *testing.T) []byte {
 	t.Helper()
 	raw, err := json.Marshal(SealedEnvelope{Format: SealedFormat, TargetID: targetID, Name: "model-api", Version: uint64(fixedNow.UnixMilli()),
-		KeyID: strings.Repeat("ab", 32), Nonce: strings.Repeat("0f", 16), Sealed: b64.EncodeToString(bytes.Repeat([]byte{0x44}, 32+16+15))})
+		KeyID: strings.Repeat("ab", 32), Nonce: strings.Repeat("0f", 16), PolicyDigest: fixturePolicyDigest(), Sealed: b64.EncodeToString(bytes.Repeat([]byte{0x44}, 32+16+15))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,12 +92,12 @@ func sampleJobs(t *testing.T) map[string]Job {
 		JobProvision:    base("00000000000000000000000000000001", JobProvision, ProvisionPayload{Images: []string{"agentgate-coding@sha256:" + strings.Repeat("a", 64)}, Reason: "operator-request"}),
 		JobApplyProfile: apply,
 		JobLaunch: bound(base("00000000000000000000000000000003", JobLaunch, LaunchPayload{Spec: fixedSpecRaw, Policy: fixedPolicy, ExpiresAtMS: fixedNow.Add(time.Hour).UnixMilli(), HeartbeatSeconds: 10,
-			Mounts: []LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: MountRoot + "/repo"}},
-			Secrets: []LaunchSecret{{Ref: "model-api", SecretID: "11111111111111111111111111111111", Env: "MODEL_API_BASE_URL", Upstreams: []string{"api.model.example"}, Header: "x-api-key",
-				Rules: fixtureRules(), ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"}}}})),
-		JobStop:          bound(base("00000000000000000000000000000004", JobStop, StopPayload{Reason: "operator-stop", GraceSeconds: 10})),
-		JobCollect:       bound(base("00000000000000000000000000000005", JobCollect, CollectPayload{Reason: "receipt-missing"})),
-		JobSecretPut:     base("00000000000000000000000000000006", JobSecretPut, SecretPutPayload{SecretID: "11111111111111111111111111111111", Name: "model-api", Upstreams: []string{"api.model.example"}, Header: "x-api-key", Ciphertext: EncodeSealed(sealed), CiphertextSHA256: SHA256Hex(sealed)}),
+			Mounts:  []LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: MountRoot + "/repo"}},
+			Secrets: []LaunchSecret{fixtureSecret()}})),
+		JobStop:    bound(base("00000000000000000000000000000004", JobStop, StopPayload{Reason: "operator-stop", GraceSeconds: 10})),
+		JobCollect: bound(base("00000000000000000000000000000005", JobCollect, CollectPayload{Reason: "receipt-missing"})),
+		JobSecretPut: base("00000000000000000000000000000006", JobSecretPut, SecretPutPayload{SecretID: "11111111111111111111111111111111", Name: "model-api", Upstreams: []string{"api.model.example"}, Header: "x-api-key",
+			Rules: fixtureRules(), ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"}, PolicyDigest: fixturePolicyDigest(), Ciphertext: EncodeSealed(sealed), CiphertextSHA256: SHA256Hex(sealed)}),
 		JobSecretDelete:  base("00000000000000000000000000000007", JobSecretDelete, SecretDeletePayload{SecretID: "11111111111111111111111111111111", Name: "model-api"}),
 		JobSnapshotMount: base("00000000000000000000000000000008", JobSnapshotMount, SnapshotMountPayload{Name: "repo", Source: "/srv/repos/app", MaxBytes: SnapshotMaxBytes, MaxEntries: SnapshotMaxEntries}),
 	}

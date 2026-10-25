@@ -22,21 +22,27 @@ import (
 // published (signed by its enrolled key, checked against the client's pin),
 // and the service relays the envelope in a secret-put job and then drops it.
 // It keeps only the envelope's SHA-256, its public context and the host's
-// receipt. Scheme, Username, Rules and ExtraHeaders say how the launch broker
-// injects the credential and which requests it forwards: a secret without
-// rules is refused when a launch is planned (deny by default).
+// receipt. Scheme, Username, Rules, ExtraHeaders and ForwardHeaders say how
+// the launch broker injects the credential and which requests it forwards: a
+// secret without rules is refused when a launch is planned (deny by default).
+// Together with Upstreams and Header they are the secret's injection policy
+// (hostproto.SecretPolicy), whose digest PolicyDigest the client sealed with
+// the value: the service refuses settings that differ from it, and the host
+// refuses to store or use the value under any other policy.
 type Secret struct {
-	ID           string                 `json:"id"`
-	Name         string                 `json:"name"`
-	TargetID     string                 `json:"target_id"`
-	Upstreams    []string               `json:"upstreams"`
-	Header       string                 `json:"header"`
-	Scheme       string                 `json:"scheme"`
-	Username     string                 `json:"username,omitempty"`
-	Rules        []hostproto.BrokerRule `json:"rules"`
-	Wildcard     bool                   `json:"wildcard_rules"`
-	ExtraHeaders map[string]string      `json:"extra_headers"`
-	Fingerprint  string                 `json:"ciphertext_sha256"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	TargetID       string                 `json:"target_id"`
+	Upstreams      []string               `json:"upstreams"`
+	Header         string                 `json:"header"`
+	Scheme         string                 `json:"scheme"`
+	Username       string                 `json:"username,omitempty"`
+	Rules          []hostproto.BrokerRule `json:"rules"`
+	Wildcard       bool                   `json:"wildcard_rules"`
+	ExtraHeaders   map[string]string      `json:"extra_headers"`
+	ForwardHeaders []string               `json:"forward_headers"`
+	PolicyDigest   string                 `json:"policy_digest"`
+	Fingerprint    string                 `json:"ciphertext_sha256"`
 	// Envelope is the public context the sealed envelope bound.
 	Envelope *SecretEnvelope `json:"envelope,omitempty"`
 	// ValueFingerprint is the host's keyed fingerprint of the stored value
@@ -62,10 +68,11 @@ type Secret struct {
 
 // SecretEnvelope is the public context of a relayed secretseal envelope.
 type SecretEnvelope struct {
-	Format  string `json:"format"`
-	KeyID   string `json:"key_id"`
-	Version uint64 `json:"version"`
-	Nonce   string `json:"nonce"`
+	Format       string `json:"format"`
+	KeyID        string `json:"key_id"`
+	Version      uint64 `json:"version"`
+	Nonce        string `json:"nonce"`
+	PolicyDigest string `json:"policy_digest"`
 }
 
 // SecretRuleInput is one requested broker rule. The single rule
@@ -89,8 +96,12 @@ type SecretInput struct {
 	Username     string            `json:"username,omitempty"`
 	Rules        []SecretRuleInput `json:"rules,omitempty"`
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
+	// ForwardHeaders are request headers the broker forwards to the
+	// upstreams beyond its defaults (internal/broker DefaultForwarded).
+	ForwardHeaders []string `json:"forward_headers,omitempty"`
 	// Ciphertext is secretseal.Envelope.Encode(): unpadded base64url of the
-	// envelope's canonical JSON, sealed for this target and name.
+	// envelope's canonical JSON, sealed for this target and name and for the
+	// injection policy these settings make (its policy_digest).
 	Ciphertext string `json:"ciphertext"`
 	// AllowedProfiles and AllowedLaunchers scope who may use the secret: 1 to
 	// 32 profile names and 1 to 64 human subjects (for example local:alice).
@@ -101,11 +112,12 @@ type SecretInput struct {
 
 // injection is the stored form of a secret's broker settings.
 type injection struct {
-	Scheme       string                 `json:"scheme"`
-	Username     string                 `json:"username,omitempty"`
-	Rules        []hostproto.BrokerRule `json:"rules"`
-	ExtraHeaders map[string]string      `json:"extra_headers"`
-	Wildcard     bool                   `json:"wildcard"`
+	Scheme         string                 `json:"scheme"`
+	Username       string                 `json:"username,omitempty"`
+	Rules          []hostproto.BrokerRule `json:"rules"`
+	ExtraHeaders   map[string]string      `json:"extra_headers"`
+	ForwardHeaders []string               `json:"forward_headers,omitempty"`
+	Wildcard       bool                   `json:"wildcard"`
 }
 
 const secretColumns = "id,name,target_id,upstreams,header,fingerprint,allowed_profiles,allowed_launchers,state,created,created_by,updated,revision,injection,envelope,receipt,removal"
@@ -119,7 +131,7 @@ func scanSecret(row rowScanner) (Secret, error) {
 		return sec, err
 	}
 	err = errors.Join(json.Unmarshal([]byte(upstreams), &sec.Upstreams), json.Unmarshal([]byte(profiles), &sec.AllowedProfiles), json.Unmarshal([]byte(launchers), &sec.AllowedLaunchers))
-	sec.Rules, sec.ExtraHeaders = []hostproto.BrokerRule{}, map[string]string{}
+	sec.Rules, sec.ExtraHeaders, sec.ForwardHeaders = []hostproto.BrokerRule{}, map[string]string{}, []string{}
 	if inject != "" {
 		var in injection
 		if json.Unmarshal([]byte(inject), &in) == nil {
@@ -130,12 +142,16 @@ func scanSecret(row rowScanner) (Secret, error) {
 			if in.ExtraHeaders != nil {
 				sec.ExtraHeaders = in.ExtraHeaders
 			}
+			if in.ForwardHeaders != nil {
+				sec.ForwardHeaders = in.ForwardHeaders
+			}
 		}
 	}
 	if envelope != "" {
 		var e SecretEnvelope
 		if json.Unmarshal([]byte(envelope), &e) == nil {
 			sec.Envelope = &e
+			sec.PolicyDigest = e.PolicyDigest
 		}
 	}
 	if receipt != "" {
@@ -274,7 +290,7 @@ func wildcardRule(rules []SecretRuleInput) (bool, error) {
 // configuration validator, the one the host runs before it starts a broker:
 // every upstream becomes a route exactly as a launch would build it.
 func secretInjection(name string, in SecretInput, now time.Time) (injection, error) {
-	out := injection{Scheme: in.Scheme, Username: in.Username, Rules: []hostproto.BrokerRule{}, ExtraHeaders: map[string]string{}}
+	out := injection{Scheme: in.Scheme, Username: in.Username, Rules: []hostproto.BrokerRule{}, ExtraHeaders: map[string]string{}, ForwardHeaders: in.ForwardHeaders}
 	if out.Scheme == "" && strings.EqualFold(in.Header, "authorization") {
 		out.Scheme = "Bearer" // the broker's own default for Authorization, stored explicitly
 	}
@@ -305,6 +321,9 @@ func secretInjection(name string, in SecretInput, now time.Time) (injection, err
 	if err := hostproto.CheckInjection(in.Header, check.Scheme, check.Username, check.Rules, check.ExtraHeaders); err != nil {
 		return out, fail(422, "invalid_secret", "Broker injection settings: "+err.Error()+".")
 	}
+	if len(in.ForwardHeaders) > hostproto.MaxForwardHeaders {
+		return out, fail(422, "invalid_secret", "Broker injection settings: at most 16 forward headers.")
+	}
 	if err := brokerAccepts(name, in.Upstreams, in.Header, check, now); err != nil {
 		return out, err
 	}
@@ -327,7 +346,7 @@ func brokerAccepts(name string, upstreams []string, header string, in injection,
 		Listen:    broker.Listen{Network: "tcp", Address: "172.30.0.2", Port: brokerPort, Subnet: "172.30.0.0/29"},
 		StatsPath: "/var/lib/agentgate/broker/stats.json", RunAs: broker.Identity{UID: 10002, GID: 10002},
 		Secrets: []broker.LaunchSecret{{Ref: name, Upstreams: upstreams, Header: header, Scheme: in.Scheme, Username: in.Username,
-			Rules: rules, SecretFile: "/run/agentgate/secrets/" + name, Extra: extra}}}, now)
+			Rules: rules, SecretFile: "/run/agentgate/secrets/" + name, Extra: extra, Forward: in.ForwardHeaders}}}, now)
 	if err != nil {
 		text := strings.TrimPrefix(err.Error(), "broker config: ")
 		if i := strings.Index(text, "]."); strings.HasPrefix(text, "routes[") && i > 0 {
@@ -395,16 +414,34 @@ func (s *Store) CreateSecret(op Operation, in SecretInput) (any, error) {
 		if env.KeyID != target.SealKeyID {
 			return nil, fail(409, "seal_key_changed", "The envelope is sealed to another seal key than the one the target publishes; fetch the seal key again and reseal.")
 		}
+		// The settings must be the policy the client sealed: their digest is
+		// the envelope's policy_digest (the host checks the same, and the
+		// AEAD binds it). Settings that differ are refused, not stored.
+		policy, err := hostproto.NewSecretPolicy(in.Upstreams, in.Header, inject.Scheme, inject.Username, inject.Rules, inject.ExtraHeaders, inject.ForwardHeaders, inject.Wildcard)
+		if err != nil {
+			return nil, fail(422, "invalid_secret", "Broker injection settings: "+strings.TrimPrefix(err.Error(), "hostproto: ")+".")
+		}
+		if policy.Digest() != env.PolicyDigest {
+			return nil, fail(422, "policy_mismatch", "The broker settings (upstreams, header, scheme, username, extra headers, forward headers, rules) differ from the policy sealed in the envelope ("+env.PolicyDigest+"). Seal the value again for exactly these settings.")
+		}
+		inject.ForwardHeaders = policy.ForwardHeaders
 		sec := Secret{ID: newID(), Name: in.Name, TargetID: target.ID, Upstreams: in.Upstreams, Header: in.Header, Scheme: inject.Scheme, Username: inject.Username,
-			Rules: inject.Rules, Wildcard: inject.Wildcard, ExtraHeaders: inject.ExtraHeaders, Fingerprint: hostproto.SHA256Hex(raw),
-			Envelope:        &SecretEnvelope{Format: env.Format, KeyID: env.KeyID, Version: env.Version, Nonce: env.Nonce},
+			Rules: inject.Rules, Wildcard: inject.Wildcard, ExtraHeaders: inject.ExtraHeaders, ForwardHeaders: policy.ForwardHeaders, PolicyDigest: env.PolicyDigest, Fingerprint: hostproto.SHA256Hex(raw),
+			Envelope:        &SecretEnvelope{Format: env.Format, KeyID: env.KeyID, Version: env.Version, Nonce: env.Nonce, PolicyDigest: env.PolicyDigest},
 			AllowedProfiles: in.AllowedProfiles, AllowedLaunchers: in.AllowedLaunchers, State: "pending", Created: stamp(), CreatedBy: operation.Actor.Subject, Revision: 1}
 		sec.Updated = sec.Created
 		if _, err = tx.Exec("INSERT INTO secrets VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,1,?,?,'','')", sec.ID, sec.Name, sec.TargetID, jsonText(sec.Upstreams), sec.Header, sec.Fingerprint,
 			jsonText(sec.AllowedProfiles), jsonText(sec.AllowedLaunchers), sec.Created, sec.CreatedBy, sec.Updated, jsonText(inject), jsonText(sec.Envelope)); err != nil {
 			return nil, fail(409, "secret_exists", "The target already holds a secret with this name; delete it first.")
 		}
-		payload := hostproto.SecretPutPayload{SecretID: sec.ID, Name: sec.Name, Upstreams: sec.Upstreams, Header: sec.Header, Ciphertext: hostproto.EncodeSealed(raw), CiphertextSHA256: sec.Fingerprint}
+		payload := hostproto.SecretPutPayload{SecretID: sec.ID, Name: sec.Name, Upstreams: sec.Upstreams, Header: sec.Header, Scheme: sec.Scheme, Username: sec.Username,
+			Rules: sec.Rules, Wildcard: sec.Wildcard, PolicyDigest: sec.PolicyDigest, Ciphertext: hostproto.EncodeSealed(raw), CiphertextSHA256: sec.Fingerprint}
+		if len(sec.ExtraHeaders) > 0 {
+			payload.ExtraHeaders = sec.ExtraHeaders
+		}
+		if len(sec.ForwardHeaders) > 0 {
+			payload.ForwardHeaders = sec.ForwardHeaders
+		}
 		if _, err = s.enqueueJob(tx, jobSpec{Type: hostproto.JobSecretPut, TargetID: target.ID, SecretID: sec.ID, Payload: payload, Deadline: s.now().Add(secretJobLifetime), Reason: "Deliver a sealed secret to its host", Actor: operation.Actor}, operation); err != nil {
 			return nil, err
 		}
@@ -598,4 +635,29 @@ func brokerEndpoint(launchID string) PlanBroker {
 // brokerBaseURL is the URL a route's agent variable receives.
 func brokerBaseURL(b *PlanBroker, ref string) string {
 	return "http://" + net.JoinHostPort(b.Address, strconv.Itoa(b.Port)) + "/" + ref
+}
+
+// sealedPolicy is the policy a stored secret's settings make, checked against
+// the digest its envelope sealed and the host's receipt reported. A secret
+// stored before policies were sealed (envelope format v1), or whose stored
+// settings were changed after it was created, is refused: no launch may use
+// a credential under a policy its owner did not seal.
+func sealedPolicy(sec Secret) (hostproto.SecretPolicy, error) {
+	refuse := func(why string) (hostproto.SecretPolicy, error) {
+		return hostproto.SecretPolicy{}, fail(422, "secret_policy_mismatch", "Secret "+sec.Name+": "+why+" Store it again (a new envelope sealed for its settings).")
+	}
+	if sec.Envelope == nil || sec.Envelope.Format != secretseal.EnvelopeFormat || len(sec.Envelope.PolicyDigest) != 64 {
+		return refuse("its value was not sealed with a broker policy.")
+	}
+	p, err := hostproto.NewSecretPolicy(sec.Upstreams, sec.Header, sec.Scheme, sec.Username, sec.Rules, sec.ExtraHeaders, sec.ForwardHeaders, sec.Wildcard)
+	if err != nil || p.Digest() != sec.Envelope.PolicyDigest {
+		return refuse("its stored broker settings differ from the policy sealed with its value (" + sec.Envelope.PolicyDigest + ").")
+	}
+	if len(sec.Receipt) > 0 {
+		var r hostproto.SecretReceipt
+		if json.Unmarshal(sec.Receipt, &r) != nil || r.PolicyDigest != sec.Envelope.PolicyDigest {
+			return refuse("the host's receipt names another policy than the one sealed with its value.")
+		}
+	}
+	return p, nil
 }

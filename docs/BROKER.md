@@ -4,7 +4,7 @@ An agent in the guarded sandbox can use a credential (a model API key, a git tok
 any code it runs ever holding the secret. A host-side broker holds the value, accepts plain HTTP requests from the
 sandbox on one exact endpoint, forwards only allowed requests to an exact HTTPS upstream allowlist, adds the
 credential on the way out, and records bounded evidence. The value reaches the host through a sealed relay that the
-service cannot read (`internal/secretseal`).
+service cannot read and whose injection policy (upstreams, header, rules) it cannot change (`internal/secretseal`).
 
 | Part | Path |
 | --- | --- |
@@ -74,7 +74,7 @@ Assets: the secret value; the upstream account it unlocks; the host and its priv
 | Same, aiming at the credential | ask the upstream to echo it, read error bodies, read stats | response headers that carry a credential form are dropped, bodies are masked; broker errors and stats hold only fixed codes and counts |
 | DNS attacker or rebinding upstream name | answer with private or loopback addresses, or change answers between lookups | a whole answer is refused if any address is not public; every new connection re-resolves after a bounded cache; the dial and a socket-level hook both re-check the address |
 | Malicious upstream response | huge or endless bodies, slow streams, `Content-Encoding` that defeats masking, protocol switches, cookies | size, idle and total limits; encoded bodies and `101` are refused; `Set-Cookie`, `Alt-Svc` and hop-by-hop headers are dropped |
-| Malicious or compromised service (relay) | substitute the host's seal key, replace or replay ciphertext | the seal key is signed by the host's pinned Ed25519 key; the envelope binds target, name, version and nonce; replays and rollbacks are refused; a substituted ciphertext cannot produce a receipt the client accepts |
+| Malicious or compromised service (relay), or anyone who can write its database or sign its jobs | substitute the host's seal key, replace or replay ciphertext, or change a secret's upstreams, header, scheme, rules or headers at creation or later, to send the credential elsewhere or use it more widely | the seal key is signed by the host's pinned Ed25519 key; the envelope binds target, name, version, nonce and the digest of the injection policy the operator chose; the host stores that policy with the value, refuses a secret-put whose settings differ from it and a launch whose settings differ from it, and builds every broker from its stored policy; replays and rollbacks are refused; a substituted ciphertext or policy cannot produce a receipt the client accepts. It can still decide which approved launches to queue, deny service, and show a plan that a client does not check against the sealed digest (the CLI and the web UI check it and refuse to approve on a mismatch) |
 | Another launch on the same host | reach this broker | it is on a different per-launch network and its guard allows only its own broker endpoint |
 | Local user on the host | read process memory or a core dump | the broker is non-dumpable, `RLIMIT_CORE=0`, runs as its own uid, and keeps the value in a locked, `MADV_DONTDUMP` mapping outside the Go heap |
 
@@ -396,25 +396,52 @@ then refuse root-owned files, so a remapped host must own the config and secret 
    operator pinned out of band (`KnownTargets`, a 0600 file; trust on first use only when the caller asks, never
    replacing a different pin), a valid signature, the right target, suite and validity window. A service that
    substitutes its own key fails here.
-3. **Seal.** `Seal(pub, targetID, name, value)`: RFC 9180 HPKE base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
-   ChaCha20-Poly1305 (`crypto/hpke` in the Go standard library; no new dependency). The HPKE info binds the format,
-   suite, key id and target. The associated data binds format, suite, target id, secret name, version (sealing time in
-   Unix milliseconds) and a fresh 128-bit nonce. The envelope `{format, target_id, name, version, key_id, nonce,
-   sealed}` holds only ciphertext and public context; `Envelope.Encode()` is its string wire form.
-4. **Host.** `Store.Accept(key, envelope, now)` (directory owned by the host agent, mode 0700, under a lock) refuses a
+3. **Injection policy.** Before it seals, the client computes the secret's injection policy
+   (`hostproto.SecretPolicy`, format `agentgate.secret-policy.v1`) from what the operator chose: the upstreams (each
+   with an explicit port, 443 by default), the header (lower case), the scheme (Bearer for an Authorization header
+   without one) and Basic user name, the extra headers (lower-case names, sorted), the forwarded request headers
+   (lower case, sorted), the rules (methods in `GET HEAD POST PUT PATCH DELETE OPTIONS` order) and the wildcard flag.
+   Its canonical encoding is nested length-prefixed fields (big-endian uint32 lengths):
+   `lp(format, lp(lp(host, port, base_path, lp(private_address...))...), header, scheme, username,
+   lp(lp(name, value)...), lp(forward...), lp(lp(lp(method...), path, match)...), "true"|"false")`, and
+   `policy_digest` is its hex SHA-256. Two spellings of one policy (`host` and `host:443`, `Authorization` and
+   `authorization`) give one digest; anything ambiguous (a duplicate after normalizing) is refused.
+   `internal/hostproto/testdata/secret-policy-vectors.json` (copied to `web/qa/fixtures`) pins the encoding for every
+   implementation, including the refusals.
+4. **Seal.** `Seal(pub, targetID, name, policyDigest, value)`: RFC 9180 HPKE base mode, DHKEM(X25519, HKDF-SHA256),
+   HKDF-SHA256, ChaCha20-Poly1305 (`crypto/hpke` in the Go standard library; no new dependency). The HPKE info binds
+   the format, suite, key id and target. The associated data binds format (`agentgate.secretseal.v2`), suite, target
+   id, secret name, version (sealing time in Unix milliseconds), a fresh 128-bit nonce and the policy digest. The
+   envelope `{format, target_id, name, version, key_id, nonce, policy_digest, sealed}` holds only ciphertext and public
+   context; `Envelope.Encode()` is its string wire form.
+5. **Host.** The secret-put job carries the policy's settings. The host computes their digest and refuses the job
+   (`invalid_job`, or `policy_mismatch` from `agentgate-hostd`) unless it equals both the job's `policy_digest` and the
+   envelope's; the AEAD then opens only with the digest the client sealed (`envelope_unauthenticated` otherwise).
+   `Store.Accept(key, envelope, now)` (directory owned by the host agent, mode 0700, under a lock) refuses a
    different target or key id, a version not newer than the stored one (replay and rollback), an envelope sealed more
    than 24 hours ago or more than 5 minutes in the future, and a value that `Store.Validate` rejects (set it to
    `broker.ValidSecret`). It writes the value to `DIR/NAME` (0600, temporary file, fsync, rename, directory fsync) and
-   `DIR/NAME.meta.json` (version, nonce, fingerprint; no value).
-5. **Receipt.** `{format, target_id, name, version, key_id, nonce, fingerprint, tag}`. The fingerprint is
+   `DIR/NAME.meta.json` (version, nonce, fingerprint, policy digest; no value). The host agent keeps the policy itself
+   with the secret's binding (`secret-bindings.json`) and, at launch, refuses a secret whose stored policy does not
+   reproduce the digest both the binding and the store record hold.
+6. **Receipt.** `{format, target_id, name, version, key_id, nonce, policy_digest, fingerprint, tag}`. The fingerprint is
    `sfp1_` + the first 128 bits of HMAC-SHA256 under a random 32-byte key kept only in the host store, over the target,
    name and value: without that key a fingerprint reveals nothing, so a short or guessable secret cannot be brute
    forced from it, and the same value on the same host always shows the same fingerprint, so a change is visible. The
    tag is HMAC-SHA256 keyed by the HPKE exporter secret, which only the sealing client and the host share. The client
    runs `Sealed.VerifyReceipt`; a relay that swapped the ciphertext for one of its own (even with the same public
-   context) cannot produce a tag the client accepts.
+   context) cannot produce a tag the client accepts, and a receipt that names another policy fails too.
+7. **Launch.** The service plans a launch only for a secret whose stored settings make its sealed digest and whose
+   receipt names it (`secret_policy_mismatch` otherwise), shows the digest in the plan, and queues the launch only if
+   the secret still holds the planned digest. The launch job carries the settings and the digest; the host refuses the
+   launch (`secret_unavailable`, "the launch's broker settings differ from the policy sealed with the stored value")
+   unless both equal its stored policy, and builds the broker configuration from its stored policy, never from the
+   job's copy. Changing a secret's policy means sealing the value again: delete the secret and store it with a new
+   envelope; the old envelope is refused under new settings (`policy_mismatch`) and, under its own, as a replay.
 
-`testdata/vector-v1.json` is a known-answer vector (fixed keys, envelope, fingerprint and receipt). Comparisons of
+`testdata/vector-v2.json` is a known-answer vector (fixed keys, policy, envelope, fingerprint and receipt;
+`AGENTGATE_SECRETSEAL_WRITE_VECTOR=1` rewrites it). Envelopes and receipts of format v1, which bound no policy, are
+refused everywhere, and a secret stored with one must be stored again. Comparisons of
 tags use `hmac.Equal`. Plaintext and exporter secrets are cleared after use; Go cannot guarantee that no transient
 copy remains.
 
@@ -457,16 +484,17 @@ without rules may be stored (older clients), but every launch that references it
 with `wildcard_rules: true`, and every plan that uses it carries a `WARNING:` notice and an approval reason.
 `BuildLaunchConfig` itself now refuses a secret without rules instead of defaulting to every path.
 
-**`secret-put` and `secret-delete` on the host.** `DecodeEnvelope`, a target and name check, then `Store.Accept` on
+**`secret-put` and `secret-delete` on the host.** `DecodeEnvelope`, a target and name check, the policy check (the
+relayed settings' digest must equal the job's and the envelope's `policy_digest`), then `Store.Accept` on
 `SECRETS/<target>` (root, 0700; `Validate = broker.ValidSecret`). The host binds the name to the service's secret id,
-version and fingerprint (`STATE/secret-bindings.json`), so a launch uses only the value the service relayed for that
-exact secret id, and answers with `secret_receipt` in the job result. Refusals map to fixed codes
-(`replayed_or_rolled_back`, `envelope_stale`, `envelope_wrong_context`, `envelope_unauthenticated`, `value_refused`,
-`envelope_malformed`). `secret-delete` is refused while a running launch uses the secret; otherwise
+version, fingerprint, policy digest and the policy itself (`STATE/secret-bindings.json`), so a launch uses only the
+value the service relayed for that exact secret id and only under its sealed policy, and answers with
+`secret_receipt` in the job result. Refusals map to fixed codes (`policy_mismatch`, `replayed_or_rolled_back`,
+`envelope_stale`, `envelope_wrong_context`, `envelope_unauthenticated`, `value_refused`, `envelope_malformed`). `secret-delete` is refused while a running launch uses the secret; otherwise
 `Store.Delete` overwrites and removes the value and keeps a tombstone of its version (see the fix below).
 
 **Receipt relay.** The service accepts a successful `secret-put` only with a receipt for exactly the relayed envelope
-(target, name, version, key id, nonce), stores it, shows its keyed fingerprint as `value_fingerprint`, and serves it
+(target, name, version, key id, nonce, policy digest), stores it, shows its keyed fingerprint as `value_fingerprint`, and serves it
 verbatim at `GET /api/v1/secrets/{id}/receipt` (and in the secret object as `receipt`). It cannot check the tag; the
 sealing client does, with `Sealed.VerifyReceipt`.
 
@@ -478,8 +506,10 @@ A launch with secrets always needs approval and a target that advertises `broker
 example endpoint; the created launch gets its own.
 
 **Launch on the host.** `agentgate-hostd` refuses a broker endpoint that is not the `.2` of a `/29` inside its pool
-(`--broker-pool`, default `172.30.0.0/16`), builds the configuration with `BuildLaunchConfig` (deadline = the signed
-expiry), checks every secret's binding, version and fingerprint, writes the configuration, starts the broker (recipe
+(`--broker-pool`, default `172.30.0.0/16`), checks every secret's binding, version, fingerprint and sealed policy
+(the job's settings and `policy_digest` must equal the stored policy), builds the configuration with
+`BuildLaunchConfig` from the stored policies (deadline = the signed expiry), checks that its routes give the
+launch's variables, writes the configuration, starts the broker (recipe
 above), and waits at most 10 seconds for stats with `state: running` bound to this launch, target, configuration
 digest and endpoint. Any failure tears down what was created and fails the launch closed (`broker_start_failed`,
 `broker_not_running`, `broker_config_refused`, `secret_unavailable`) before the target starts. The launcher job gains
@@ -599,7 +629,11 @@ client verifies, a launch is planned, approved and run, the agent's request reac
 and the receipt carries broker counts, broker evidence and `kernel_verified: false`. After every step it checks that no
 form of the value appears in the database, the audit log, job payloads, events, logs, errors, the launcher job or the
 receipt. Negatives: a substituted or tampered seal key, a replayed and a rolled-back `secret-put`, a launcher or profile
-outside the secret's scope, a broker that fails to start (the launch aborts and nothing remains), and a host crash
+outside the secret's scope, the credential-redirect attacks of `e2e_policy_test.go` (a service that stores the
+operator's envelope with another upstream, wider rules, another header or other headers is refused with
+`policy_mismatch`; a compromised service that signs a secret-put or a launch job with the attacker's settings, under
+the sealed digest or its own, is refused by the host and no broker starts; a database rewrite of a stored secret's
+settings makes every plan and launch fail with `secret_policy_mismatch`; changing a policy needs a new envelope), a broker that fails to start (the launch aborts and nothing remains), and a host crash
 mid-launch (the restarted host removes the broker and reports it). `prov_broker_test.go` covers the seal key record
 checks, the envelope and injection refusals, a secret without rules (`secret_rules_missing`), the wildcard warning,
 the endpoint derivation, receipt matching and the schema 6 migration. `internal/hostd` adds the Docker recipe against a recorder, overlap refusals, start and stop failures, recovery, and
