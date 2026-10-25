@@ -10,7 +10,7 @@ The launcher removes the target and releases guard pins only after the domain is
 One request runs at a time. TTY, agent forwarding, and port forwarding stay disabled for the POC key.
 
 This is an **experimental network guard and container POC**.
-Normal product admission remains closed. Syscall filtering and UI approval controls remain incomplete; filesystem and process controls are opt-in and unverified on a kernel (see Host controls below).
+Normal product admission remains closed. There is no syscall filter, and an SSH command runs without an approval step (a launch through the control plane needs a second person's approval whenever its plan says so); filesystem and process controls are opt-in and unverified on a kernel (see Host controls below).
 The trusted bridge makes an authenticated live `GET /api/tasks/ID` for one task.
 The target receives a Unix socket and four task fields. It receives no upstream bearer token.
 The bridge exposes `/task` and `/auth-probe`; other paths and methods return 403.
