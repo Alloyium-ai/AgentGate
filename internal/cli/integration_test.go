@@ -90,8 +90,12 @@ type fakeHostd struct {
 	seq    uint64
 	seal   *secretseal.HostKey
 	store  *secretseal.Store
-	// caps replaces fakeHostCaps when set.
-	caps []string
+	// caps replaces fakeHostCaps when set; roots are the host's own mount
+	// roots its heartbeat reports (nil: none reported).
+	caps  []string
+	roots *[]string
+	// skew offsets the host's clock in its signed requests.
+	skew time.Duration
 }
 
 func (h *fakeHostd) capabilities() []string {
@@ -134,7 +138,7 @@ func hostNonce() string {
 
 func (h *fakeHostd) header() hostproto.Header {
 	h.seq++
-	return hostproto.Header{HostID: h.id, Nonce: hostNonce(), TimestampMS: time.Now().UnixMilli(), Sequence: h.seq}
+	return hostproto.Header{HostID: h.id, Nonce: hostNonce(), TimestampMS: time.Now().Add(h.skew).UnixMilli(), Sequence: h.seq}
 }
 
 func (h *fakeHostd) enroll(token string) hostproto.EnrollResponse {
@@ -163,7 +167,7 @@ func (h *fakeHostd) poll(running ...string) []hostproto.Job {
 		record, _ = json.Marshal(h.seal.Published())
 	}
 	var resp hostproto.PollResponse
-	h.post(hostproto.PathPoll, hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: h.capabilities(), RunningLaunches: running, AgentVersion: "0.1.0", SealKey: record}, MaxJobs: 16}, &resp)
+	h.post(hostproto.PathPoll, hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: h.capabilities(), RunningLaunches: running, AgentVersion: "0.1.0", SealKey: record, MountRoots: h.roots}, MaxJobs: 16}, &resp)
 	jobs := []hostproto.Job{}
 	for _, env := range resp.Jobs {
 		var job hostproto.Job

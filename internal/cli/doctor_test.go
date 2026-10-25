@@ -68,7 +68,9 @@ func TestDoctorAgainstTheRealService(t *testing.T) {
 	// The fake host reports brokered secrets and a seal key, but no BPF LSM.
 	r := run("doctor")
 	expect(r, ExitFailure, "ok    target", "ok    host key", enrolled.HostKeyID+" approved and pinned here", "ok    heartbeat",
-		"FAIL  kernel-bpf-lsm", "fix: boot the host with BPF LSM", "ok    brokered-secrets", "ok    seal key", "doctor_failed")
+		"ok    host clock", "the host's clock was", "the service's at its last heartbeat",
+		"FAIL  kernel-bpf-lsm", "fix: boot the host with BPF LSM", "ok    brokered-secrets", "ok    seal key",
+		"warn  mount roots", "does not report mount roots of its own", "doctor_failed")
 
 	// A stale heartbeat, read as the service reports it.
 	expect(run("doctor", "--max-heartbeat-age", "1ns"), ExitFailure, "FAIL  heartbeat", "systemctl restart agentgate-hostd")
@@ -77,14 +79,25 @@ func TestDoctorAgainstTheRealService(t *testing.T) {
 	edge := filepath.Join(t.TempDir(), "edge-token")
 	expect(run("target", "add", "edge", "--token-file", edge), 0)
 	raw, _ = os.ReadFile(edge)
-	second := &fakeHostd{t: t, url: svc.srv.URL, client: svc.srv.Client(), caps: []string{hostproto.CapabilityDocker, hostproto.CapabilityBPFLSM, hostproto.CapabilityPOCPolicyV2}}
+	hostRoots := []string{"/srv/repos"}
+	second := &fakeHostd{t: t, url: svc.srv.URL, client: svc.srv.Client(), caps: []string{hostproto.CapabilityDocker, hostproto.CapabilityBPFLSM, hostproto.CapabilityPOCPolicyV2}, roots: &hostRoots}
 	_, second.key, _ = ed25519.GenerateKey(rand.Reader)
 	second.box, _ = ecdh.X25519().GenerateKey(rand.Reader)
 	edgeKey := second.enroll(strings.TrimSpace(string(raw)))
 	expect(run("target", "approve-key", "edge", "--host-key-id", edgeKey.HostKeyID, "--reason", "Matches the host console"), 0)
 	second.poll()
 	r = run("doctor", "--target", "edge")
-	expect(r, 0, "ok    kernel-bpf-lsm", "warn  brokered-secrets", "--broker-image", "Nothing failed")
+	expect(r, 0, "ok    kernel-bpf-lsm", "warn  brokered-secrets", "--broker-image", "ok    mount roots", "no host folder may be mounted", "the host allows /srv/repos", "Nothing failed")
+	// The service lists a root the host does not allow: a warning naming both lists and both fixes.
+	expect(run("target", "mount-roots", "edge", "--root", "/srv/data", "--root", "/srv/repos/app", "--reason", "Mount the data set"), 0)
+	expect(run("doctor", "--target", "edge"), 0, "warn  mount roots", "the host refuses mounts in /srv/data", "sudo agentgate-hostd mount-roots --root PATH")
+	expect(run("target", "status", "edge"), 0, "host mount roots", "MISMATCH: the host refuses mounts in /srv/data")
+	// The host's clock 20 s ahead: a warning with the fix on the host.
+	second.skew = 20 * time.Second
+	second.poll()
+	expect(run("doctor", "--target", "edge"), 0, "warn  host clock", "s ahead of the service's", "timedatectl set-ntp true")
+	second.skew = 0
+	second.poll()
 
 	// JSON names every check.
 	r = run("doctor", "--target", "edge", "--json")
@@ -99,7 +112,7 @@ func TestDoctorAgainstTheRealService(t *testing.T) {
 	for _, c := range report.Checks {
 		names = append(names, c.Name)
 	}
-	if strings.Join(names, ",") != "service,clock,token,target,host key,heartbeat,kernel-bpf-lsm,brokered-secrets" {
+	if strings.Join(names, ",") != "service,clock,token,target,host key,heartbeat,host clock,kernel-bpf-lsm,brokered-secrets,mount roots" {
 		t.Fatalf("checks %v", names)
 	}
 
@@ -111,4 +124,40 @@ func TestDoctorAgainstTheRealService(t *testing.T) {
 	// A revoked token.
 	expect(run("logout"), 0)
 	expect(run("doctor"), ExitFailure, "FAIL  token")
+}
+
+// As root on the target's own host, doctor reads agentgate-hostd status to say
+// exactly why brokered-secrets is missing; otherwise it says what to check.
+func TestDoctorExplainsAMissingBrokerFromTheLocalHostAgent(t *testing.T) {
+	h := newHarness(t)
+	h.login("local:ada", "admin")
+	target := sampleTarget("active")
+	h.api.reply("GET /api/v1/launch-spec-schema", 200, map[string]any{})
+	h.api.reply("GET /api/v1/targets/{id}", 200, target)
+	status := map[string]any{"enrolled": true, "target_id": target.ID, "broker": nil, "secret_root": "/var/lib/agentgate/secrets"}
+	h.runner = &fakeRunner{respond: func(c Cmd) Result {
+		if strings.Join(c.Args, " ") != "status --state-dir /srv/hostd" {
+			return Result{Exit: 2, Stderr: []byte("unexpected " + strings.Join(c.Args, " "))}
+		}
+		raw, _ := json.Marshal(status)
+		return Result{Stdout: raw}
+	}}
+	h.euid = 0
+	if r := h.run("", "doctor", "--state-dir", "/srv/hostd"); !strings.Contains(r.stdout, "installed without a credential broker (--broker-image)") {
+		t.Fatalf("%v", r)
+	}
+	status["broker"] = map[string]any{"image": brokerImage, "uid": 10002, "gid": 10002, "egress_network": "agentgate-egress"}
+	if r := h.run("", "doctor", "--state-dir", "/srv/hostd"); !strings.Contains(r.stdout, "configured with broker image "+brokerImage) || !strings.Contains(r.stdout, "docker network inspect agentgate-egress") {
+		t.Fatalf("%v", r)
+	}
+	// Another target's host agent, or no root: the generic explanation, and no command runs without root.
+	status["target_id"] = strings.Repeat("0", 32)
+	if r := h.run("", "doctor", "--state-dir", "/srv/hostd"); !strings.Contains(r.stdout, "it does only with --broker-image") {
+		t.Fatalf("%v", r)
+	}
+	h.euid = 1000
+	before := len(h.runner.(*fakeRunner).calls)
+	if r := h.run("", "doctor", "--state-dir", "/srv/hostd"); !strings.Contains(r.stdout, "it does only with --broker-image") || len(h.runner.(*fakeRunner).calls) != before {
+		t.Fatalf("%v", r)
+	}
 }

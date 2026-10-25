@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -67,21 +69,62 @@ type store struct {
 	euid int
 }
 
-func configDir(getenv func(string) string) (string, error) {
+// underSudo reports whether this root process was started by sudo for
+// another account: the environment (HOME, XDG_CONFIG_HOME) then belongs to
+// that user, who may point it anywhere.
+func underSudo(getenv func(string) string, euid int) bool {
+	if euid != 0 {
+		return false
+	}
+	user, uid := getenv("SUDO_USER"), getenv("SUDO_UID")
+	return (user != "" && user != "root") || (uid != "" && uid != "0")
+}
+
+// configDir is $AGENTGATE_CONFIG_DIR, else $XDG_CONFIG_HOME/agentgate, else
+// $HOME/.config/agentgate. Under sudo it never trusts HOME or
+// XDG_CONFIG_HOME: root would otherwise create and write token files in a
+// tree the invoking user controls (a link there redirects root's writes).
+// It then uses root's own home from the account database (homeOf), which
+// root owns; AGENTGATE_CONFIG_DIR still wins, under the usual custody rules
+// (a directory owned by root, mode 0700). It returns a note to show when it
+// set HOME aside.
+func configDir(getenv func(string) string, euid int, homeOf func(uid int) (string, error)) (string, string, error) {
 	if dir := getenv("AGENTGATE_CONFIG_DIR"); dir != "" {
 		if !filepath.IsAbs(dir) {
-			return "", usageError("AGENTGATE_CONFIG_DIR must be an absolute path")
+			return "", "", usageError("AGENTGATE_CONFIG_DIR must be an absolute path")
 		}
-		return filepath.Clean(dir), nil
+		return filepath.Clean(dir), "", nil
+	}
+	if underSudo(getenv, euid) {
+		home, err := homeOf(euid)
+		if err != nil || home == "" || !filepath.IsAbs(home) || filepath.Clean(home) != home {
+			return "", "", failure("running under sudo for %s, agentgate does not keep tokens where HOME points, and root's home cannot be found in the account database (%v); set AGENTGATE_CONFIG_DIR to a root-owned directory", getenv("SUDO_USER"), err)
+		}
+		dir := filepath.Join(home, ".config", "agentgate")
+		note := ""
+		if h := getenv("HOME"); h != home || getenv("XDG_CONFIG_HOME") != "" {
+			note = "running under sudo for " + firstNonEmpty(getenv("SUDO_USER"), "uid "+getenv("SUDO_UID")) + ": the configuration is root's own " + dir +
+				", not the directory HOME or XDG_CONFIG_HOME names; as that user, run agentgate login to keep a context of your own"
+		}
+		return dir, note, nil
 	}
 	if xdg := getenv("XDG_CONFIG_HOME"); xdg != "" && filepath.IsAbs(xdg) {
-		return filepath.Join(xdg, "agentgate"), nil
+		return filepath.Join(xdg, "agentgate"), "", nil
 	}
 	home := getenv("HOME")
 	if home == "" || !filepath.IsAbs(home) {
-		return "", failure("HOME is not set; set AGENTGATE_CONFIG_DIR to an absolute directory")
+		return "", "", failure("HOME is not set; set AGENTGATE_CONFIG_DIR to an absolute directory")
 	}
-	return filepath.Join(home, ".config", "agentgate"), nil
+	return filepath.Join(home, ".config", "agentgate"), "", nil
+}
+
+// accountHome looks up a uid's home directory in the account database.
+func accountHome(uid int) (string, error) {
+	u, err := user.LookupId(strconv.Itoa(uid))
+	if err != nil {
+		return "", err
+	}
+	return u.HomeDir, nil
 }
 
 func custodyError(path, problem, fix string) *Error {

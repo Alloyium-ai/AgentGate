@@ -389,6 +389,8 @@ The full reference, quickstart and exit codes are in [CLI.md](CLI.md). The surfa
 
 ```
 agentgate up [--target local] [--service-url URL] [--compose-file F] [--approve]   bring this machine online
+             [--broker-image REF [--broker-egress-network NET] [--broker-uid N] [--broker-gid N] [--broker-pool CIDR]]
+             [--secret-root DIR] [--mount-root PATH]...
 agentgate login URL [--token-stdin] | logout [--revoke] | whoami | context ls|use|rm   API token in a 0600 config
 agentgate target ls | add NAME | enroll NAME | status NAME | approve-key NAME --host-key-id ID
 agentgate target pin NAME --host-key-id ID | rename NAME NEW | retire NAME
@@ -427,8 +429,11 @@ agentgate schema launch-spec | completion bash|zsh|fish | version
   has them (rules are then required: deny by default); `--wait` verifies the host's receipt from
   `GET /secrets/{id}/receipt` with `Sealed.VerifyReceipt`.
 - `up` delegates every host-side action to `docker compose` (`control job-key`, `init`, `first-admin` with the
-  password on stdin, `up -d`) and `agentgate-hostd` (`status`, `install --token-file`, `provision`) through argument
-  vectors; each step checks the current state first, and the steps that need root refuse without it.
+  password on stdin, `up -d`) and `agentgate-hostd` (`status`, `install --token-file` with the broker settings and
+  mount roots given, `mount-roots`, `provision`) through argument vectors; each step checks the current state first,
+  and the steps that need root refuse without it. It reports when `brokered-secrets` is not available and why. Under
+  `sudo` the CLI's configuration is root's own (`/root/.config/agentgate` from the account database), never where `HOME`
+  points ([CLI.md](CLI.md#1-first-time-setup-bring-this-machine-online)).
 
 ## Credentials
 
@@ -641,7 +646,8 @@ Run the control service with Docker Compose (`compose.yaml`: the service read-on
 
 ```sh
 export AGENTGATE_IMAGE=registry.example/agentgate@sha256:<digest>     # the CI-built image
-sudo -E agentgate up --compose-file compose.yaml --admin-user ada --target local
+sudo -E agentgate up --compose-file compose.yaml --admin-user ada --target local \
+  --broker-image registry.example/agentgate-broker@sha256:<digest> --mount-root /srv/repos
 ```
 
 - To build the image from this checkout instead: `AGENTGATE_IMAGE=agentgate-local:dev docker compose -f
@@ -671,9 +677,10 @@ sudo -E agentgate up --compose-file compose.yaml --admin-user ada --target local
   against the client address (120 a minute, then `429` without an audit row). A flood of unauthenticated requests,
   from anywhere, therefore cannot refuse an honest host's polls and fail its running launches `lost_host`.
 
-Then check everything from any machine with the CLI: `agentgate doctor --target NAME` reports the service, clock
-skew, token, target state, host key approval and local pin, heartbeat age, `bpf-lsm` and `brokered-secrets`, each
-with the exact fix.
+Then check everything from any machine with the CLI: `agentgate doctor --target NAME` reports the service, this
+machine's clock skew, token, target state, host key approval and local pin, heartbeat age, the host's clock skew at its
+last heartbeat, `bpf-lsm`, `brokered-secrets` (and why it is missing) and whether the host's own mount roots cover the
+service's, each with the exact fix.
 
 Not exercised here: `install.sh` as root on a real system (user creation, `systemctl daemon-reload`), both compose
 overrides (`docker compose config` included) and the image build, because the build sandbox has no Docker, no

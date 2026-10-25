@@ -40,6 +40,9 @@ type App struct {
 	Hostname func() (string, error)
 	Sleep    func(context.Context, time.Duration) error
 	Version  string
+	// HomeOf looks up an account's home directory (the account database);
+	// under sudo the configuration lives in root's, never where HOME points.
+	HomeOf func(uid int) (string, error)
 }
 
 type globals struct {
@@ -254,6 +257,9 @@ func (a *App) defaults() {
 	if a.Hostname == nil {
 		a.Hostname = os.Hostname
 	}
+	if a.HomeOf == nil {
+		a.HomeOf = accountHome
+	}
 	if a.Stdin == nil {
 		a.Stdin = strings.NewReader("")
 	}
@@ -389,9 +395,12 @@ type env struct {
 
 func (e *env) store() (store, error) {
 	if e.st.dir == "" {
-		dir, err := configDir(e.app.Getenv)
+		dir, note, err := configDir(e.app.Getenv, os.Geteuid(), e.app.HomeOf)
 		if err != nil {
 			return store{}, err
+		}
+		if note != "" && e.p != nil {
+			e.p.note("%s", note)
 		}
 		e.st = store{dir: dir, euid: os.Geteuid()}
 	}

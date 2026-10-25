@@ -29,8 +29,16 @@ AgentGate image (`compose.yaml`, `settings.json`, `Caddyfile`), as root:
 
 ```sh
 export AGENTGATE_IMAGE=registry.example/agentgate@sha256:<digest of the CI-built image>
-sudo -E agentgate up --compose-file /opt/agentgate/deployment/compose.yaml --admin-user ada --target local
+sudo -E agentgate up --compose-file /opt/agentgate/deployment/compose.yaml --admin-user ada --target local \
+  --broker-image registry.example/agentgate-broker@sha256:<digest> --mount-root /srv/repos
 ```
+
+Under `sudo`, `agentgate` keeps its configuration (the admin token, the CA, the host key pin) in root's own
+`/root/.config/agentgate`, taken from the account database, never in the directory `HOME` or `XDG_CONFIG_HOME` names:
+with `sudo -E` those still name the invoking user's home, a tree that user controls, and root writing token files there
+could be redirected by a link. `agentgate` says so when it sets `HOME` aside. To use the CLI as yourself afterwards, run
+`agentgate login` as yourself (copy the CA from `/root/.config/agentgate/ca-default.pem`) and `agentgate target pin`;
+or set `AGENTGATE_CONFIG_DIR` to a root-owned directory for the root run.
 
 `up` runs these steps, each of which reads the current state first and only does what is missing:
 
@@ -39,10 +47,10 @@ sudo -E agentgate up --compose-file /opt/agentgate/deployment/compose.yaml --adm
 | 1 service | `GET /healthz` at the service URL (default `https://localhost:9443`) | `docker compose run control job-key` to see if the state exists, `control init`, `control first-admin` (password on stdin), `docker compose up -d`, then copies the local TLS front's CA to `~/.config/agentgate/ca-CONTEXT.pem` | no (Docker access) |
 | 2 administrator credentials | the saved context's token is accepted and has `admin` | password sign-in, mints an `admin` API token (default 7 days), saves it as the context | no |
 | 3 target | `GET /targets/NAME` | creates the target or issues a fresh one-time enrollment token, kept only in memory | no |
-| 4 host agent | `agentgate-hostd status` | writes the token to a mode 0600 file in a private temporary directory, runs `agentgate-hostd install --service-url URL --token-file F [--ca-file CA]`, deletes the file | yes |
+| 4 host agent | `agentgate-hostd status` | writes the token to a mode 0600 file in a private temporary directory, runs `agentgate-hostd install --service-url URL --token-file F [--ca-file CA]` with the broker settings (`--broker-image`, `--broker-egress-network`, `--broker-uid`, `--broker-gid`, `--broker-pool`, `--secret-root`) and `--mount-root` you gave, deletes the file; a host agent already enrolled that lacks those broker settings is installed again without a token (it restarts only when no job is unfinished), and other mount roots are set with `agentgate-hostd mount-roots` | yes |
 | 5 host key approval | the target state, and the `host_key_id` this machine's agent prints (`agentgate-hostd status`, derived from its key file) | with `--approve`: once the service shows the same id, you type its last 8 characters (or the whole id), then `POST /targets/ID/approve-key`; without it: prints the approval command and waits (`--wait-timeout`, default 10 minutes) for an administrator; pins the key in `known-targets.json` | no |
 | 6 provision | the runtime | `agentgate-hostd provision --state-dir DIR` for the appliance runtime; nothing for docker-host; waits for the target to poll | appliance only |
-| 7 ready | | prints the UI address and next steps | |
+| 7 ready | the target's capabilities and, as root, `agentgate-hostd status` | prints the UI address and next steps, and warns when `brokered-secrets` is not available, saying why (no broker configured, the broker image or its Docker network missing, the appliance runtime) and what to run | |
 
 If a step fails, `up` names the step, the service's error code and message, and what to do; fix it and run the same
 command again. A step that needs root refuses without it, before minting any one-time token, and prints both the
@@ -50,6 +58,10 @@ command again. A step that needs root refuses without it, before minting any one
 step and needs no root. `--approve` is honoured only on an interactive terminal, only when the signed-in token is an
 administrator's, only after this machine's agent printed a host key id and the service shows the same one, only when
 you confirm that printed id at the prompt, and never with `--yes`. A fingerprint that differs between the host agent and the service stops `up` with exit code 13.
+The broker and mount root flags are checked before anything runs (a digest-pinned image, unprivileged ids, a Docker
+network name, a canonical private `/8` to `/24` pool, canonical paths; a broker flag without `--broker-image`, a broker
+with the appliance runtime, or either with `--skip-host` is a usage error) and reach `agentgate-hostd` only as
+argument vectors.
 
 For an existing service, skip the compose part: `agentgate up --service-url https://agentgate.example:9443`.
 
@@ -252,7 +264,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `login URL [--token-stdin] [--username U] [--role R] [--expires 30d] [--save-as NAME]` | `/auth/local/*`, `POST /api-tokens` | password sign-in mints a token; `--token-stdin` saves an existing one |
 | `logout [--revoke]` | `DELETE /api-tokens/{id}` with `--revoke` | removes the saved token; `--revoke` signs in and revokes it |
 | `whoami` | `GET /launch-spec-schema` | shows what the context recorded and checks the token is accepted |
-| `doctor [--target NAME] [--max-heartbeat-age D]` | `GET /healthz`, `GET /launch-spec-schema`, `GET /targets/{id}` | read-only checks, each `ok`, `warn` or `FAIL` with the exact fix: the service answers; the clock skew against the service's `Date` (fails beyond the 60 s the service allows hosts); the token; the target exists and is active; its host key is approved and pinned here; its last heartbeat is younger than three heartbeats; it reports `bpf-lsm` (the runtime's `kernel-bpf-lsm` preflight) and `brokered-secrets` with a published seal key. Exit 1 when anything failed |
+| `doctor [--target NAME] [--max-heartbeat-age D] [--state-dir DIR]` | `GET /healthz`, `GET /launch-spec-schema`, `GET /targets/{id}` | read-only checks, each `ok`, `warn` or `FAIL` with the exact fix: the service answers; this machine's clock skew against the service's `Date` (fails beyond the 60 s the service allows hosts); the token; the target exists and is active; its host key is approved and pinned here; its last heartbeat is younger than three heartbeats; the host's clock skew at that heartbeat (`host_clock_skew_ms`: warns beyond 15 s, fails beyond 60 s); it reports `bpf-lsm` (the runtime's `kernel-bpf-lsm` preflight) and `brokered-secrets` with a published seal key, and otherwise why not (run as root on the target's host, it reads `agentgate-hostd status` to say whether no broker is configured or its image or network is missing); the host's own mount roots cover the service's (`mount_roots_not_on_host`). Exit 1 when anything failed |
 | `context ls \| use NAME \| rm NAME` | none | local contexts |
 | `target ls` | `GET /targets` | with the local pin state |
 | `target add NAME [--token-file F]` | `POST /targets` | prints the one-time enrollment token once, or writes it to a new 0600 file |

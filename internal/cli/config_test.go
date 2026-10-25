@@ -158,3 +158,70 @@ func TestWhoamiAndLogout(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 }
+
+// Under sudo the configuration never follows HOME or XDG_CONFIG_HOME, which
+// the invoking user sets: root would create token files in a tree that user
+// controls. Root's own home comes from the account database instead.
+func TestConfigDirUnderSudoIgnoresTheCallersHome(t *testing.T) {
+	env := func(vars map[string]string) func(string) string { return func(k string) string { return vars[k] } }
+	rootHome := func(uid int) (string, error) {
+		if uid != 0 {
+			t.Fatalf("looked up uid %d", uid)
+		}
+		return "/root", nil
+	}
+	cases := []struct {
+		name string
+		vars map[string]string
+		euid int
+		dir  string
+		note bool
+	}{
+		{"plain user", map[string]string{"HOME": "/home/alice"}, 1000, "/home/alice/.config/agentgate", false},
+		{"plain user with XDG", map[string]string{"HOME": "/home/alice", "XDG_CONFIG_HOME": "/home/alice/.cfg"}, 1000, "/home/alice/.cfg/agentgate", false},
+		{"sudo -E keeps the caller's HOME", map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice", "SUDO_UID": "1000"}, 0, "/root/.config/agentgate", true},
+		{"sudo with an attacker's XDG", map[string]string{"HOME": "/root", "XDG_CONFIG_HOME": "/etc", "SUDO_USER": "alice", "SUDO_UID": "1000"}, 0, "/root/.config/agentgate", true},
+		{"sudo with root's HOME", map[string]string{"HOME": "/root", "SUDO_USER": "alice", "SUDO_UID": "1000"}, 0, "/root/.config/agentgate", false},
+		{"sudo with no HOME", map[string]string{"SUDO_UID": "1000"}, 0, "/root/.config/agentgate", true},
+		{"root itself", map[string]string{"HOME": "/srv/roothome", "SUDO_USER": "root", "SUDO_UID": "0"}, 0, "/srv/roothome/.config/agentgate", false},
+		{"sudo to a non-root user", map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice", "SUDO_UID": "1000"}, 1001, "/home/alice/.config/agentgate", false},
+		{"explicit directory under sudo", map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice", "AGENTGATE_CONFIG_DIR": "/root/agentgate"}, 0, "/root/agentgate", false},
+	}
+	for _, c := range cases {
+		dir, note, err := configDir(env(c.vars), c.euid, rootHome)
+		if err != nil || dir != c.dir || (note != "") != c.note {
+			t.Errorf("%s: %q %q %v", c.name, dir, note, err)
+		}
+	}
+	// No usable account entry: refuse, and say how to choose a directory.
+	for _, bad := range []func(int) (string, error){
+		func(int) (string, error) { return "", os.ErrNotExist },
+		func(int) (string, error) { return "relative/home", nil },
+		func(int) (string, error) { return "/root/../home/alice", nil },
+	} {
+		_, _, err := configDir(env(map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice"}), 0, bad)
+		if err == nil || !strings.Contains(err.Error(), "AGENTGATE_CONFIG_DIR") {
+			t.Errorf("an unusable account home: %v", err)
+		}
+	}
+	if _, _, err := configDir(env(map[string]string{"AGENTGATE_CONFIG_DIR": "relative"}), 0, rootHome); err == nil {
+		t.Fatal("a relative AGENTGATE_CONFIG_DIR was accepted")
+	}
+}
+
+// The note reaches standard error when a command runs under sudo.
+func TestSudoNoteIsShown(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("the sudo path applies to root only")
+	}
+	dir := t.TempDir()
+	var stderr strings.Builder
+	app := &App{Stdout: &strings.Builder{}, Stderr: &stderr, Getenv: func(k string) string {
+		return map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice", "SUDO_UID": "1000"}[k]
+	}, HomeOf: func(int) (string, error) { return dir, nil }}
+	e := &env{app: app, g: &globals{}, p: &printer{out: app.Stdout, err: app.Stderr}}
+	st, err := e.store()
+	if err != nil || st.dir != filepath.Join(dir, ".config", "agentgate") || !strings.Contains(stderr.String(), "not the directory HOME") {
+		t.Fatalf("store %q %v, stderr %q", st.dir, err, stderr.String())
+	}
+}

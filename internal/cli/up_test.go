@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,6 +72,10 @@ type upWorld struct {
 	tokenSeen  string
 	tokenMode  os.FileMode
 	adminStdin []byte
+	// What this machine's fake agentgate-hostd was installed with.
+	hostBroker map[string]any
+	hostRoots  []string
+	secretRoot string
 }
 
 func newUpWorld(t *testing.T) *upWorld {
@@ -143,16 +148,44 @@ func newUpWorld(t *testing.T) *upWorld {
 			if !w.installed {
 				return Result{Exit: 1, Stderr: []byte("state directory missing")}
 			}
-			raw, _ := json.Marshal(map[string]any{"enrolled": true, "target_id": w.target.ID, "host_key_id": w.hostKey, "unfinished_jobs": []string{}})
+			status := map[string]any{"enrolled": true, "target_id": w.target.ID, "host_key_id": w.hostKey, "unfinished_jobs": []string{},
+				"mount_roots": w.hostRoots, "secret_root": firstNonEmpty(w.secretRoot, "/var/lib/agentgate/secrets"), "broker": w.hostBroker}
+			raw, _ := json.Marshal(status)
 			return Result{Stdout: raw}
+		case strings.HasPrefix(args, "mount-roots"):
+			w.hostRoots = nil
+			for i, a := range c.Args {
+				if a == "--root" {
+					w.hostRoots = append(w.hostRoots, c.Args[i+1])
+				}
+			}
+			return Result{Stdout: []byte(`{"mount_roots":[]}`)}
 		case strings.HasPrefix(args, "install"):
+			value := func(name string) string {
+				for i, a := range c.Args {
+					if a == name && i+1 < len(c.Args) {
+						return c.Args[i+1]
+					}
+				}
+				return ""
+			}
 			for i, a := range c.Args {
 				if a == "--token-file" {
 					raw, _ := os.ReadFile(c.Args[i+1])
 					info, _ := os.Stat(c.Args[i+1])
 					w.tokenSeen, w.tokenMode = strings.TrimSpace(string(raw)), info.Mode().Perm()
 				}
+				if a == "--mount-root" {
+					w.hostRoots = append(w.hostRoots, c.Args[i+1])
+				}
 			}
+			if image := value("--broker-image"); image != "" {
+				uid, gid := 10002, 10002
+				fmt.Sscan(firstNonEmpty(value("--broker-uid"), "10002"), &uid)
+				fmt.Sscan(firstNonEmpty(value("--broker-gid"), "10002"), &gid)
+				w.hostBroker = map[string]any{"image": image, "uid": uid, "gid": gid, "egress_network": firstNonEmpty(value("--broker-egress-network"), "agentgate-egress"), "pool": value("--broker-pool")}
+			}
+			w.secretRoot = firstNonEmpty(value("--secret-root"), w.secretRoot)
 			w.installed = true
 			return Result{Stdout: []byte("enrolled as target " + w.target.ID + " (local)\nhost key " + hostKey + "\nagentgate-hostd is running\n")}
 		}
@@ -361,5 +394,118 @@ func TestUpApprovesOnlyTheIDTheHostAgentPrinted(t *testing.T) {
 	}
 	if len(w.h.api.requestsTo("POST /api/v1/targets/{id}/approve-key")) != 0 {
 		t.Fatal("approved a key the host agent never printed")
+	}
+}
+
+const brokerImage = "registry.example/agentgate-broker@sha256:" + "2222222222222222222222222222222222222222222222222222222222222222"
+
+// up passes the broker and mount root settings to agentgate-hostd install,
+// reconfigures an enrolled host that lacks them, and says why brokered
+// secrets are unavailable.
+func TestUpForwardsBrokerAndMountRootSettings(t *testing.T) {
+	w := newUpWorld(t)
+	flags := []string{"--broker-image", brokerImage, "--broker-egress-network", "egress-1", "--broker-uid", "10005", "--broker-gid", "10006",
+		"--broker-pool", "172.31.0.0/16", "--secret-root", "/srv/agentgate-secrets", "--mount-root", "/srv/repos", "--mount-root", "/srv/data"}
+	r := w.up(upPassword+"\n", flags...)
+	if r.code != 0 {
+		t.Fatalf("%v", r)
+	}
+	var install string
+	for _, c := range w.runner.commands() {
+		if strings.HasPrefix(c, "agentgate-hostd install") {
+			install = c
+		}
+	}
+	for _, want := range []string{"--token-file ", "--broker-image " + brokerImage, "--broker-egress-network egress-1", "--broker-uid 10005", "--broker-gid 10006",
+		"--broker-pool 172.31.0.0/16", "--secret-root /srv/agentgate-secrets", "--mount-root /srv/repos --mount-root /srv/data"} {
+		if !strings.Contains(install, want) {
+			t.Fatalf("install %q lacks %q", install, want)
+		}
+	}
+	// The sample target does not report brokered-secrets: up says why, from the local status.
+	if !strings.Contains(r.stderr, "brokered secrets are not available on local") || !strings.Contains(r.stderr, "configured with broker image "+brokerImage) ||
+		!strings.Contains(r.stderr, "docker network inspect egress-1") {
+		t.Fatalf("no broker report: %s", r.stderr)
+	}
+	// The same settings again: nothing is reinstalled.
+	before := len(w.runner.calls)
+	if r = w.up("", flags...); r.code != 0 {
+		t.Fatalf("re-run %v", r)
+	}
+	if again := w.runner.commands()[before:]; len(again) != 1 || !strings.HasPrefix(again[0], "agentgate-hostd status") {
+		t.Fatalf("matching settings reinstalled: %q", again)
+	}
+	// Another broker image: install again, without a token (the host stays enrolled).
+	other := strings.Replace(brokerImage, "2222", "3333", 1)
+	before = len(w.runner.calls)
+	if r = w.up("", "--broker-image", other); r.code != 0 {
+		t.Fatalf("%v", r)
+	}
+	again := w.runner.commands()[before:]
+	if len(again) != 3 || !strings.HasPrefix(again[1], "agentgate-hostd install --service-url") || strings.Contains(again[1], "--token-file") ||
+		!strings.Contains(again[1], "--broker-image "+other) || len(w.h.api.requestsTo("POST /api/v1/targets/{id}/enrollment")) != 0 {
+		t.Fatalf("reconfiguration %q", again)
+	}
+	// Other mount roots only: agentgate-hostd mount-roots, no reinstall.
+	before = len(w.runner.calls)
+	if r = w.up("", "--mount-root", "/opt/projects"); r.code != 0 {
+		t.Fatalf("%v", r)
+	}
+	again = w.runner.commands()[before:]
+	if len(again) != 3 || again[1] != "agentgate-hostd mount-roots --state-dir "+defaultHostdState+" --root /opt/projects" || strings.Join(w.hostRoots, ",") != "/opt/projects" {
+		t.Fatalf("mount roots %q %v", again, w.hostRoots)
+	}
+	// A target that reports brokered-secrets: nothing to warn about.
+	w.target.Capabilities = append(w.target.Capabilities, "brokered-secrets")
+	if r = w.up(""); r.code != 0 || strings.Contains(r.stderr, "brokered secrets are not available") {
+		t.Fatalf("%v", r)
+	}
+	// --json carries the same report.
+	w.target.Capabilities = []string{"docker"}
+	r = w.up("", "--json")
+	var out map[string]any
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &out) != nil {
+		t.Fatalf("%v", r)
+	}
+	if b, _ := out["brokered_secrets"].(map[string]any); b == nil || b["available"] != false || !strings.Contains(fmt.Sprint(b["fix"]), "docker image inspect "+other) {
+		t.Fatalf("json report %v", out["brokered_secrets"])
+	}
+}
+
+func TestUpWithoutABrokerSaysHowToAddOne(t *testing.T) {
+	w := newUpWorld(t)
+	r := w.up(upPassword + "\n")
+	if r.code != 0 || !strings.Contains(r.stderr, "installed without a credential broker (--broker-image)") || !strings.Contains(r.stderr, "agentgate up --broker-image") {
+		t.Fatalf("%v", r)
+	}
+}
+
+func TestUpRefusesUnsafeHostSettings(t *testing.T) {
+	w := newUpWorld(t)
+	cases := map[string][]string{
+		"uid without image":       {"--broker-uid", "10003"},
+		"network without image":   {"--broker-egress-network", "egress"},
+		"pool without image":      {"--broker-pool", "172.31.0.0/16"},
+		"mutable image":           {"--broker-image", "agentgate-broker:latest"},
+		"root uid":                {"--broker-image", brokerImage, "--broker-uid", "-1"},
+		"host network":            {"--broker-image", brokerImage, "--broker-egress-network", "host"},
+		"odd network":             {"--broker-image", brokerImage, "--broker-egress-network", "a b"},
+		"public pool":             {"--broker-image", brokerImage, "--broker-pool", "8.8.0.0/16"},
+		"uncanonical pool":        {"--broker-image", brokerImage, "--broker-pool", "172.31.1.0/16"},
+		"relative secret root":    {"--secret-root", "srv/secrets"},
+		"dot dot secret root":     {"--secret-root", "/srv/../etc"},
+		"protected mount root":    {"--mount-root", "/etc"},
+		"home mount root":         {"--mount-root", "/home/alice"},
+		"dot dot mount root":      {"--mount-root", "/srv/data/../../etc"},
+		"appliance with a broker": {"--runtime", "appliance", "--broker-image", brokerImage},
+		"skip host with settings": {"--skip-host", "--mount-root", "/srv/data"},
+	}
+	for name, extra := range cases {
+		if r := w.up(upPassword+"\n", extra...); r.code != ExitUsage {
+			t.Errorf("%s: %v", name, r)
+		}
+	}
+	if len(w.runner.calls) != 0 {
+		t.Fatalf("a refused command line ran %q", w.runner.commands())
 	}
 }

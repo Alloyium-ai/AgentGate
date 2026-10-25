@@ -11,12 +11,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"alloyium.local/kernel-poc/internal/hostproto"
 )
 
 // agentgate up brings this machine online end to end. Every step first reads
@@ -48,6 +52,88 @@ type upOptions struct {
 	source, stateDir, hostd, tokenTTL string
 	approve, skipHost                 bool
 	waitTimeout                       time.Duration
+	broker                            brokerFlags
+	mountRoots                        multiFlag
+}
+
+// brokerFlags are the credential broker settings up passes to
+// agentgate-hostd install; zero values are not passed (the host agent's
+// defaults apply).
+type brokerFlags struct {
+	image, egress, pool, secretRoot string
+	uid, gid                        int
+}
+
+var dockerNetworkName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$`)
+
+// check refuses settings agentgate-hostd would refuse, before anything runs.
+func (b brokerFlags) check() error {
+	if b.image == "" {
+		for _, f := range []struct {
+			name string
+			set  bool
+		}{{"--broker-uid", b.uid != 0}, {"--broker-gid", b.gid != 0}, {"--broker-egress-network", b.egress != ""}, {"--broker-pool", b.pool != ""}} {
+			if f.set {
+				return usageError("%s configures the credential broker; it needs --broker-image NAME@sha256:<digest>", f.name)
+			}
+		}
+	} else if !hostproto.ImagePattern.MatchString(b.image) {
+		return usageError("--broker-image must be a digest-pinned image reference (name@sha256:<64 hex>)")
+	}
+	if b.uid < 0 || b.uid > 1<<31-2 || b.gid < 0 || b.gid > 1<<31-2 {
+		return usageError("--broker-uid and --broker-gid must be unprivileged ids (1 to 2147483646)")
+	}
+	if b.egress != "" && (!dockerNetworkName.MatchString(b.egress) || b.egress == "host" || b.egress == "none") {
+		return usageError("--broker-egress-network must name a Docker bridge network")
+	}
+	if b.pool != "" {
+		p, err := netip.ParsePrefix(b.pool)
+		if err != nil || p.Masked() != p || !p.Addr().Is4() || !p.Addr().IsPrivate() || p.Bits() < 8 || p.Bits() > 24 || p.String() != b.pool {
+			return usageError("--broker-pool must be a canonical private IPv4 prefix of /8 to /24")
+		}
+	}
+	if b.secretRoot != "" && (!filepath.IsAbs(b.secretRoot) || filepath.Clean(b.secretRoot) != b.secretRoot || b.secretRoot == "/") {
+		return usageError("--secret-root must be a canonical absolute path")
+	}
+	return nil
+}
+
+// args are the install flags for these settings.
+func (b brokerFlags) args() []string {
+	var out []string
+	if b.image != "" {
+		out = append(out, "--broker-image", b.image)
+	}
+	if b.uid != 0 {
+		out = append(out, "--broker-uid", strconv.Itoa(b.uid))
+	}
+	if b.gid != 0 {
+		out = append(out, "--broker-gid", strconv.Itoa(b.gid))
+	}
+	if b.egress != "" {
+		out = append(out, "--broker-egress-network", b.egress)
+	}
+	if b.pool != "" {
+		out = append(out, "--broker-pool", b.pool)
+	}
+	if b.secretRoot != "" {
+		out = append(out, "--secret-root", b.secretRoot)
+	}
+	return out
+}
+
+// differs reports whether the installed host agent's settings lack what was
+// asked for.
+func (b brokerFlags) differs(s *hostdStatus) bool {
+	if b.secretRoot != "" && b.secretRoot != s.SecretRoot {
+		return true
+	}
+	if b.image == "" {
+		return false
+	}
+	have := s.Broker
+	return have == nil || have.Image != b.image || b.uid != 0 && have.UID != b.uid || b.gid != 0 && have.GID != b.gid ||
+		b.egress != "" && have.EgressNetwork != b.egress || b.pool != "" && have.Pool != b.pool
 }
 
 func init() {
@@ -70,6 +156,12 @@ func init() {
   --wait-timeout DUR     how long to wait for another administrator's approval (default 10m)
   --token-ttl DUR        lifetime of the admin API token up saves (default 7d)
   --skip-host            stop after the service, admin and target steps (no root needed)
+  --broker-image REF     digest-pinned agentgate-broker image: enables brokered secrets on this host
+  --broker-egress-network NET  Docker network the broker reaches upstreams on (default agentgate-egress)
+  --broker-uid N, --broker-gid N  the broker's unprivileged identity (default 10002)
+  --broker-pool CIDR     private range of per-launch broker networks (default 172.30.0.0/16)
+  --secret-root DIR      the host's secret store (default /var/lib/agentgate/secrets)
+  --mount-root PATH      a host folder launches on this host may mount (repeatable; this host's own list)
 ` + credentialHelp + `
 Steps that need root (installing the host agent, appliance provisioning) refuse to run without it
 and print the exact command to run instead.`,
@@ -91,6 +183,13 @@ and print the exact command to run instead.`,
 			fs.BoolVar(&o.approve, "approve", false, "")
 			fs.BoolVar(&o.skipHost, "skip-host", false, "")
 			fs.DurationVar(&o.waitTimeout, "wait-timeout", defaultApproveWait, "")
+			fs.StringVar(&o.broker.image, "broker-image", "", "")
+			fs.StringVar(&o.broker.egress, "broker-egress-network", "", "")
+			fs.IntVar(&o.broker.uid, "broker-uid", 0, "")
+			fs.IntVar(&o.broker.gid, "broker-gid", 0, "")
+			fs.StringVar(&o.broker.pool, "broker-pool", "", "")
+			fs.StringVar(&o.broker.secretRoot, "secret-root", "", "")
+			fs.Var(&o.mountRoots, "mount-root", "")
 			return func(ctx context.Context, e *env, args, _ []string) error {
 				if len(args) != 0 {
 					return usageError("up takes flags only (agentgate up --help)")
@@ -106,6 +205,20 @@ and print the exact command to run instead.`,
 				}
 				if o.approve && e.g.yes {
 					return usageError("--approve never takes --yes: approving a host key needs an interactive confirmation")
+				}
+				if err := o.broker.check(); err != nil {
+					return err
+				}
+				if o.broker.image != "" && o.runtime == "appliance" {
+					return usageError("the appliance runtime does not run credential brokers; --broker-image needs --runtime docker-host")
+				}
+				if len(o.mountRoots) > 0 {
+					if err := hostproto.CheckMountRoots([]string(o.mountRoots)); err != nil {
+						return usageError("--mount-root: %s", strings.TrimPrefix(err.Error(), "hostproto: "))
+					}
+				}
+				if o.skipHost && (o.broker.image != "" || o.broker.secretRoot != "" || len(o.mountRoots) > 0) {
+					return usageError("--skip-host installs no host agent, so the broker and mount root flags would do nothing")
 				}
 				return (&upRun{e: e, o: o}).run(ctx)
 			}
@@ -130,6 +243,7 @@ type upRun struct {
 	// reports (agentgate-hostd status): the out-of-band anchor a pin needs.
 	localKey    string
 	localTarget string
+	local       *hostdStatus
 }
 
 type upStep struct {
@@ -574,9 +688,47 @@ func (u *upRun) targetStep(ctx context.Context) error {
 
 // hostdStatus is the part of agentgate-hostd status the CLI reads.
 type hostdStatus struct {
-	Enrolled  bool   `json:"enrolled"`
-	TargetID  string `json:"target_id"`
-	HostKeyID string `json:"host_key_id"`
+	Enrolled        bool     `json:"enrolled"`
+	TargetID        string   `json:"target_id"`
+	HostKeyID       string   `json:"host_key_id"`
+	Runtime         string   `json:"runtime"`
+	MountRoots      []string `json:"mount_roots"`
+	MountRootsError string   `json:"mount_roots_error"`
+	SecretRoot      string   `json:"secret_root"`
+	Broker          *struct {
+		Image         string `json:"image"`
+		UID           int    `json:"uid"`
+		GID           int    `json:"gid"`
+		EgressNetwork string `json:"egress_network"`
+		Pool          string `json:"pool"`
+	} `json:"broker"`
+}
+
+// brokerReport says whether a target can run launches with secrets and,
+// when it cannot, why and what to do. local is this machine's own
+// agentgate-hostd status when it is that target's host (nil otherwise).
+func brokerReport(t Target, local *hostdStatus) (bool, string, string) {
+	for _, c := range t.Capabilities {
+		if c == hostproto.CapabilityBrokeredSecrets {
+			return true, "the host runs a credential broker per launch", ""
+		}
+	}
+	for _, c := range t.Capabilities {
+		if c == hostproto.CapabilityAppliance {
+			return false, "the appliance runtime does not run credential brokers, so launches with secrets are refused", "use a docker-host target for launches with secrets"
+		}
+	}
+	switch {
+	case local != nil && local.Broker == nil:
+		return false, "this host's agentgate-hostd was installed without a credential broker (--broker-image), so launches with secrets are refused",
+			"sudo agentgate up --broker-image agentgate-broker@sha256:<digest> [--broker-egress-network NET] (or agentgate-hostd install ... --broker-image ...; see docs/BROKER.md)"
+	case local != nil:
+		return false, fmt.Sprintf("agentgate-hostd is configured with broker image %s and egress network %s but does not report brokered-secrets: the image is not on this host, the network does not exist, or the secret store %s is unusable",
+				local.Broker.Image, local.Broker.EgressNetwork, local.SecretRoot),
+			"docker image inspect " + local.Broker.Image + "; docker network inspect " + local.Broker.EgressNetwork + " (docker network create " + local.Broker.EgressNetwork + "); then sudo systemctl restart agentgate-hostd"
+	}
+	return false, "the host does not report brokered-secrets, so launches with secrets are refused (it does only with --broker-image, the broker image and its egress network present, and its secret store usable)",
+		"on the host: sudo agentgate-hostd status (broker: null means not configured), then agentgate up --broker-image ... or agentgate-hostd install ... --broker-image ... (see docs/BROKER.md)"
 }
 
 func (u *upRun) readHostdStatus(ctx context.Context) (*hostdStatus, error) {
@@ -637,9 +789,9 @@ func (u *upRun) hostAgent(ctx context.Context) error {
 			if s.TargetID != u.target.ID {
 				return &Error{Exit: ExitConflict, Code: "host_enrolled_elsewhere", Message: "This machine's host agent is enrolled as target " + s.TargetID + ", not " + u.target.Name + " (" + u.target.ID + ").", Hint: "Use --target with that target's name, or uninstall the host agent first."}
 			}
-			u.localKey, u.localTarget = s.HostKeyID, s.TargetID
+			u.localKey, u.localTarget, u.local = s.HostKeyID, s.TargetID, s
 			u.say("agentgate-hostd is installed and enrolled as target %s", u.target.Name)
-			return nil
+			return u.reconfigureHost(ctx, s)
 		}
 	}
 	if u.token == "" {
@@ -662,18 +814,7 @@ func (u *upRun) hostAgent(ctx context.Context) error {
 	if err = writeTokenFile(tokenFile, u.token); err != nil {
 		return err
 	}
-	args := []string{"install", "--service-url", u.url.String(), "--token-file", tokenFile, "--runtime", u.o.runtime, "--state-dir", u.o.stateDir}
-	if u.opts.caFile != "" {
-		args = append(args, "--ca-file", u.opts.caFile)
-	}
-	if u.url.Scheme == "http" {
-		args = append(args, "--allow-loopback-http")
-	}
-	for flagName, v := range map[string]string{"--instance": u.o.instance, "--appliance-state": u.o.applianceState, "--source": u.o.source} {
-		if v != "" {
-			args = append(args, flagName, v)
-		}
-	}
+	args := u.installArgs(tokenFile)
 	u.say("installing the host agent: %s %s", u.hostd, strings.Join(args, " "))
 	res, err := u.runCmd(ctx, u.hostd, args, nil, true)
 	os.Remove(tokenFile)
@@ -687,12 +828,77 @@ func (u *upRun) hostAgent(ctx context.Context) error {
 	// The host key id comes from agentgate-hostd status, which derives it
 	// from the key file itself; the install output is shown, never parsed.
 	if s, err := u.readHostdStatus(ctx); err == nil && s.HostKeyID != "" {
-		u.localKey, u.localTarget = s.HostKeyID, s.TargetID
+		u.localKey, u.localTarget, u.local = s.HostKeyID, s.TargetID, s
 	}
 	if u.localKey != "" {
 		u.say("this machine's host key: %s", u.localKey)
 	} else {
 		u.say("agentgate-hostd did not print its host key fingerprint")
+	}
+	return nil
+}
+
+// installArgs is agentgate-hostd install for this machine: the service, the
+// runtime, the broker and the mount roots; tokenFile is empty when the host
+// is already enrolled (install then reconfigures it and spends no token).
+func (u *upRun) installArgs(tokenFile string) []string {
+	args := []string{"install", "--service-url", u.url.String()}
+	if tokenFile != "" {
+		args = append(args, "--token-file", tokenFile)
+	}
+	args = append(args, "--runtime", u.o.runtime, "--state-dir", u.o.stateDir)
+	if u.opts.caFile != "" {
+		args = append(args, "--ca-file", u.opts.caFile)
+	}
+	if u.url.Scheme == "http" {
+		args = append(args, "--allow-loopback-http")
+	}
+	for _, kv := range [][2]string{{"--instance", u.o.instance}, {"--appliance-state", u.o.applianceState}, {"--source", u.o.source}} {
+		if kv[1] != "" {
+			args = append(args, kv[0], kv[1])
+		}
+	}
+	args = append(args, u.o.broker.args()...)
+	for _, root := range u.o.mountRoots {
+		args = append(args, "--mount-root", root)
+	}
+	return args
+}
+
+// reconfigureHost applies broker settings or mount roots that an enrolled
+// host agent lacks: install again without a token for the broker (it
+// restarts the agent only when no job is unfinished), mount-roots for the
+// roots (read per job; no restart).
+func (u *upRun) reconfigureHost(ctx context.Context, s *hostdStatus) error {
+	switch {
+	case u.o.broker.differs(s):
+		args := u.installArgs("")
+		u.say("the host agent lacks the requested broker settings; reconfiguring it: %s %s", u.hostd, strings.Join(args, " "))
+		res, err := u.runCmd(ctx, u.hostd, args, nil, true)
+		if err != nil {
+			return err
+		}
+		if res.Exit != 0 {
+			return &Error{Exit: ExitFailure, Code: "hostd_install_failed", Message: "agentgate-hostd install failed: " + tail(append(res.Stdout, res.Stderr...)), Hint: "Fix what it names; the host stays enrolled."}
+		}
+	case len(u.o.mountRoots) > 0 && strings.Join(s.MountRoots, "\x00") != strings.Join(u.o.mountRoots, "\x00"):
+		args := []string{"mount-roots", "--state-dir", u.o.stateDir}
+		for _, root := range u.o.mountRoots {
+			args = append(args, "--root", root)
+		}
+		u.say("setting this host's mount roots: %s %s", u.hostd, strings.Join(args, " "))
+		res, err := u.runCmd(ctx, u.hostd, args, nil, false)
+		if err != nil {
+			return err
+		}
+		if res.Exit != 0 {
+			return &Error{Exit: ExitFailure, Code: "mount_roots_failed", Message: "agentgate-hostd mount-roots failed: " + tail(append(res.Stdout, res.Stderr...)), Hint: "Fix what it names."}
+		}
+	default:
+		return nil
+	}
+	if fresh, err := u.readHostdStatus(ctx); err == nil {
+		u.local = fresh
 	}
 	return nil
 }
@@ -857,8 +1063,21 @@ func (u *upRun) provision(ctx context.Context) error {
 
 func (u *upRun) ready(ctx context.Context) error {
 	out := map[string]any{"ui": u.url.String(), "context": u.ctxName, "target": u.target, "kernel_verified": false}
+	var available bool
+	var why, fix string
+	if u.target.ID != "" && u.target.State == "active" {
+		local := u.local
+		if local != nil && local.TargetID != u.target.ID {
+			local = nil
+		}
+		available, why, fix = brokerReport(u.target, local)
+		out["brokered_secrets"] = map[string]any{"available": available, "detail": why, "fix": fix}
+	}
 	if u.e.g.json {
 		return u.e.p.value(out)
+	}
+	if why != "" && !available {
+		u.e.p.warn("brokered secrets are not available on %s: %s; to fix: %s", u.target.Name, why, fix)
 	}
 	u.say("AgentGate is up.")
 	u.say("  UI:      %s", u.url)

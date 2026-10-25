@@ -4,6 +4,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -40,12 +41,15 @@ func init() {
 	register(&command{name: "doctor", summary: "Check the service, the token and a target, and say exactly what to fix.",
 		help: `  --target NAME        the target to check (default local)
   --max-heartbeat-age D  how old the last heartbeat may be (default: 3 heartbeats)
-Checks: the service answers; the clocks agree; the token is accepted; the target exists, its host key is
-approved and pinned here, its host agent polls, and it reports the kernel-bpf-lsm (bpf-lsm) and
-brokered-secrets capabilities and a seal key. It changes nothing. Exit 0 when nothing failed, 1 otherwise.`,
+  --state-dir DIR      this machine's host agent state, read as root to explain brokered-secrets (default /var/lib/agentgate-hostd)
+Checks: the service answers; this machine's clock and the host's agree with the service's; the token is
+accepted; the target exists, its host key is approved and pinned here, its host agent polls, it reports
+the kernel-bpf-lsm (bpf-lsm) and brokered-secrets capabilities and a seal key, and its own mount roots
+cover the service's. It changes nothing. Exit 0 when nothing failed, 1 otherwise.`,
 		setup: func(fs *flag.FlagSet) runner {
 			target := fs.String("target", "local", "")
 			maxAge := fs.Duration("max-heartbeat-age", 0, "")
+			stateDir := fs.String("state-dir", defaultHostdState, "")
 			return func(ctx context.Context, e *env, args, _ []string) error {
 				if len(args) != 0 {
 					return usageError("doctor takes no arguments; name the target with --target")
@@ -53,13 +57,13 @@ brokered-secrets capabilities and a seal key. It changes nothing. Exit 0 when no
 				if *maxAge < 0 {
 					return usageError("--max-heartbeat-age is a positive duration")
 				}
-				return e.doctor(ctx, *target, *maxAge)
+				return e.doctor(ctx, *target, *maxAge, *stateDir)
 			}
 		}})
 }
 
-func (e *env) doctor(ctx context.Context, target string, maxAge time.Duration) error {
-	checks := e.doctorChecks(ctx, target, maxAge)
+func (e *env) doctor(ctx context.Context, target string, maxAge time.Duration, stateDir string) error {
+	checks := e.doctorChecks(ctx, target, maxAge, stateDir)
 	failed := 0
 	for _, c := range checks {
 		if c.Status == checkFail {
@@ -88,7 +92,7 @@ func (e *env) doctor(ctx context.Context, target string, maxAge time.Duration) e
 	return nil
 }
 
-func (e *env) doctorChecks(ctx context.Context, ref string, maxAge time.Duration) []doctorCheck {
+func (e *env) doctorChecks(ctx context.Context, ref string, maxAge time.Duration, stateDir string) []doctorCheck {
 	var out []doctorCheck
 	add := func(name, status, detail, fix string) {
 		out = append(out, doctorCheck{Name: name, Status: status, Detail: detail, Fix: fix})
@@ -240,7 +244,37 @@ func (e *env) doctorChecks(ctx context.Context, ref string, maxAge time.Duration
 		}
 	}
 
-	// 7. Capabilities: kernel enforcement and brokered secrets.
+	// 7. The host's clock, as its last heartbeat showed it. The host signs
+	// every request with its own time and the service refuses one beyond
+	// hostproto.MaxClockSkew, so a host whose clock drifts that far stops
+	// polling altogether (stale_request) and the heartbeat check fails.
+	if t.HostClockSkewMS == nil {
+		add("host clock", checkWarn, "no heartbeat has reported the host's clock yet", "wait for the host agent's next poll (or update agentgate-hostd and the service)")
+	} else {
+		skew := time.Duration(*t.HostClockSkewMS) * time.Millisecond
+		ahead := "ahead of"
+		if skew < 0 {
+			skew, ahead = -skew, "behind"
+		}
+		text := fmt.Sprintf("the host's clock was %s %s the service's at its last heartbeat", skew.Round(time.Second), ahead)
+		if at, perr := time.Parse(time.RFC3339Nano, t.HostClockMeasuredAt); perr == nil {
+			text += " (" + age(t.HostClockMeasuredAt, e.app.Now()) + ")"
+			if e.app.Now().Sub(at) > limit {
+				text += "; the host has not polled since, which a skew beyond " + hostproto.MaxClockSkew.String() + " would cause"
+			}
+		}
+		fix := "on the host: timedatectl set-ntp true; chronyc tracking (the service refuses host requests beyond " + hostproto.MaxClockSkew.String() + ")"
+		switch {
+		case skew > hostproto.MaxClockSkew:
+			add("host clock", checkFail, text, fix)
+		case skew > doctorSkewWarn:
+			add("host clock", checkWarn, text, fix)
+		default:
+			add("host clock", checkOK, text, "")
+		}
+	}
+
+	// 8. Capabilities: kernel enforcement and brokered secrets.
 	has := map[string]bool{}
 	for _, cap := range t.Capabilities {
 		has[cap] = true
@@ -251,8 +285,8 @@ func (e *env) doctorChecks(ctx context.Context, ref string, maxAge time.Duration
 		add("kernel-bpf-lsm", checkFail, "the host does not report bpf-lsm, so it fails every launch closed",
 			"boot the host with BPF LSM (CONFIG_BPF_LSM=y and bpf in lsm=, check /sys/kernel/security/lsm), run poc/ssh-diagnostic/verify-kernel.sh, then systemctl restart agentgate-hostd")
 	}
-	if has[hostproto.CapabilityBrokeredSecrets] {
-		add("brokered-secrets", checkOK, "the host runs a credential broker per launch", "")
+	if available, why, fix := brokerReport(t, e.localHostd(ctx, stateDir, t.ID)); available {
+		add("brokered-secrets", checkOK, why, "")
 		if t.SealKeyID == "" {
 			add("seal key", checkFail, "the host has not published a signed seal key, so no secret can be sealed to it",
 				"update agentgate-hostd on the host and wait for its next poll")
@@ -260,10 +294,46 @@ func (e *env) doctorChecks(ctx context.Context, ref string, maxAge time.Duration
 			add("seal key", checkOK, "published "+t.SealKeyID[:min(16, len(t.SealKeyID))]+"... until "+t.SealKeyNotAfter, "")
 		}
 	} else {
-		add("brokered-secrets", checkWarn, "the host does not run brokers, so launches with secrets are refused",
-			"on the host: agentgate-hostd install ... --broker-image agentgate-broker@sha256:<digest> (see docs/BROKER.md)")
+		add("brokered-secrets", checkWarn, why, fix)
+	}
+
+	// 9. Mount roots: a host folder mounts only inside the service's roots
+	// for the target and inside the host operator's own.
+	service := joinOr(t.MountRoots, "none")
+	switch {
+	case t.HostMountRoots == nil:
+		add("mount roots", checkWarn, "the host does not report mount roots of its own (an agentgate-hostd older than them), so only the service's list ("+service+") limits host folders",
+			"update agentgate-hostd on the host, then list the folders there: sudo agentgate-hostd mount-roots --root PATH")
+	case len(t.MountRootsNotOnHost) > 0:
+		add("mount roots", checkWarn, "the host refuses mounts in "+strings.Join(t.MountRootsNotOnHost, ", ")+" (the service allows "+service+", the host "+joinOr(*t.HostMountRoots, "none")+")",
+			"on the host: sudo agentgate-hostd mount-roots --root PATH ... (or narrow the service's list: agentgate target mount-roots "+name+" --root PATH)")
+	case len(t.MountRoots) == 0:
+		add("mount roots", checkOK, "no host folder may be mounted: the service lists no mount roots for "+name+" (the host allows "+joinOr(*t.HostMountRoots, "none")+")", "")
+	default:
+		add("mount roots", checkOK, "launches may mount folders inside "+service+" (the host allows "+joinOr(*t.HostMountRoots, "none")+")", "")
 	}
 	return out
+}
+
+// localHostd reads this machine's own agentgate-hostd status when doctor runs
+// as root and that agent is the target's host; nil otherwise.
+func (e *env) localHostd(ctx context.Context, stateDir, targetID string) *hostdStatus {
+	if e.app.Runner == nil || e.app.Euid() != 0 {
+		return nil
+	}
+	path, err := e.app.Runner.LookPath("agentgate-hostd")
+	if err != nil {
+		path = "/usr/local/sbin/agentgate-hostd"
+	}
+	res, err := e.app.Runner.Run(ctx, Cmd{Path: path, Args: []string{"status", "--state-dir", stateDir}})
+	if err != nil || res.Exit != 0 {
+		return nil
+	}
+	var s hostdStatus
+	if json.Unmarshal(res.Stdout, &s) != nil || !s.Enrolled || s.TargetID != targetID {
+		return nil
+	}
+	return &s
 }
 
 func firstNonEmpty(values ...string) string {
