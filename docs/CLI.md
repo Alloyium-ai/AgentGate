@@ -9,13 +9,16 @@ of its own. Anything the CLI does, the UI can do, and the reverse.
 Kernel enforcement has not been verified on a BPF LSM kernel. Every plan and launch the CLI prints says
 `kernel_verified: false` until a verification report says otherwise.
 
-Build it from the source tree (standard library plus modules already in `go.mod`):
+Build it with the rest of the release set and install it (see [PROVISIONING.md](PROVISIONING.md#deploy)):
 
 ```sh
-go build -trimpath -ldflags "-X alloyium.local/kernel-poc/internal/cli.version=$(cat VERSION)" -o agentgate ./cmd/agentgate
+make agentgate                          # build/agentgate, agentgate-hostd, agentgate-broker, community, SHA256SUMS
+sudo deploy/install.sh --from build     # verifies the checksums; installs /usr/local/bin/agentgate and the rest
 ```
 
-The image's `/opt/agentgate/agentgate` is the service (`cmd/community`), not this client.
+The image's `/opt/agentgate/agentgate` is the service (`cmd/community`), not this client. The one end-to-end
+walkthrough (service, target, key approval, profile, secret, one-shot and long-running launches, approval, logs,
+stop, audit) is the [POC README quickstart](../poc/ssh-diagnostic/README.md#quickstart-provision-grant-launch-control-plane).
 
 ## Quickstart
 

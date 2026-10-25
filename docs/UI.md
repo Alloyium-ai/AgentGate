@@ -329,7 +329,7 @@ The backend requests this page once listed are implemented in the service and us
    `secretseal.Receipt`.
 5. **Secret names for launchers.** `GET /targets/{id}/secrets` (`launch:write`) lists names, states, upstream hosts,
    rule summaries and whether the caller and profile may use each one, without fingerprints, envelopes or scope lists.
-6. **Launch list filters and paging.** `GET /launches?state=&target=&name=&requested_by=&mine=&limit=&cursor=` with an
+6. **Launch list filters and paging.** `GET /launches?state=&target=&name=&requester=&mine=&limit=&cursor=` with an
    opaque `next_cursor`, and `GET /launches/summary` for the overview.
 7. **Log streaming.** `GET /launches/{id}/logs` with `Accept: text/event-stream` streams `log` events with sequence ids,
    resumes with `Last-Event-ID`, sends heartbeats and ends with an `end` event once the launch is terminal.

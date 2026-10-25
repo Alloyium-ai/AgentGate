@@ -19,6 +19,96 @@ An allowed IP can serve several hostnames. The guard enforces endpoints, not HTT
 
 To change what the agent may reach, use the `grant` command instead of editing JSON: see [Granting access](#granting-access).
 
+## Quickstart: provision, grant, launch (control plane)
+
+One end-to-end walkthrough of the control plane (service, UI, `agentgate` CLI, `agentgate-hostd`) on one disposable
+BPF-LSM VM that is both the service host and the first target. **It has never been run as a whole.** The service,
+CLI and UI were tested in process, with fake host agents speaking the real host protocol; the launch runtime and
+`install.sh` were tested with Docker and systemd stand-ins. Docker, Docker Compose, systemd, a real
+`agentgate-hostd`, the broker container and a BPF LSM kernel were never exercised, so every launch reports
+`kernel_verified: false`.
+
+Before you start, prepare the VM exactly as in [Prerequisites](#prerequisites),
+[Build the portable artifacts](#build-the-portable-artifacts) and [Configure the VM](#configure-the-vm) (instance
+`demo`): the docker-host runtime runs every launch through `/var/lib/agentgate-poc-demo`. Run the rest from the
+repository root as a user in the `docker` group, with `sudo` where shown. Replace `registry.example` with a registry
+you push to (local images get no `name@sha256:` reference otherwise), and keep the same `revision` as the artifacts.
+
+```sh
+# 1. Build and install the binaries (verified against build/SHA256SUMS).
+revision=$(git rev-parse HEAD)
+make agentgate
+sudo deploy/install.sh --from build
+
+# 2. Start the control service and create the first administrator (prompts for ada's new password).
+export AGENTGATE_IMAGE=agentgate-local:dev
+docker compose -f compose.yaml -f deploy/compose.build.yaml build control
+agentgate up --compose-file compose.yaml --admin-user ada --skip-host
+CA=~/.config/agentgate/ca-default.pem          # the TLS front's CA, saved by agentgate up; the UI is https://localhost:9443
+
+# 3. Images by digest: the agent image (built from this revision) and the credential broker.
+docker tag agentgate-poc-target registry.example/agentgate-poc-target:"$revision"
+docker push registry.example/agentgate-poc-target:"$revision"
+IMAGE=$(docker image inspect --format '{{index .RepoDigests 0}}' registry.example/agentgate-poc-target:"$revision")
+docker build -f cmd/agentgate-broker/Dockerfile --build-arg SOURCE_REVISION="$revision" \
+  -t registry.example/agentgate-broker:"$revision" .
+docker push registry.example/agentgate-broker:"$revision"
+BROKER=$(docker image inspect --format '{{index .RepoDigests 0}}' registry.example/agentgate-broker:"$revision")
+docker network create agentgate-egress
+
+# 4. Add the target and enroll this machine's host agent with the one-time token.
+agentgate target add local --token-file ./enroll.token
+sudo agentgate-hostd install --service-url https://localhost:9443 --token-file ./enroll.token --ca-file "$CA" \
+  --runtime docker-host --instance demo --broker-image "$BROKER" --broker-uid 10002 --broker-gid 10002
+rm ./enroll.token
+sudo agentgate-hostd status                    # prints host_key_id and the key fingerprint to compare
+
+# 5. Approve the host key: type the host_key_id agentgate-hostd printed, never the one the service shows.
+agentgate target approve-key local --host-key-id 'ed25519:<the id agentgate-hostd printed>' --reason "Matches the host console"
+agentgate doctor --target local                # every check ok, or the exact fix
+
+# 6. An access profile from a preset, then typed grants (each stores a new version).
+agentgate profile new python-dev --preset python-dev --description "Python work"
+agentgate grant python-dev mount repo          # a launch may mount a host folder as repo, read-only
+agentgate grant python-dev web deny quic --dry-run
+agentgate grant python-dev web deny quic --reason "No HTTP/3"
+agentgate profile show python-dev
+
+# 7. A second human approves launches: in the UI, Local users, add bob with the approver role. Then:
+agentgate login https://localhost:9443 --ca-file "$CA" --username bob --role approver --save-as bob
+agentgate context use default
+
+# 8. Store a secret, sealed here to the host's verified seal key; the broker forwards only POST /v1/messages.
+agentgate secret set anthropic --target local --upstream api.anthropic.com --header x-api-key \
+  --rule POST:/v1/messages --extra-header anthropic-version=2023-06-01 \
+  --allow-profile python-dev --wait < ~/anthropic.key
+
+# 9. A one-shot command on a read-only repository mount (exit 8: it waits for bob).
+sudo mkdir -p /srv/repos/app            # the host folder (readable by uid 65534)
+ID=$(agentgate launch -q --name tests --profile python-dev --image "$IMAGE" --mode oneshot --lifetime 10m \
+  --mount /srv/repos/app:repo:ro --workdir /var/lib/agentgate/mounts/repo -- python3 -c 'print(6+6)')
+agentgate --context bob approve "$ID" --reason "Reviewed the plan"
+agentgate logs "$ID" -f                        # prints 12, then ends with the launch
+
+# 10. A long-running agent with the secret and the read-only repository.
+agentgate launch --dry-run --name repo-agent --profile python-dev --image "$IMAGE" --mode session --lifetime 2h \
+  --mount /srv/repos/app:repo:ro --secret anthropic:ANTHROPIC_BASE_URL -- sh -c 'echo "$ANTHROPIC_BASE_URL"; exec sleep 7200'
+ID=$(agentgate launch -q --name repo-agent --profile python-dev --image "$IMAGE" --mode session --lifetime 2h \
+  --mount /srv/repos/app:repo:ro --secret anthropic:ANTHROPIC_BASE_URL -- sh -c 'echo "$ANTHROPIC_BASE_URL"; exec sleep 7200')
+agentgate --context bob approve "$ID" --reason "Reviewed the broker rules and the mount"
+agentgate logs "$ID" -f                        # the broker URL, never the key; Ctrl-C stops following, not the agent
+
+# 11. Stop it, and read the audit trail.
+agentgate stop "$ID" --reason "Done" --wait --yes
+agentgate show "$ID"                           # state, plan, evidence receipt (kernel_verified: false)
+agentgate audit --launch "$ID"
+```
+
+The dry run in step 10 prints what the agent may do: the profile version, mounts, the broker endpoint and the
+`base_url` it receives, the forwarded requests, and why approval is needed. The UI shows the same pages (Targets,
+Access profiles, Launch, Launches, Secrets) at `https://localhost:9443`. [docs/CLI.md](../../docs/CLI.md) and
+[docs/PROVISIONING.md](../../docs/PROVISIONING.md) describe every command and endpoint.
+
 ## One-command Docker appliance
 
 Use a Linux x86_64 host with Docker Engine, Docker Buildx, `/dev/kvm`, Python3, and OpenSSH client tools.

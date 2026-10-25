@@ -591,6 +591,18 @@ curl -sS -X POST "$U/api/v1/profiles/python-dev/versions/1/grants" -H "Authoriza
 # -> {"changed":true,"version":{"number":2,"digest":"..."},"messages":[...],"notices":[...]}
 ```
 
+Preview an edit without storing anything (`"dry_run": true`; audited as `profile.grant.previewed`), then allow a
+device (one of `/dev/null`, `/dev/zero`, `/dev/full`, `/dev/random`, `/dev/urandom`, `/dev/tty`):
+
+```sh
+curl -sS -X POST "$U/api/v1/profiles/python-dev/versions/2/grants" -H "Authorization: Bearer $T" \
+  -H 'Content-Type: application/json' -d '{"edits":[{"action":"device","values":["/dev/tty"]}],
+  "reason":"Interactive tools","dry_run":true}'
+# -> {"dry_run":true,"changed":true,"from_version":2,"from_digest":"...","digest":"...","document":{...},
+#     "changes":[{"area":"Files","field":"devices","change":"added","after":"/dev/tty"}],
+#     "messages":[...],"notices":[...]}
+```
+
 Plan, create, approve, follow and stop a launch:
 
 ```sh
@@ -606,6 +618,49 @@ curl -sS -X POST "$U/api/v1/launches/<id>/stop" -H "Authorization: Bearer $T" -H
 curl -sS "$U/api/v1/launches/<id>" -H "Authorization: Bearer $T"       # state, plan, policy, receipt, jobs
 ```
 
+Which secrets a launch on a target may use (launcher; names and scope only, never fingerprints or envelopes):
+
+```sh
+curl -sS "$U/api/v1/targets/local/secrets?profile=python-dev" -H "Authorization: Bearer $T"
+# -> {"target_id":"...","target":"local","profile":"python-dev","items":[{"name":"model-api","state":"stored",
+#     "upstreams":["api.model.example"],"rule_count":1,"wildcard_rules":false,"launcher_allowed":true,
+#     "profile_allowed":true,"usable":true}]}
+```
+
+List launches with the service's filters and cursor paging, and the overview counts:
+
+```sh
+curl -sS "$U/api/v1/launches?state=active&target=local&mine=true&limit=50" -H "Authorization: Bearer $T"
+# -> {"items":[...],"limit":50,"next_cursor":"<opaque>"}     (next_cursor only when a full page was returned)
+curl -sS "$U/api/v1/launches?state=active&target=local&mine=true&limit=50&cursor=<opaque>" -H "Authorization: Bearer $T"
+curl -sS "$U/api/v1/launches/summary" -H "Authorization: Bearer $T"
+# -> {"total":..,"active":..,"counts":{"running":..,...},"awaiting_your_decision":{"count":..,"items":[...]},
+#     "expiring_soon":{"count":..,"window_seconds":1800,"items":[...]}}
+```
+
+Follow a launch's output as Server-Sent Events; after a disconnect, resume with the last `id` seen:
+
+```sh
+curl -sS -N "$U/api/v1/launches/<id>/logs" -H "Authorization: Bearer $T" -H 'Accept: text/event-stream'
+# retry: 2000 / event: ready / data: {"after":0}
+# id: 1 / event: log / data: {"seq":1,"time":"...","stream":"stdout","text":"..."}
+# : keepalive                                        (every 15 s while nothing happens)
+# event: end / data: {"state":"stopped","last_seq":42,"truncated":false}
+curl -sS -N "$U/api/v1/launches/<id>/logs" -H "Authorization: Bearer $T" -H 'Accept: text/event-stream' \
+  -H 'Last-Event-ID: 42'
+```
+
+Retire a target (admin). With secrets stored, it moves to `retiring` and the host deletes each value when it polls;
+the last confirmation retires it. `"force": true` retires a host that is gone and marks its secrets
+`removal: unconfirmed`:
+
+```sh
+curl -sS -X DELETE "$U/api/v1/targets/old-host" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"reason":"Decommissioned"}'
+curl -sS -X DELETE "$U/api/v1/targets/old-host" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"reason":"The host is gone","force":true}'
+```
+
 Store a secret (admin). The client fetches the seal key, verifies it against the host key it pinned and seals the
 value with `secretseal.SealForTarget(known, false, &record, hostPublicKey, targetID, name, value, now)`; `agentgate
 secret set` does all of this. The service never sees the value:
@@ -619,6 +674,15 @@ curl -sS -X POST "$U/api/v1/secrets" -H "Authorization: Bearer $T" -H 'Content-T
   "rules":[{"methods":["POST"],"path":"/v1/messages","match":"exact"}],
   "ciphertext":"<Envelope.Encode()>","allowed_profiles":["python-dev"],"allowed_launchers":["local:lin"],
   "reason":"Model access for the coding agent"}'
+# Basic authentication with the explicit wildcard (every method and path; plans warn and need approval):
+curl -sS -X POST "$U/api/v1/secrets" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"name":"docs-api","target":"local","upstreams":["api.docs.example"],"header":"Authorization",
+  "scheme":"Basic","username":"agent","rules":[{"methods":["*"],"path":"/"}],
+  "extra_headers":{"docs-version":"2"},"ciphertext":"<Envelope.Encode()>","allowed_profiles":["python-dev"],
+  "allowed_launchers":["local:lin"],"reason":"Docs access"}'
+# Refusals: 409 seal_key_changed (reseal to the current key), 409 seal_key_unavailable, 422 invalid_ciphertext,
+# 422 invalid_secret (the broker would refuse the settings); a plan with a secret stored without rules: 422
+# secret_rules_missing.
 curl -sS "$U/api/v1/secrets/<id>/receipt" -H "Authorization: Bearer $T"   # verify with Sealed.VerifyReceipt
 curl -sS -X DELETE "$U/api/v1/secrets/<id>" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
   -d '{"reason":"Rotate"}'
@@ -634,12 +698,17 @@ curl -sS -X POST "$U/api/v1/targets/local/enrollment" -H "Authorization: Bearer 
 
 ## Parts and status
 
-| Part | Owner area | Status |
-| --- | --- | --- |
-| This contract | `docs/PROVISIONING.md` | written |
-| Control plane: store, API, roles, job queue, audit | `internal/control`, `internal/access`, `internal/hostproto`, `cmd/community` | implemented and tested in the build sandbox (no BPF LSM kernel, no real host); see the cookbook |
-| Host agent and long-running launch runtime | `cmd/agentgate-hostd`, `internal/hostd`, `poc/ssh-diagnostic` | implemented and unit-tested with fakes; Docker, systemd and the BPF LSM kernel were not exercised. The launch runtime (`launch.py`) runs a verified job in the guarded-target path; the daemon enrolls, polls, verifies and runs jobs at most once, retries uploads from a durable outbox, enforces the lifetime and the lost-service grace, and reconciles after a crash. `agentgate-hostd provision` and the `provision` job wrap `appliance.py start`. `verify-kernel.sh` is the kernel verification kit. With `--broker-image` the host agent stores sealed secrets, runs a per-launch broker and reports `brokered-secrets`; its Docker commands were tested against a recorder only |
-| Credential broker | `cmd/agentgate-broker`, `internal/broker`, `internal/secretseal` | implemented and connected to the policy, service, host agent and launch runtime; tested end to end in process with a TLS fake upstream (no Docker, systemd, BPF LSM kernel, real DNS or real upstream); see [BROKER.md](BROKER.md#integration-status) |
-| CLI | `cmd/agentgate`, `internal/cli`, `docs/CLI.md` | implemented; tested against a fake service built from the OpenAPI document and end to end against the real service in process (with a fake host agent on the real host protocol). `up` was tested only with a fake command runner: Docker, systemd and a real `agentgate-hostd` were not exercised |
-| UI pages | `web/src` | not started |
-| Kernel verification on a BPF LSM host | `docs/QUALIFICATION.md` | not possible in the build sandbox |
+Nothing in this table ran on a BPF LSM kernel, with a Docker daemon, under systemd or against a real upstream API;
+every launch reports `kernel_verified: false`. "Tested" means automated tests in the build sandbox.
+
+| Part | Where | Status | Tested with | Not exercised |
+| --- | --- | --- | --- | --- |
+| This contract | `docs/PROVISIONING.md` | written | the API cookbook matches the routes (OpenAPI test, audit catalog test) | |
+| Control plane: store, API, roles, job queue, audit | `internal/control`, `internal/access`, `internal/hostproto`, `cmd/community` | implemented: targets (enrollment, key approval, retirement that waits for the host to delete its secrets), profiles and typed grants with a server-side dry run, launches (plans, approval, cursor-paged lists, summary, events and logs as SSE), sealed secrets with broker rules, receipts, API tokens | Go tests against the real store and HTTP server, with fake hosts on the real host protocol; every endpoint has negative tests (role, tenant, size, malformed) and an audited action | a production deployment |
+| Web UI | `web/src` | implemented: Overview, Targets, Access profiles, Launch, Launches, Secrets, API tokens | node unit tests (`qa/*.node.mjs`); Playwright QA in Chromium against an owned mock whose every answer is checked against answers recorded from the real service (`web/qa/fixtures/api`) | a deployed service |
+| CLI | `cmd/agentgate`, `internal/cli`, `docs/CLI.md` | implemented, including `doctor` | a fake API built from the OpenAPI document; end to end against the real service in process (login, targets, key approval, grants, seal key, secret set with receipt, plans, launches, approval, logs, doctor); every documented command parses | `up` with real Docker and `agentgate-hostd` (a fake runner only) |
+| Host agent | `cmd/agentgate-hostd`, `internal/hostd` | implemented: enroll (prints the host key id and fingerprint), poll, verify and run jobs once, durable outbox, lifetime and lost-service grace, crash reconciliation, sealed secret store, per-launch broker, secret deletion on retirement | Go tests with fakes and a Docker command recorder | systemd, Docker, a real kernel |
+| Launch runtime | `poc/ssh-diagnostic` (`launch.py`, `launch_job.py`, `restart-target.sh`) | implemented on the guarded-target path; the taskboard bridge is mounted only when a launch asks | Python tests with fake hosts; `restart-target.sh` against a recording Docker stand-in | Docker, the BPF guard on a kernel |
+| Credential broker | `cmd/agentgate-broker`, `internal/broker`, `internal/secretseal` | implemented and connected to the policy, service, host agent and launch runtime; see [BROKER.md](BROKER.md#integration-status) | in process end to end with a TLS fake upstream | the container recipe, systemd, real DNS and upstreams |
+| Packaging | `Makefile` (`make agentgate`), `deploy/install.sh`, `compose.yaml`, `deploy/compose.*.yaml` | implemented | `install.sh --root` (checksums, refusals, idempotence); `make agentgate` builds | `install.sh` as root (users, systemctl), Docker Compose, the image build; `shellcheck` was not available |
+| Kernel verification on a BPF LSM host | `poc/ssh-diagnostic/verify-kernel.sh`, `docs/QUALIFICATION.md` | kit written; its logic is unit-tested with fakes | | a BPF LSM kernel (not possible in the build sandbox) |
