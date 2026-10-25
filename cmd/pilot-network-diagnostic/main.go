@@ -452,6 +452,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "network-info" {
 		operation = func() error { return networkPolicyCommand(os.Args[1:]) }
 	}
+	if len(os.Args) > 1 && os.Args[1] == "stdio-grant" {
+		operation = func() error { return stdioGrantCommand(os.Args[1:]) }
+	}
 	if command, ok := verifyCommands(os.Args[1:]); ok {
 		operation = command
 	}

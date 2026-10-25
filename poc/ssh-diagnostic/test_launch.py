@@ -123,6 +123,8 @@ class FakeHost:
         self.runner.chmod(0o700)
         self.commands = []
         self.audits = []
+        # The stdio pipes the gateway asked the guard to record, per command.
+        self.stdio = []
         self.guard_receipt_value = {'complete': True, 'stop': 'signal', 'events': [{'Allowed': 0, 'Port': 53}],
                                     'host': {'complete': True, 'filesystem': {'denials': [{'path': '/etc/shadow'}] * 300},
                                              'process': {'denials': []}},
@@ -179,7 +181,8 @@ class FakeHost:
     def execute(self, config, command, target, guard_ok, alive, sinks, should_stop, grace, extra):
         self.commands.append(command)
         with unittest.mock.patch.multiple(GATEWAY, append_audit=lambda path, record: self.audits.append(record),
-                                          remove_target=lambda name: None), \
+                                          remove_target=lambda name: None,
+                                          record_stdio=lambda config, pipes: self.stdio.append(pipes)), \
                 unittest.mock.patch.dict(os.environ, {'WS': str(self.workspace)}):
             return GATEWAY.execute_detailed(config, command, target, guard_ok, alive, stdin=subprocess.DEVNULL,
                                             sinks=sinks, should_stop=should_stop, grace_ns=grace, audit_extra=extra)

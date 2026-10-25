@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"os"
 	"testing"
 
+	"alloyium.local/kernel-poc/internal/fsrules"
 	"alloyium.local/kernel-poc/internal/processrules"
 )
 
@@ -102,5 +104,31 @@ func TestFSOperationNamesCoverEveryHookOperation(t *testing.T) {
 	}
 	if fsOperationName(99) != "internal-99" {
 		t.Fatal("an unknown operation was not labeled")
+	}
+}
+
+func TestStdioGrantArgumentsAreExact(t *testing.T) {
+	pipes, err := parseStdioPipes([]string{"11:read", "12:write", "13:write"})
+	if err != nil || len(pipes) != 3 || pipes[0] != (fsrules.StdioPipe{Inode: 11, Rights: fsrules.StdioRead}) || pipes[2].Rights != fsrules.StdioWrite {
+		t.Fatalf("pipes %+v: %v", pipes, err)
+	}
+	for _, args := range [][]string{{}, {"11"}, {"11:rw"}, {"011:read"}, {"-1:read"}, {"x:read"}, {"11:read", "11:write"},
+		{"1:read", "2:write", "3:write", "4:write"}, {"0:write"}, {"11:read:extra"}} {
+		if _, err := parseStdioPipes(args); err == nil {
+			t.Fatalf("%v was accepted", args)
+		}
+	}
+	if hostPinDir("/sys/fs/cgroup/ag-mvp-demo-domain") != "/sys/fs/bpf/ag-mvp-host-ag-mvp-demo-domain" {
+		t.Fatal("the stdio grant would open another guard's pins")
+	}
+	open := t.TempDir()
+	if err := os.Chmod(open, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if checkPinDir(open) == nil || checkPinDir(open+"/absent") == nil {
+		t.Fatal("a pin directory others can read, or an absent one, was accepted")
+	}
+	if stdioGrantCommand([]string{"stdio-grant", "/sys/fs/cgroup/../etc", "11:read"}) == nil {
+		t.Fatal("a foreign domain was accepted")
 	}
 }

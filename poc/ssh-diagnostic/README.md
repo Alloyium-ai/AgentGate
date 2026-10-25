@@ -447,8 +447,17 @@ sections. The guard then also attaches the BPF LSM filesystem component (`bpf/fs
   `listen`, `accept`, AF_UNIX connect (only file permissions on the socket node apply) and traffic, or AF_NETLINK traffic. The plan records this as the
   socket mode `cgroup-network-guard-only`, and the receipt's `host` block reports `"sockets": "cgroup-network-guard-only"` and
   `"socket_lsm_guard": false`. The guard selects that mode only after the kernel reports all six network hooks attached to the command's
-  cgroup, and checks again before it installs the plan; otherwise it refuses to start. The command's stdin, stdout, and stderr are pipes
-  the gateway made outside the domain; the plan allows those and no pipe from another job.
+  cgroup, and checks again before it installs the plan; otherwise it refuses to start.
+- **Standard streams:** the command's stdout and stderr are pipes the gateway makes outside the domain; its stdin is `/dev/null`
+  for a launch and sshd's stream for an SSH command. Before it starts the runner, the gateway records the inode of each of those
+  pipes (stdin only when it is an anonymous pipe) in the guard's pinned file component (`pilot-network-diagnostic stdio-grant`):
+  stdin for reading, stdout and stderr for writing. The guard refuses the grant once the domain is populated or after a first
+  grant, and the gateway refuses to run the command when the grant fails. The file component then lets the job use a pipe made
+  outside its domain only by a recorded inode, in its recorded direction; with no recorded inode, no inherited pipe is usable.
+  Pipes the job makes itself (a shell pipeline) are unaffected, and a pipe from another job or received over a socket stays
+  denied. What remains: a grant lasts until the policy expires, not until the pipe closes, and pipefs inode numbers come from the
+  kernel's 32-bit `get_next_ino()` counter, so a different pipe made outside every domain could reuse a recorded number after
+  about 2^32 inode allocations on the host during one launch; it would be usable in the recorded direction only.
 
 To make this possible the runner joins the cgroup last. It opens `cgroup.procs` as root, enters the target namespaces, and the
 unprivileged shell writes its own PID, closes the descriptor, verifies its cgroup, and only then runs the command. A failed join exits 125

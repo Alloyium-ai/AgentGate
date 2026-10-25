@@ -45,6 +45,9 @@ against that kernel's source and BTF, then run `poc/ssh-diagnostic/verify-kernel
    `path_rename`, `path_symlink`, `path_chmod`, `path_chown`, `path_truncate`); `internal/fsrules` tests enforce the source side.
 8. **CO-RE fields** (`task_struct.nameidata`, `nameidata.path`, `nameidata.flags`, `pt_regs.orig_ax`, and the `file`, `inode`,
    `dentry`, `super_block` fields the object declares) exist in the kernel's BTF with compatible types.
+9. **Pipe identity.** Anonymous pipes live on pipefs (`PIPEFS_MAGIC` 0x50495045) and keep one inode number for their lifetime;
+   the gateway's recorded stdio pipes are matched by that number and the `file_permission` mask bits `MAY_READ` (4) and
+   `MAY_WRITE` (2).
 
 Items 2 to 4 fail closed when they change: creating a new file with `open(O_CREAT)` is denied, and `mknod(2)` stays denied
 because item 5 is the syscall ABI. The kit's `allow-create` and `deny-mknod-regular` probes observe both sides.

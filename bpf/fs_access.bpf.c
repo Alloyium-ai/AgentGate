@@ -19,9 +19,12 @@
 #define ALLOW 1
 #define DENY 2
 #define ANONYMOUS_DELEGATION (1ULL<<63)
-// Pipes created outside every owned domain (the trusted launcher's stdio) may be
-// used with the explicit pipe read/write rights. A pipe made by another owned
-// domain is never usable, and descriptor passing stays denied by file_receive.
+// The launcher's stdio: a pipe made outside every owned domain may be used only
+// when the launcher recorded its pipefs inode in the stdio map for this domain
+// before the command joined (fsrules.RecordStdio), only in the recorded
+// direction, and only with the explicit pipe read/write rights. No recorded
+// inode means no inherited pipe. A pipe made by another owned domain is never
+// usable, and descriptor passing stays denied by file_receive.
 #define INHERITED_STDIO (1ULL<<62)
 #define ANONYMOUS_FS_MAGIC 0x09041934UL
 #define PIPEFS_MAGIC 0x50495045UL
@@ -50,6 +53,7 @@ struct bootstrap_key {__u64 domain;__u32 pid,padding;};
 struct bootstrap_binding {__u64 generation,expires_ns,start_ticks,pipe_ino;};
 struct file_cookie {__u64 sequence,creator;};
 struct file_grant {__u64 cookie,generation;char path[PATH_BYTES];};
+struct stdio_key {__u64 domain,inode;};
 struct counters {__u64 decisions,lost;};
 struct event {__u64 sequence,generation,domain,mono_ns;__u32 pid,uid,operation,allowed,rule,reason;char path[160];};
 _Static_assert(sizeof(struct state)==544,"file policy ABI");
@@ -65,6 +69,8 @@ struct {__uint(type,BPF_MAP_TYPE_ARRAY);__uint(max_entries,1);__type(key,__u32);
 struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(map_flags,BPF_F_NO_PREALLOC);__uint(max_entries,16384);__type(key,struct file_key);__type(value,struct file_grant);} file_grants SEC(".maps");
 struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(max_entries,16384);__type(key,__u64);__type(value,struct file_key);} file_grant_keys SEC(".maps");
 struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(max_entries,1024);__type(key,struct bootstrap_key);__type(value,struct bootstrap_binding);} bootstrap SEC(".maps");
+// Recorded launcher pipes: value is the allowed file_permission mask (MAY_READ 4, MAY_WRITE 2).
+struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(max_entries,8);__type(key,struct stdio_key);__type(value,__u32);} stdio SEC(".maps");
 const struct file_grant empty_grant={};
 
 static __always_inline struct action direct(struct node *node)
@@ -194,13 +200,16 @@ static __always_inline int special_file(struct file *file,int mask)
     if(BPF_CORE_READ(file,f_inode,i_sb,s_magic)!=0x50495045UL)return 1;
     __u64 ptr=(__u64)file;struct file_cookie *identity=bpf_map_lookup_elem(&file_cookies,&ptr);
     __u64 required=1|((mask&4)?2:0)|((mask&2)?4:0);
-    int mine=identity && identity->creator==domain,foreign=0;
+    int mine=identity && identity->creator==domain,inherited=0;
     if(!mine && (p->pipes&INHERITED_STDIO)){
-        // No cookie means the pipe predates every hook; otherwise its creator must not be a job domain.
-        foreign=1;
-        if(identity){__u64 creator=identity->creator;if(bpf_map_lookup_elem(&owned,&creator))foreign=0;}
+        // Only a pipe the launcher recorded for this domain, in its recorded direction.
+        struct stdio_key key={domain,BPF_CORE_READ(file,f_inode,i_ino)};
+        __u32 *rights=bpf_map_lookup_elem(&stdio,&key);
+        inherited=rights && !(mask&6&~*rights);
+        // A recorded inode never admits a pipe a job domain made.
+        if(identity){__u64 creator=identity->creator;if(bpf_map_lookup_elem(&owned,&creator))inherited=0;}
     }
-    int valid=(mine||foreign) && !(mask&~6) && (mask&6) && (p->pipes&required)==required;
+    int valid=(mine||inherited) && !(mask&~6) && (mask&6) && (p->pipes&required)==required;
     return emit(domain,p->generation,(mask&4)?16:17,valid,0,valid?0:13,0);
 }
 SEC("lsm/file_permission") int BPF_PROG(fs_use,struct file *file,int mask,int ret)

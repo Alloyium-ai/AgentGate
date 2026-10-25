@@ -21,7 +21,7 @@ func NewAccessRuntime(object, domain string) (*kernel.Runtime, error) {
 func AccessProfile() kernel.Profile {
 	return kernel.Profile{
 		Initialize: func(r *kernel.Runtime) error {
-			for _, name := range []string{"owned", "policies", "nodes", "file_cookies", "file_grants", "file_grant_keys", "bootstrap", "events", "stats"} {
+			for _, name := range []string{"owned", "policies", "nodes", "file_cookies", "file_grants", "file_grant_keys", "bootstrap", "stdio", "events", "stats"} {
 				if r.Collection.Maps[name] == nil {
 					return fmt.Errorf("file access object lacks map %s", name)
 				}

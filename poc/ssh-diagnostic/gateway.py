@@ -342,6 +342,45 @@ def cleanup_domain(config):
     return cleaned and not errors, waited, errors
 
 
+GUARD_BINARY = 'pilot-network-diagnostic'
+
+
+def stdio_pipes(stdin, stdout_fd, stderr_fd):
+    """The (inode, direction) pairs the guard records for the command's stdio.
+
+    stdout and stderr are anonymous pipes this gateway made. stdin is recorded
+    only when it is an anonymous pipe too (sshd's), recognized by sharing their
+    pipefs device; a socket, /dev/null or a named FIFO is never recorded.
+    """
+    pipefs = os.fstat(stdout_fd).st_dev
+    pipes = [(os.fstat(stdout_fd).st_ino, 'write'), (os.fstat(stderr_fd).st_ino, 'write')]
+    fd = stdin if isinstance(stdin, int) and stdin >= 0 else \
+        (stdin.fileno() if hasattr(stdin, 'fileno') else None)
+    if fd is not None:
+        meta = os.fstat(fd)
+        if stat.S_ISFIFO(meta.st_mode) and meta.st_dev == pipefs:
+            pipes.insert(0, (meta.st_ino, 'read'))
+    return pipes
+
+
+def record_stdio(config, pipes, run=subprocess.run):
+    """Record the command's stdio pipes in the running guard, before the command joins.
+
+    The file component lets the job use a pipe made outside its domain only by
+    a recorded inode, in its recorded direction. The guard refuses a populated
+    domain and a second grant; any failure here stops the command unrun.
+    """
+    guard = os.path.join(os.path.dirname(config['runner_path']), GUARD_BINARY)
+    meta = os.stat(guard)
+    if not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0 or meta.st_mode & 0o022:
+        raise ValueError('guard binary custody differs')
+    done = run([guard, 'stdio-grant', config['domain']] + ['%d:%s' % item for item in pipes],
+               capture_output=True, timeout=10, env={'PATH': '/usr/bin:/bin'})
+    if done.returncode != 0:
+        raise ValueError('the guard did not record the command stdio: ' +
+                         done.stderr.decode(errors='replace')[-300:].strip())
+
+
 def execute(config, command, target, guard_ok, session_alive, output_fds=(1, 2), stdin=None):
     """Run one command in the bound target. Cleanup and the audit always run."""
     result = execute_detailed(config, command, target, guard_ok, session_alive, output_fds, stdin)
@@ -365,14 +404,32 @@ def execute_detailed(config, command, target, guard_ok, session_alive, output_fd
     cleanup_wait_ns = 0
     cleanup_errors = []
     process = None
+    owned_fds = []
     try:
+        command_stdin = stdin if stdin is not None else sys.stdin.buffer
+        outputs = (subprocess.PIPE, subprocess.PIPE)
+        if host_controls:
+            # The file component admits a pipe made outside the domain only by an
+            # inode recorded before the command joins: make the output pipes
+            # here, record them and stdin, and only then start the runner.
+            out_read, out_write = os.pipe()
+            owned_fds += [out_read, out_write]
+            err_read, err_write = os.pipe()
+            owned_fds += [err_read, err_write]
+            record_stdio(config, stdio_pipes(command_stdin, out_write, err_write))
+            outputs = (out_write, err_write)
         # With host controls the runner joins the domain last, so the policy never
         # applies to the trusted helpers that enter the target namespaces.
         process = subprocess.Popen([config['runner_path'], str(target['State']['Pid']),
                                     config['domain'], command] + (['late-join'] if host_controls else []),
-                                   stdin=stdin if stdin is not None else sys.stdin.buffer,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   stdin=command_stdin, stdout=outputs[0], stderr=outputs[1],
                                    start_new_session=True, env={'PATH': '/usr/bin:/bin'}, close_fds=True)
+        if host_controls:
+            for fd in (out_write, err_write):
+                os.close(fd)
+                owned_fds.remove(fd)
+            process.stdout, process.stderr = os.fdopen(out_read, 'rb', 0), os.fdopen(err_read, 'rb', 0)
+            owned_fds = []
         state = 'relay_error'
         state, hashes, lengths = relay_process(process, session_alive, guard_ok,
                                                int(config['deadline_ns']), output_fds, sinks, should_stop)
@@ -383,6 +440,8 @@ def execute_detailed(config, command, target, guard_ok, session_alive, output_fd
         exit_code = process.returncode if state == 'completed' else 1
     finally:
         try:
+            for fd in owned_fds:
+                os.close(fd)
             if process is not None:
                 stop_process(process)
                 for stream in (process.stdout, process.stderr):

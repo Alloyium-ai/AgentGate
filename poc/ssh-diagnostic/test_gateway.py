@@ -332,6 +332,114 @@ class GatewayExecutionTest(unittest.TestCase):
             code, _ = self.run_execute(config, target)
         self.assertEqual((code, audits[0]['state']), (1, 'cleanup_incomplete'))
 
+    def run_host_controlled(self, body, stdin, recorded):
+        _, config, target, audits, _ = self.fixture(body)
+        config['host_controls'] = True
+        out_read, out_write = os.pipe()
+        err_read, err_write = os.pipe()
+        try:
+            with unittest.mock.patch.object(GATEWAY, 'record_stdio', lambda config, pipes: recorded.append(pipes)):
+                code = GATEWAY.execute(config, 'command', target, lambda: True, lambda: True,
+                                       (out_write, err_write), stdin)
+            os.set_blocking(out_read, False)
+            try:
+                output = os.read(out_read, 4096)
+            except BlockingIOError:
+                output = b''
+            return code, output, audits
+        finally:
+            for fd in (out_read, out_write, err_read, err_write):
+                os.close(fd)
+
+    def test_host_controls_record_the_command_stdio_before_it_runs(self):
+        # The runner reports the pipes it actually holds as stdio.
+        body = 'readlink /proc/self/fd/0 /proc/self/fd/1 /proc/self/fd/2; test "$4" = late-join\n'
+        recorded = []
+        code, output, _ = self.run_host_controlled(body, subprocess.DEVNULL, recorded)
+        self.assertEqual(code, 0, output)
+        held = output.decode().split()
+        self.assertEqual(held[0], '/dev/null')
+        self.assertEqual(recorded, [[(int(held[1][6:-1]), 'write'), (int(held[2][6:-1]), 'write')]])
+        # sshd's stdin is an anonymous pipe: it is recorded for reading only.
+        stdin_read, stdin_write = os.pipe()
+        os.close(stdin_write)
+        try:
+            recorded = []
+            code, output, _ = self.run_host_controlled(body, stdin_read, recorded)
+            held = output.decode().split()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(recorded[0][0], (int(held[0][6:-1]), 'read'))
+            self.assertEqual([item[1] for item in recorded[0]], ['read', 'write', 'write'])
+        finally:
+            os.close(stdin_read)
+
+    def test_a_failed_stdio_grant_never_runs_the_command(self):
+        root, config, target, audits, removed = self.fixture('touch "$0.ran"\n')
+        config['host_controls'] = True
+
+        def refuse(config, pipes):
+            raise ValueError('the guard did not record the command stdio')
+        out_read, out_write = os.pipe()
+        try:
+            with unittest.mock.patch.object(GATEWAY, 'record_stdio', refuse):
+                with self.assertRaisesRegex(ValueError, 'did not record'):
+                    GATEWAY.execute(config, 'command', target, lambda: True, lambda: True,
+                                    (out_write, out_write), subprocess.DEVNULL)
+        finally:
+            os.close(out_read)
+            os.close(out_write)
+        self.assertFalse((root / 'runner.sh.ran').exists(), 'the command ran without its stdio grant')
+        self.assertEqual(removed, ['ag-mvp-test-target'])
+        self.assertEqual((audits[0]['state'], audits[0]['exit_code']), ('launch_error', 1))
+
+    def test_only_anonymous_pipes_are_offered_as_stdio(self):
+        out_read, out_write = os.pipe()
+        err_read, err_write = os.pipe()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        fifo = pathlib.Path(directory.name) / 'fifo'
+        os.mkfifo(fifo)
+        fifo_fd = os.open(fifo, os.O_RDWR)
+        left, right = __import__('socket').socketpair()
+        stdin_read, stdin_write = os.pipe()
+        null = open(os.devnull, 'rb')
+        self.addCleanup(null.close)
+        try:
+            base = [(os.fstat(out_write).st_ino, 'write'), (os.fstat(err_write).st_ino, 'write')]
+            for stdin in (subprocess.DEVNULL, None, fifo_fd, left, null):
+                with self.subTest(stdin=stdin):
+                    self.assertEqual(GATEWAY.stdio_pipes(stdin, out_write, err_write), base)
+            self.assertEqual(GATEWAY.stdio_pipes(stdin_read, out_write, err_write),
+                             [(os.fstat(stdin_read).st_ino, 'read')] + base)
+        finally:
+            left.close()
+            right.close()
+            for fd in (out_read, out_write, err_read, err_write, fifo_fd, stdin_read, stdin_write):
+                os.close(fd)
+
+    def test_the_stdio_grant_runs_only_a_trusted_guard(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = pathlib.Path(directory.name)
+        guard = root / 'pilot-network-diagnostic'
+        guard.write_text('#!/bin/sh\nexit 0\n')
+        config = {'runner_path': str(root / 'run-in-target.sh'), 'domain': '/sys/fs/cgroup/ag-mvp-x-domain'}
+        calls = []
+
+        def run(argv, **options):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, b'', b'')
+        guard.chmod(0o755)
+        if os.geteuid() == 0:
+            GATEWAY.record_stdio(config, [(5, 'read'), (6, 'write')], run=run)
+            self.assertEqual(calls, [[str(guard), 'stdio-grant', '/sys/fs/cgroup/ag-mvp-x-domain', '5:read', '6:write']])
+            refused = lambda argv, **options: subprocess.CompletedProcess(argv, 1, b'', b'domain populated')
+            with self.assertRaisesRegex(ValueError, 'domain populated'):
+                GATEWAY.record_stdio(config, [(6, 'write')], run=refused)
+        guard.chmod(0o775)
+        with self.assertRaisesRegex(ValueError, 'custody'):
+            GATEWAY.record_stdio(config, [(6, 'write')], run=run)
+
     def test_audit_failure_is_an_error_after_cleanup(self):
         _, config, target, _, removed = self.fixture('exit 0\n')
 

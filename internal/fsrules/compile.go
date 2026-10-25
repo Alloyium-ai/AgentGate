@@ -18,9 +18,11 @@ const Purpose = "agentgate.files-programs-component.v1"
 const OperationCount = 14
 const AnonymousDelegation = uint64(1) << 63
 
-// InheritedStdio lets a managed job use pipes made outside every managed
-// domain, such as the launcher's stdin, stdout and stderr. It still requires
-// the explicit pipe read and write rights, and it grants no pathname right.
+// InheritedStdio lets a managed job use the launcher's stdin, stdout and
+// stderr pipes: only pipes whose inodes the launcher recorded for the domain
+// before the command joined (RecordStdio), each in its recorded direction. It
+// still requires the explicit pipe read and write rights, and it grants no
+// pathname right. Without a recorded inode no inherited pipe is usable.
 const InheritedStdio = uint64(1) << 62
 
 // operations are the file component's decisions, by index in bpf/fs_access.bpf.c.
@@ -255,6 +257,10 @@ func planDigest(plan Plan) string {
 	if plan.mutation {
 		// Appended only when set, so every unmarked plan keeps its digest.
 		h.Write([]byte("mutation-enforcement.v1"))
+	}
+	if plan.state.Pipes&InheritedStdio != 0 {
+		// Inherited pipes are admitted only by recorded inode (RecordStdio).
+		h.Write([]byte("inherited-stdio-recorded-pipes.v1"))
 	}
 	if plan.sockets == SocketsCgroupNetworkOnly {
 		// Appended only for this mode; SocketsLSMGuard is already bound by the
