@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -32,9 +31,9 @@ func init() {
 		help: `  --upstream HOST          exact upstream host the broker may send it to (repeatable, 1 to 8)
   --header NAME            header that carries it (default x-api-key; Authorization for bearer tokens)
   --scheme Bearer|Basic    how the broker writes the header (Authorization only; Bearer is its default)
-  --basic-user NAME        the Basic scheme's user name
+  --username NAME          the Basic scheme's user name (also --basic-user)
   --rule METHODS:PATH[:exact|prefix]
-                           a request the broker may forward with the credential, for example
+                           a request the broker may forward with the credential (default exact), for example
                            POST:/v1/messages or GET,POST:/v1/:prefix (repeatable; deny by default)
   --allow-any-path         the explicit wildcard: every method on every path of the upstreams
   --extra-header NAME=VALUE  a non-secret header the broker sets on every request (repeatable)
@@ -45,8 +44,8 @@ func init() {
   --wait-timeout DUR       default 2m
   --reason TEXT
 The target's seal key must be signed by the host key pinned on this machine (docs/CLI.md).
-Rules, schemes, extra headers and receipts are used when the service supports them; the CLI
-reads that from the service's OpenAPI document and refuses flags the service cannot honour.
+The broker forwards nothing by default: give at least one --rule, or --allow-any-path for the
+explicit wildcard (every method and path; every plan that uses it warns and needs approval).
 The value is never read from arguments or the environment. On a terminal it is prompted twice
 with echo off; otherwise it is read from standard input (one trailing newline is removed).`,
 		setup: func(fs *flag.FlagSet) runner {
@@ -58,6 +57,7 @@ with echo off; otherwise it is read from standard input (one trailing newline is
 			fs.Var(&f.extraHeaders, "extra-header", "")
 			fs.StringVar(&f.header, "header", "x-api-key", "")
 			fs.StringVar(&f.scheme, "scheme", "", "")
+			fs.StringVar(&f.basicUser, "username", "", "")
 			fs.StringVar(&f.basicUser, "basic-user", "", "")
 			fs.StringVar(&f.target, "target", "local", "")
 			fs.StringVar(&f.reason, "reason", "", "")
@@ -104,43 +104,14 @@ names usable now.`,
 		}})
 }
 
-// serviceFeatures is what the service's OpenAPI document says it accepts.
-type serviceFeatures struct {
-	secretFields map[string]bool
-	paths        map[string]bool
-	known        bool
-}
-
-func (e *env) features(ctx context.Context, c *Client) serviceFeatures {
-	var doc struct {
-		Paths      map[string]json.RawMessage `json:"paths"`
-		Components struct {
-			Schemas map[string]struct {
-				Properties map[string]json.RawMessage `json:"properties"`
-			} `json:"schemas"`
-		} `json:"components"`
-	}
-	f := serviceFeatures{secretFields: map[string]bool{}, paths: map[string]bool{}}
-	if _, err := c.get(ctx, apiPrefix+"/openapi.json", nil, &doc); err != nil {
-		return f
-	}
-	for k := range doc.Components.Schemas["SecretInput"].Properties {
-		f.secretFields[k] = true
-	}
-	for k := range doc.Paths {
-		f.paths[k] = true
-	}
-	f.known = len(f.secretFields) > 0
-	return f
-}
-
 // parseRule reads METHODS:PATH[:exact|prefix].
 func parseRule(spec string) (BrokerRule, error) {
 	methods, rest, ok := strings.Cut(spec, ":")
 	if !ok || methods == "" || !strings.HasPrefix(rest, "/") {
 		return BrokerRule{}, usageError("--rule takes METHODS:PATH[:exact|prefix], for example POST:/v1/messages (got %q)", spec)
 	}
-	r := BrokerRule{Path: rest}
+	// A rule without a match type is exact: the service requires one.
+	r := BrokerRule{Path: rest, Match: "exact"}
 	for _, m := range []string{"exact", "prefix"} {
 		if strings.HasSuffix(rest, ":"+m) {
 			r.Path, r.Match = strings.TrimSuffix(rest, ":"+m), m
@@ -156,80 +127,67 @@ func parseRule(spec string) (BrokerRule, error) {
 	return r, nil
 }
 
-// secretInjection builds the optional injection fields the service accepts.
-func secretInjection(f secretFlags, feat serviceFeatures) (map[string]any, string, error) {
+// secretInjection builds the broker settings of POST /secrets: the scheme
+// and Basic user name, the rules (required: deny by default) and the
+// non-secret extra headers. The service checks them again with the broker's
+// own validator.
+func secretInjection(f secretFlags) (map[string]any, error) {
 	body := map[string]any{}
-	prefix := ""
 	authorization := strings.EqualFold(f.header, "authorization")
-	scheme := ""
 	switch {
 	case f.scheme == "":
 	case strings.EqualFold(f.scheme, "bearer"):
-		scheme = "Bearer"
+		body["scheme"] = "Bearer"
 	case strings.EqualFold(f.scheme, "basic"):
-		scheme = "Basic"
+		body["scheme"] = "Basic"
 	default:
-		return nil, "", usageError("--scheme is Bearer or Basic")
+		return nil, usageError("--scheme is Bearer or Basic")
 	}
-	if scheme != "" && !authorization {
-		return nil, "", usageError("--scheme %s needs --header Authorization", scheme)
+	if body["scheme"] != nil && !authorization {
+		return nil, usageError("--scheme %s needs --header Authorization", body["scheme"])
 	}
-	if f.basicUser != "" && scheme != "Basic" {
-		return nil, "", usageError("--basic-user needs --scheme Basic")
+	if f.basicUser != "" && body["scheme"] != "Basic" {
+		return nil, usageError("--username needs --scheme Basic")
 	}
-	if feat.secretFields["scheme"] {
-		if scheme != "" {
-			body["scheme"] = scheme
-		}
-		if f.basicUser != "" {
-			body["username"] = f.basicUser
-		}
-	} else {
-		switch scheme {
-		case "Bearer":
-			// An older service has no scheme field: the value carries it.
-			prefix = "Bearer "
-		case "Basic":
-			return nil, "", usageError("this service does not accept a Basic scheme yet")
-		}
+	if body["scheme"] == "Basic" && f.basicUser == "" {
+		return nil, usageError("--scheme Basic needs --username")
+	}
+	if f.basicUser != "" {
+		body["username"] = f.basicUser
 	}
 	rules := []BrokerRule{}
 	for _, spec := range f.rules {
 		r, err := parseRule(spec)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		rules = append(rules, r)
 	}
 	if f.anyPath {
 		if len(rules) > 0 {
-			return nil, "", usageError("--allow-any-path is the whole rule set; do not combine it with --rule")
+			return nil, usageError("--allow-any-path is the whole rule set; do not combine it with --rule")
 		}
 		rules = []BrokerRule{{Methods: []string{"*"}, Path: "/"}}
 	}
-	switch {
-	case feat.secretFields["rules"] && len(rules) == 0:
-		return nil, "", usageError("the broker forwards nothing by default: give --rule METHODS:PATH (for example POST:/v1/messages), or --allow-any-path for every method and path of the upstreams")
-	case feat.secretFields["rules"]:
-		body["rules"] = rules
-	case len(rules) > 0:
-		return nil, "", usageError("this service does not accept broker rules yet (it forwards every path of the upstreams); drop --rule and --allow-any-path")
+	if len(rules) == 0 {
+		return nil, usageError("the broker forwards nothing by default: give --rule METHODS:PATH (for example POST:/v1/messages), or --allow-any-path for every method and path of the upstreams")
 	}
+	body["rules"] = rules
 	if len(f.extraHeaders) > 0 {
-		if !feat.secretFields["extra_headers"] {
-			return nil, "", usageError("this service does not accept --extra-header yet")
-		}
 		extra := map[string]string{}
 		for _, kv := range f.extraHeaders {
 			k, v, ok := strings.Cut(kv, "=")
 			if !ok || !hostproto.HeaderPattern.MatchString(k) || v == "" {
-				return nil, "", usageError("--extra-header takes NAME=VALUE")
+				return nil, usageError("--extra-header takes NAME=VALUE")
+			}
+			if _, dup := extra[k]; dup {
+				return nil, usageError("--extra-header %s is given twice", k)
 			}
 			extra[k] = v
 		}
 		body["extra_headers"] = extra
 	}
-	return body, prefix, nil
+	return body, nil
 }
 
 func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
@@ -250,18 +208,13 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 	if len(f.profiles) == 0 {
 		return usageError("give at least one --allow-profile: the profiles whose launches may use the secret")
 	}
+	injection, err := secretInjection(f)
+	if err != nil {
+		return err
+	}
 	c, err := e.authed()
 	if err != nil {
 		return err
-	}
-	feat := e.features(ctx, c)
-	injection, prefix, err := secretInjection(f, feat)
-	if err != nil {
-		return err
-	}
-	receiptPath := apiPrefix + "/secrets/{id}/receipt"
-	if f.wait && !feat.paths[receiptPath] {
-		return usageError("this service does not relay the host's receipt yet, so --wait has nothing to verify")
 	}
 	launchers := []string(f.launchers)
 	if len(launchers) == 0 {
@@ -312,13 +265,7 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 	}
 	sealed, err := func() (*sealedValue, error) {
 		defer zero(value)
-		if prefix == "" {
-			return plan.seal(name, value)
-		}
-		full := make([]byte, 0, len(prefix)+len(value))
-		full = append(append(full, prefix...), value...)
-		defer zero(full)
-		return plan.seal(name, full)
+		return plan.seal(name, value)
 	}()
 	if err != nil {
 		return err
@@ -347,10 +294,18 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 		for _, r := range out.Rules {
 			rules = append(rules, ruleText(r))
 		}
+		header := strings.TrimSpace(out.Header + " " + out.Scheme)
+		if out.Username != "" {
+			header += " (user " + out.Username + ")"
+		}
 		pairs := [][2]string{{"host key", plan.HostKeyID + " (pinned), " + plan.HostKeyFingerprint}, {"sealed with", plan.Method}, {"seal key", plan.SealKeyID},
-			{"ciphertext sha256", out.Fingerprint}, {"upstreams", strings.Join(out.Upstreams, ", ")}, {"header", strings.TrimSpace(out.Header + " " + out.Scheme)}}
-		if feat.secretFields["rules"] {
-			pairs = append(pairs, [2]string{"rules", joinOr(rules, "none")})
+			{"ciphertext sha256", out.Fingerprint}, {"upstreams", strings.Join(out.Upstreams, ", ")}, {"header", header}, {"rules", joinOr(rules, "none")}}
+		if len(out.ExtraHeaders) > 0 {
+			names := []string{}
+			for k := range out.ExtraHeaders {
+				names = append(names, k)
+			}
+			pairs = append(pairs, [2]string{"extra headers", strings.Join(sortedStrings(names), ", ")})
 		}
 		pairs = append(pairs, [2]string{"profiles", strings.Join(out.AllowedProfiles, ", ")}, [2]string{"launchers", strings.Join(out.AllowedLaunchers, ", ")})
 		e.p.fields("  ", pairs)
@@ -374,8 +329,8 @@ func (e *env) secretSet(ctx context.Context, name string, f secretFlags) error {
 		if !e.g.json {
 			e.p.line("The host's receipt verifies: it stored exactly this value (fingerprint %s).", fp)
 		}
-	} else if feat.paths[receiptPath] && !e.g.json {
-		e.p.note("Run with --wait to verify the host's receipt for this value.")
+	} else if !e.g.json {
+		e.p.note("Run with --wait to verify the host's receipt for this value (only this run holds the secret that checks it).")
 	}
 	if e.g.json {
 		return e.p.value(result)
@@ -425,8 +380,8 @@ func (e *env) awaitReceipt(ctx context.Context, c *Client, sec Secret, sealed *s
 	}
 }
 
-// sealKey fetches the target's signed seal key; nil when the service does
-// not publish one (the endpoint is a pending control plane change).
+// sealKey fetches the target's host-signed seal key (GET
+// /targets/{id}/seal-key); nil when the host has not published one yet.
 func (e *env) sealKey(ctx context.Context, c *Client, t Target) (*sealKeyAnswer, error) {
 	var sk sealKeyAnswer
 	_, err := c.get(ctx, apiPrefix+"/targets/"+pathEscape(t.ID)+"/seal-key", nil, &sk)

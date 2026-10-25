@@ -330,7 +330,7 @@ agentgate launch -f spec.json | --name N --target T --mode oneshot|session --lif
 agentgate ps [--state S] [--target T] [--name N] [--mine] [--limit N] [--cursor C | --all] | show ID | logs ID [-f]
 agentgate events ID [-f] | stop ID [--wait] | approve ID | reject ID
 agentgate audit [--launch ID] [--since T] | audit catalog
-agentgate secret set NAME --upstream HOST --allow-profile P [--rule M:PATH] [--scheme S] [--wait] | ls | rm NAME
+agentgate secret set NAME --upstream HOST --allow-profile P (--rule M:PATH[:prefix]... | --allow-any-path) [--scheme S] [--wait] | ls | rm NAME
 agentgate token create [--save] | ls | revoke ID      (password sign-in: a token cannot manage tokens)
 agentgate schema launch-spec | completion bash|zsh|fish | version
 ```

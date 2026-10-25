@@ -1,0 +1,23 @@
+{
+  "items": [
+    {
+      "approval_required": true,
+      "created_at": "2026-10-25T00:35:58.877004348Z",
+      "id": "2838ad7cbb681f1e29ce046f1d52479c",
+      "kernel_verified": false,
+      "lifetime_seconds": 3600,
+      "mode": "session",
+      "name": "quick-check",
+      "policy_digest": "0f9e8ba3d5583f75f456f3af5cd29300228859fe0fec81b19aa6d2c0efd8322c",
+      "profile_version_id": "12f9b78135eb4c56115fa38a285f44a9",
+      "requested_by": "oidc:lin",
+      "revision": 2,
+      "spec_digest": "2175321b70f7fbb3eacfb24f6d1c08b0e947e7a2ae90f55a446b78396250fa67",
+      "state": "approval_pending",
+      "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+      "updated_at": "2026-10-25T00:35:58.877128624Z"
+    }
+  ],
+  "limit": 1,
+  "next_cursor": "eyJ2IjoxLCJjIjoiMjAyNi0xMC0yNVQwMDozNTo1OC44NzcwMDQzNDhaIiwiaSI6IjI4MzhhZDdjYmI2ODFmMWUyOWNlMDQ2ZjFkNTI0NzljIiwiZiI6IjcwOWU4MGM4ODQ4N2EyNDEifQ"
+}

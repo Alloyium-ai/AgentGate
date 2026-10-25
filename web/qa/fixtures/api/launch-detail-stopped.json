@@ -1,0 +1,245 @@
+{
+  "jobs": [
+    {
+      "attempts": 1,
+      "created_at": "2026-10-25T00:35:58.884861487Z",
+      "deadline": "2026-10-25T01:40:58.759Z",
+      "event_seq": 2,
+      "id": "c3a908ed1f421fdce445931c81229804",
+      "key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+      "launch_id": "d9c401af5318a31cba90f9f4c76c8f55",
+      "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
+      "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
+      "state": "delivered",
+      "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+      "type": "launch"
+    },
+    {
+      "attempts": 1,
+      "completed_at": "2026-10-25T00:35:58.894574155Z",
+      "created_at": "2026-10-25T00:35:58.891153353Z",
+      "deadline": "2026-10-26T00:35:58.759Z",
+      "event_seq": 1,
+      "id": "8179444b6942f41f4bbf16cf216b9953",
+      "key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+      "launch_id": "d9c401af5318a31cba90f9f4c76c8f55",
+      "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
+      "result": {
+        "evidence_missing": "",
+        "reason": "stopped",
+        "receipt_digest": "8162f57feb19d5ac5c639a2198c25c75061a8748d9c91717306465c47e6602dd",
+        "status": "succeeded"
+      },
+      "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
+      "state": "succeeded",
+      "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+      "type": "stop"
+    }
+  ],
+  "launch": {
+    "approval_required": false,
+    "created_at": "2026-10-25T00:35:58.884269567Z",
+    "ended_at": "2026-10-25T00:35:58.894771721Z",
+    "expires_at": "2026-10-25T01:35:58.759Z",
+    "id": "d9c401af5318a31cba90f9f4c76c8f55",
+    "kernel_verified": false,
+    "lifetime_seconds": 3600,
+    "mode": "session",
+    "name": "repo-fixer",
+    "plan": {
+      "approval": "auto",
+      "approval_reasons": [],
+      "command": [
+        "agent",
+        "--print",
+        "fix the failing tests"
+      ],
+      "expiry_rule": "the lifetime starts when the launch is queued; the host and the kernel policy end it at expires_at",
+      "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kernel_verified": false,
+      "lifetime_seconds": 3600,
+      "mode": "session",
+      "mounts": [],
+      "notices": [
+        "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
+        "the target does not advertise bpf-lsm; the host fails closed if it cannot enforce the policy"
+      ],
+      "permissions": {
+        "anonymous_execute": false,
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/urandom"
+        ],
+        "dns_resolvers": [
+          "1.1.1.1"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/lib",
+          "/lib64"
+        ],
+        "ipv6": "deny",
+        "network_default": "deny",
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL"
+        ],
+        "taskboard": "10.10.10.10:8080",
+        "web": [],
+        "writable": [
+          "/var/lib/agentgate/workspace"
+        ]
+      },
+      "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
+      "profile": {
+        "digest": "9d06a5d87bcc579ecc027ac11fb1062413a9865118a933c6ea6103847376da51",
+        "id": "f7892339076b69bd06bab967eaf42c85",
+        "name": "dev",
+        "version": 1,
+        "version_id": "1839a3f6bf8c1a185f0e17805df5462c"
+      },
+      "secrets": [],
+      "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
+      "target": {
+        "id": "590c422db60dad1d354e64bc1cf9f38d",
+        "name": "local"
+      },
+      "workdir": "/var/lib/agentgate/workspace"
+    },
+    "policy": {
+      "default": "deny",
+      "dns": {
+        "port": 53,
+        "protocols": [
+          "udp",
+          "tcp"
+        ],
+        "resolvers": [
+          "1.1.1.1"
+        ]
+      },
+      "duration_seconds": 3600,
+      "filesystem": {
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/urandom"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/lib",
+          "/lib64"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        },
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "scratch": [],
+        "workspace": "/var/lib/agentgate/workspace"
+      },
+      "ipv6": "deny",
+      "mode": "session",
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL"
+        ]
+      },
+      "taskboard": {
+        "address": "10.10.10.10",
+        "port": 8080,
+        "protocol": "tcp",
+        "task_id": 1
+      },
+      "version": "agentgate.poc.v2",
+      "web": {
+        "destination": "public-ipv4",
+        "rules": []
+      }
+    },
+    "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
+    "profile_version_id": "1839a3f6bf8c1a185f0e17805df5462c",
+    "queued_at": "2026-10-25T00:35:58.884621810Z",
+    "receipt": {
+      "bpf_objects": {
+        "network.bpf.o": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "broker_counts": {},
+      "domain_empty": true,
+      "ended_at_ms": 1792888558759,
+      "enforcement_released": true,
+      "exit_code": 0,
+      "guard_digest": "",
+      "kernel_verified": false,
+      "launch_id": "d9c401af5318a31cba90f9f4c76c8f55",
+      "mounts": [],
+      "policy_digest": "c7a1607b5ce1c65184072a64ed8f59a0de07223554a3779257395335768769af",
+      "reason": "exited",
+      "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
+      "started_at_ms": 1792888558759,
+      "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+      "version": "agentgate.receipt.v1"
+    },
+    "requested_by": "oidc:lin",
+    "revision": 7,
+    "spec": {
+      "access": {
+        "profile": "dev",
+        "version": 1
+      },
+      "agent": {
+        "command": [
+          "agent",
+          "--print",
+          "fix the failing tests"
+        ],
+        "env": {
+          "EDITOR": "vi"
+        },
+        "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "workdir": "/var/lib/agentgate/workspace"
+      },
+      "approval": "auto",
+      "lifetime_seconds": 3600,
+      "mode": "session",
+      "mounts": [],
+      "name": "repo-fixer",
+      "secrets": [],
+      "target": "local",
+      "version": "agentgate.launch.v1"
+    },
+    "spec_digest": "9cec3cd9e6333ca7a1903520e75503a90fac7fe75a09927b51ba7f1db4cc1b73",
+    "started_at": "2026-10-25T00:35:58.889173925Z",
+    "state": "stopped",
+    "stop_reason": "Done",
+    "target_id": "590c422db60dad1d354e64bc1cf9f38d",
+    "terminal_reason": "The host confirmed an empty domain and released enforcement",
+    "updated_at": "2026-10-25T00:35:58.894771721Z"
+  }
+}

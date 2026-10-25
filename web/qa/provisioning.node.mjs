@@ -9,8 +9,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { loadTS } from "./load-ts.mjs";
+import { shapeIssues } from "./api-shapes.mjs";
 
-const M = await loadTS("launch-spec", "access-model", "launch-stream", "log-view", "evidence");
+const M = await loadTS("launch-spec", "access-model", "launch-stream", "log-view", "evidence", "secret-rules");
 const repo = (p) => {
   try {
     return readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
@@ -367,4 +368,70 @@ test("the receipt reader summarizes guard evidence and tolerates anything else",
   assert.equal(empty.network, undefined);
   assert.match(M.missingText("lost_host"), /heartbeats/);
   assert.match(M.missingText("weird_code"), /weird_code/);
+});
+
+// ---- broker rules and secret refusals ------------------------------------------------
+test("the secret form checks broker rules as hostproto.CheckInjection does", (t) => {
+  const go = repo("internal/hostproto/jobs.go");
+  if (!go) return t.skip("Go sources are not next to the web app");
+  const methods = go.match(/BrokerMethods\s*=\s*\[\]string\{([^}]+)\}/)?.[1].match(/"([A-Z]+)"/g).map((m) => m.slice(1, -1));
+  assert.deepEqual(M.BROKER_METHODS, methods);
+  assert.match(go, /MaxBrokerRules\s*=\s*64/);
+  assert.match(go, /MaxBrokerExtraHeaders\s*=\s*8/);
+  const rule = (methods, path, match = "exact") => [{ methods, path, match }];
+  assert.deepEqual(M.ruleIssues(rule("POST", "/v1/messages"), false, false), []);
+  assert.deepEqual(M.ruleIssues(rule("get, head", "/v2/", "prefix"), false, false), []);
+  assert.match(M.ruleIssues([], false, false)[0], /forwards nothing by default/);
+  for (const [m, p] of [["CONNECT", "/"], ["GET GET", "/"], ["", "/"], ["GET", "v1"], ["GET", "/a%2fb"], ["GET", "/a/../b"], ["GET", "/a//b"], ["GET", "/a b"], ["GET", "/" + "a".repeat(512)]])
+    assert.equal(M.ruleIssues(rule(m, p), false, false).length, 1, `${m} ${p}`);
+  assert.equal(M.ruleIssues(Array.from({ length: 65 }, () => rule("GET", "/")[0]), false, false).length, 1);
+  assert.match(M.ruleIssues([], true, false)[0], /Confirm that the wildcard/);
+  assert.deepEqual(M.ruleIssues([], true, true), []);
+  assert.ok(M.canonicalRulePath("/") && M.canonicalRulePath("/v1/models/") && M.canonicalRulePath("/a:b@c"));
+  const header = (name, value) => [{ name, value }];
+  assert.deepEqual(M.headerIssues(header("anthropic-version", "2023-06-01"), "x-api-key"), []);
+  for (const name of ["x-api-key", "Authorization", "Host", "cookie", "Proxy-Authorization", "X-Forwarded-For", "bad name"]) assert.equal(M.headerIssues(header(name, "v"), "x-api-key").length, 1, name);
+  for (const value of ["", " v", "v ", "\u00e9", "a".repeat(257)]) assert.equal(M.headerIssues(header("x-version", value), "x-api-key").length, 1, JSON.stringify(value));
+  assert.equal(M.headerIssues([...header("a", "1"), ...header("A", "2")], "x-api-key").length, 1, "duplicate names");
+  assert.match(M.headerIssues(Array.from({ length: 9 }, (_, i) => header(`h${i}`, "v")[0]), "x-api-key")[0], /At most 8/);
+  assert.ok(M.BASIC_USER.test("agent") && !M.BASIC_USER.test("a:b") && !M.BASIC_USER.test("") && !M.BASIC_USER.test("a b"));
+});
+
+test("every secret refusal the service sends is explained (real service answers)", () => {
+  const errors = fixture("errors.json");
+  for (const code of ["seal_key_changed", "seal_key_unavailable", "invalid_ciphertext", "invalid_secret"]) {
+    const e = errors[code];
+    assert.equal(e.body.error.code, code);
+    assert.ok(M.sealFailureText(code, e.body.error.message), code);
+  }
+  assert.match(M.sealFailureText("seal_key_changed", ""), /verify the seal key again/);
+  assert.ok(M.sealFailureText("invalid_secret", errors.invalid_secret.body.error.message).includes(errors.invalid_secret.body.error.message));
+  assert.equal(errors.secret_rules_missing.body.error.code, "secret_rules_missing");
+  assert.match(M.refusalHelp("secret_rules_missing"), /without broker rules/);
+  assert.equal(M.sealFailureText("not_found", ""), undefined);
+});
+
+test("the shape check finds invented, missing and retyped fields", () => {
+  const real = [{ a: 1, b: "x", list: [{ k: 1 }], m: { one: 1 } }, { a: 2, list: [], m: {} }];
+  assert.deepEqual(shapeIssues({ a: 3, b: "y", list: [{ k: 2 }], m: { two: 2 } }, real, { maps: [".m"] }), []);
+  assert.deepEqual(shapeIssues({ a: 3 }, real), [".list: the service always sends this field; the fixture does not", ".m: the service always sends this field; the fixture does not"]);
+  assert.deepEqual(shapeIssues({ a: "3", list: [{ k: 1, z: 1 }], m: {}, extra: true }, real), [
+    ".a: the fixture sends string, the service number",
+    ".list[].z: the service never sends this field",
+    ".extra: the service never sends this field",
+  ]);
+  assert.deepEqual(shapeIssues({ a: 1, list: null, m: {}, extra: 1 }, real, { optional: [".extra"] }), []);
+  assert.deepEqual(shapeIssues({ a: 1, list: [], m: {}, spec: { anything: 1 } }, [{ ...real[0], spec: {} }], { skip: [".spec"], required: false }), []);
+});
+
+test("the recorded fixtures carry the final secret API", () => {
+  const created = fixture("secret-created.json");
+  for (const k of ["scheme", "username", "rules", "wildcard_rules", "extra_headers", "envelope"]) assert.ok(k in created.response, k);
+  assert.equal(fixture("secret-wildcard.json").response.wildcard_rules, true);
+  const plan = fixture("launch-plan.json").response.plan;
+  assert.ok(plan.broker && plan.permissions.broker === `${plan.broker.address}:${plan.broker.port}`);
+  for (const s of plan.secrets) assert.equal(s.base_url, `http://${plan.broker.address}:${plan.broker.port}/${s.ref}`);
+  assert.ok(plan.notices.some((n) => n.startsWith("WARNING: secret wild-api uses wildcard rules")));
+  assert.equal(fixture("launch-plan-plain.json").response.plan.broker, undefined);
+  assert.ok(!JSON.stringify(fixture("secrets.json")).includes("synthetic-credential"));
 });

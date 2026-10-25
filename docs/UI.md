@@ -75,7 +75,21 @@ what was requested; it never presents a permission as proven behavior.
 ### Store a secret (administrator)
 
 **Secrets → Store a secret**: choose an active target, a name, the exact upstream host names, the header the broker
-sets, the profiles and people (subjects) that may use it, and a reason. Then:
+sets, the profiles and people (subjects) that may use it, and a reason, and say how the broker uses the credential:
+
+- **Scheme**: the value as it is, `Bearer` (`Authorization: Bearer VALUE`, the service's default for an Authorization
+  header) or `Basic` with a user name (`Authorization: Basic base64(user:VALUE)`). A scheme needs the Authorization
+  header.
+- **Requests the broker may forward**: the broker forwards nothing by default, so the form needs at least one rule:
+  methods (GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS), a canonical path, and *exact path* or *path prefix*; at most
+  64. **Allow every method on every path (wildcard)** replaces the rules with `[{"methods":["*"],"path":"/"}]` only
+  after a warning naming the upstreams and an explicit "I understand" confirmation; every plan that uses such a secret
+  warns and needs a second person's approval.
+- **Extra headers (not secret)**: at most 8 headers the broker sets on every forwarded request, such as an API
+  version. The credential header, Authorization, X-Api-Key, Host, Cookie, `Proxy-*` and `X-Forwarded-*` are refused.
+
+These are checked in the browser as `hostproto.CheckInjection` checks them, and again by the service with the broker's
+own validator. Then:
 
 1. **Verify seal key.** The browser fetches the target and `GET /targets/{id}/seal-key` and checks, with WebCrypto:
    the host's Ed25519 key hashes to the `host_key_id` an administrator approved; it matches this browser's pin; it signed
@@ -88,13 +102,25 @@ sets, the profiles and people (subjects) that may use it, and a reason. Then:
    HKDF-SHA256, ChaCha20-Poly1305, base mode) exactly as `internal/secretseal.Seal`: the associated data binds the
    format, suite, target id, secret name, version (the sealing time in milliseconds), key id and a fresh nonce. The
    request carries `ciphertext` = `Envelope.Encode()` (base64url of the envelope JSON) and never the value. The page
-   checks that the `ciphertext_sha256` the service records equals the SHA-256 of what it sent, and, if the service
-   relays the host's receipt while the dialog is open, verifies its tag with the HPKE exporter secret it kept in memory.
+   checks that the `ciphertext_sha256` the service records equals the SHA-256 of what it sent, and, when the host has
+   stored it, reads `GET /secrets/{id}/receipt` while the dialog is open and verifies the receipt's tag with the HPKE
+   exporter secret it kept in memory, then shows the host's value fingerprint (`sfp1_…`).
+
+The service's refusals are explained: `seal_key_changed` (the host published a new seal key after this browser
+verified it; the page drops the verification so you verify the new key and seal again), `seal_key_unavailable` (the
+host has not published a signed seal key), `invalid_ciphertext` (the envelope names another target or name) and
+`invalid_secret` (the broker would refuse the settings; the service's message names the field). Nothing is stored in
+any of these cases.
+
+The secrets list shows each secret's upstreams, header, scheme and user, its rules (or *Wildcard rules*), the
+ciphertext digest and the host's value fingerprint. A secret stored without rules by an older client is marked
+"No broker rules: no launch can use it (secret_rules_missing)".
 
 The value lives only in one uncontrolled password field: never in React state, the URL, storage, the console or error
 text. The field is cleared before sealing starts, the value's bytes are zeroed after sealing, and the receipt secret is
 wiped when the dialog closes. A browser without Ed25519 or X25519 in WebCrypto gets an unsupported-browser message and
-the CLI command; nothing falls back to plaintext or to the unsigned `hostproto.SealSecret` key.
+the CLI command. There is no fallback: nothing is sealed without a verified, host-signed seal key, and nothing is sent
+in plaintext.
 
 ### Launch an agent (launcher)
 
@@ -120,8 +146,12 @@ the CLI command; nothing falls back to plaintext or to the unsigned `hostproto.S
 **Review & plan** is mandatory. It calls `POST /launch-plans` (creates nothing) and shows the spec digest, policy
 digest, target, profile version, mode, lifetime and expiry rule, image, command, working directory, whether approval
 is needed and every reason, the service's notices, the effective permissions (the service's summary and the plain
-language table for the effective launch policy), each mount with its path inside the agent, and each brokered secret
-by name, variable, upstreams and header. Validator errors appear verbatim with their code. **Launch** appears only
+language table for the effective launch policy, including the task board and the secret broker rows), each mount with
+its path inside the agent, and, for a launch with secrets, the broker endpoint (`plan.broker`: address and port, the
+launch's only private destination, its network and the agent's address) and each brokered secret: the variable and the
+`base_url` it receives, the upstreams, header, scheme and user, the extra headers, the requests the broker forwards
+(or a wildcard warning) and the host's value fingerprint. Validator errors appear verbatim with their code; the secret
+refusals `secret_rules_missing`, `secret_unavailable` and `secret_scope` add what to do. **Launch** appears only
 after a plan and sends exactly the planned document; editing the form afterwards disables it until you plan again.
 
 **Import spec JSON** loads a file or pasted document strictly (one object, no unknown fields, no duplicate keys, no
@@ -157,7 +187,8 @@ The launch page shows:
   empty and enforcement released, exit and reason, host folder identities, broker requests per upstream, and the
   guard's per-operation allowed and denied counts, lost and complete flags and first denials with paths. A terminal
   launch without a receipt shows its `evidence_missing` reason prominently with what it means;
-- the stored plan, the canonical spec, the host jobs, **Launch again from this spec** and the matching CLI commands.
+- the stored plan (with the broker endpoint and each secret's `base_url` and rules, as in Review & plan), the
+  canonical spec, the host jobs, **Launch again from this spec** and the matching CLI commands.
 
 ### API tokens for the CLI
 
@@ -209,7 +240,8 @@ signed-in person with a role.
 | Agent output | `logs ID -f` | `GET /launches/{id}/logs` |
 | Approve, Reject | `approve ID --reason R`, `reject ID --reason R` | `POST /launches/{id}/approve`, `/reject` |
 | Stop | `stop ID --reason R` | `POST /launches/{id}/stop` |
-| Store a secret, delete | `secret set NAME …`, `secret rm NAME` | `GET /targets/{id}/seal-key`, `POST /secrets`, `DELETE /secrets/{id}` |
+| Store a secret, delete | `secret set NAME … --rule M:PATH`, `secret rm NAME` | `GET /targets/{id}/seal-key`, `POST /secrets`, `GET /secrets/{id}/receipt`, `DELETE /secrets/{id}` |
+| Launch form secret list | `secret ls --for-launch --target T --profile P` | `GET /targets/{id}/secrets` |
 | API tokens | `token create`, `token ls`, `token revoke` | `/api-tokens` |
 
 Pins differ by client: the CLI keeps `~/.config/agentgate/known-targets.json`; the browser keeps its own pins in
@@ -247,61 +279,57 @@ The browser QA needs a build and Playwright's Chromium. Where the pinned Playwri
 - `qa/provisioning.node.mjs`: the spec builder and importer; parity with the Go validators (it reads
   `prov_launchspec.go` and `hostproto/jobs.go` and compares the env, name, image and mount patterns, the protected trees
   and lifetime bounds); access summaries, risks and diffs; the SSE parser and the stream client (resume, polling
-  fallback, 401); logs; receipt parsing.
+  fallback, 401); logs; receipt parsing; broker rule and extra header checks against `hostproto` (methods and bounds
+  read from `jobs.go`); the explanations of every secret refusal in the recorded service answers.
 - `qa/secretseal.node.mjs`: the RFC 9180 A.2.1 vector reproduced byte for byte with its ephemeral key; ChaCha20-Poly1305
   against OpenSSL; the Go known-answer vector (`fixtures/secretseal-vector-v1.json`, a copy of
   `internal/secretseal/testdata/vector-v1.json` that the test compares with the original) verified, opened and its
   receipt checked; browser-sealed envelopes opened by an independent node:crypto implementation (`qa/hpke-node.mjs`);
   key substitution, forged signatures, swapped seal keys, other targets, expired records and bad receipts refused.
 - `qa/provisioning.mjs`: an owned API fixture drives every flow in Chromium: add target and approve key; profile from a
-  preset, dry run refused then accepted, grant, conflict shown verbatim, version diff; launch form rules, plan, stale
+  preset, the service's grant dry run, grant, conflict shown verbatim, version diff; launch form rules, plan, stale
   plan, launch; requester cannot approve, another approver does; live updates and resume; stream failure to polling;
   logs as text; stop, receipt and evidence; `evidence_missing`; secret sealing with missing, substituted, forged and
-  rewritten keys refused, the value never sent, stored or logged, and the host's relayed receipt verified; brokered secrets in a plan; strict import; API
-  tokens; overview; a viewer's disabled controls; session expiry; CSRF on every write; labelled inputs; 390 px layouts.
+  rewritten keys refused, the value never sent, stored or logged, and the host's receipt verified; broker rules, the
+  wildcard confirmation, Basic, `seal_key_changed` and `secret_rules_missing`; brokered secrets in a plan with the
+  broker endpoint; strict import; API tokens; overview; launch list filters and paging; a viewer's disabled controls;
+  session expiry; retiring a target; CSRF on every write; labelled inputs; 390 px layouts. Its last step compares
+  every answer the fixture gave with the real service's recorded answers (`qa/api-shapes.mjs`): no invented field, no
+  field of another type, and every field the service always sends.
+- `web/qa/fixtures/api/*.json` are answers of the real service, written by
+  `AGENTGATE_WRITE_WEB_FIXTURES=1 go test ./internal/control -run TestWebFixtures`; without the variable that test fails
+  when the service's answers no longer have the committed shapes.
 
 ## Limits
 
 - Kernel enforcement is unverified everywhere; the UI only reports what the API says.
-- The grant dry run, the seal key endpoint, envelope acceptance in `POST /secrets` and the receipt relay are not in
-  today's service. Against today's service the dry run is refused before anything changes, and storing a secret stops
-  at *Verify seal key* with "does not publish a signed seal key"; nothing is sent. The browser flows were tested against
-  the fixture, and the sealing code against the Go package's vector and its `Open`, not against a running service.
+- The browser flows are tested against an owned API fixture whose answers are checked, field by field, against
+  answers of the real service (`web/qa/fixtures/api`, recorded by `internal/control/web_fixtures_test.go`, which drives
+  the real service over HTTP with an in-process fake host). They were not run against a deployed service, and the
+  sealing code was checked against the Go package's vector and its `Open`, not against a real host.
 - Browser pins live in `localStorage`: a private window or cleared site data loses them, and the page then asks for the
   fingerprint again. They are not shared with the CLI.
 - The receipt check only works while the dialog that sealed the secret is open, because the browser keeps the receipt
   secret in memory only.
 
-## Backend requests
+## Resolved
 
-These are needed for the UI to do everything above against a real service. None was implemented here.
+The backend requests this page once listed are implemented in the service and used by the UI and the CLI:
 
-1. **Grant dry run.** `POST /profiles/{id}/versions/{n}/grants` accepts `"dry_run": true` (add it to the `GrantInput`
-   schema) and answers `{"dry_run": true, "changed", "document", "digest", "messages", "notices"}` without inserting a
-   version, audited as a plan (for example `profile.grants.planned`). A body field is fail-safe: today's service refuses
-   the unknown field instead of applying the edit. The CLI simulates the dry run locally for the same reason.
-2. **Seal key publication.** `GET /api/v1/targets/{id}/seal-key` returns `{"host_public_key", "host_key_fingerprint",
-   "record", …}` with `record` a `secretseal.SignedKeyRecord` relayed verbatim from the host, as in BROKER.md integration
-   request 2, and 404 `seal_key_unavailable` while a target has not published one. An implementation of exactly this
-   shape (heartbeat `seal_key`, `TargetSealKey`) was in progress, uncommitted, in the shared tree when this page was
-   written; the UI reads `host_public_key` and `record` and ignores the service's `host_key_fingerprint`.
-3. **Envelope acceptance.** `POST /secrets` accepts `ciphertext` = `secretseal.Envelope.Encode()`, checks
-   `DecodeEnvelope` with `target_id` equal to the target id and `name` equal to the secret name, and records
-   `ciphertext_sha256` as the SHA-256 of the decoded envelope bytes (the UI compares it with what it sent).
-4. **Receipt relay.** When the host accepts a secret, the secret record returned by `GET /secrets` (and by the create
-   response if the service waits) carries the `secretseal.Receipt` as `receipt` (an object; raw JSON text is also
-   read), so the sealing client can verify it.
-5. **Secret names for launchers.** `GET /targets/{id}/secrets` for `launch:write`, returning name, upstreams, header,
-   `allowed_profiles` and whether the caller is in `allowed_launchers` (no fingerprints, no values), so the launch form
-   can offer a picker to non-administrators.
-6. **Launch list filters and paging.** `GET /launches?target=&requested_by=&name=&cursor=` with `next_cursor`, and a
-   count by state (for the overview), instead of the newest 200 filtered in the browser.
-7. **Log streaming.** Log lines as SSE (a `log` event on `/launches/{id}/events` or `/launches/{id}/logs` with
-   `Accept: text/event-stream`), so following output does not poll.
-8. **Retire and secrets.** Retiring a target marks its secrets deleted but queues no `secret-delete`; either queue
-   removal jobs before revoking the key or document that the host must be wiped.
-9. **Device grants.** The grant engine has no device action; add `device PATH` / `revoke device PATH`, or keep devices
-   to whole-document versions.
-10. **Host fingerprint output.** The contract says `agentgate-hostd` prints `host_key_id` at enrollment; today
-    `agentgate-hostd install` prints only the target id, so the UI tells administrators to read `host_key_id` from
-    `/var/lib/agentgate-hostd/identity.json` instead.
+1. **Grant dry run.** `POST /profiles/{id}/versions/{n}/grants` with `"dry_run": true` answers the would-be document,
+   the parent and result digests, the structured change list, messages and notices, creates no version and is audited
+   as `profile.grant.previewed`. The UI preview and `agentgate grant --dry-run` both use it.
+2. **Seal key publication.** `GET /targets/{id}/seal-key` returns the host-signed `secretseal.SignedKeyRecord` verbatim
+   with `host_public_key`, `host_key_id`, `seal_key_id` and `not_after`, and 404 `seal_key_unavailable` while the host
+   has not published one.
+3. **Envelope acceptance.** `POST /secrets` takes `ciphertext` = `Envelope.Encode()` and the broker settings (`scheme`,
+   `username`, `rules`, `extra_headers`), refusing with `409 seal_key_changed`, `409 seal_key_unavailable`,
+   `422 invalid_ciphertext` or `422 invalid_secret`.
+4. **Receipt relay.** `GET /secrets/{id}/receipt` (and `receipt` on the secret record) relays the host's
+   `secretseal.Receipt`.
+5. **Secret names for launchers.** `GET /targets/{id}/secrets` (`launch:write`) lists names, states, upstream hosts,
+   rule summaries and whether the caller and profile may use each one, without fingerprints, envelopes or scope lists.
+6. **Launch list filters and paging.** `GET /launches?state=&target=&name=&requested_by=&mine=&limit=&cursor=` with an
+   opaque `next_cursor`, and `GET /launches/summary` for the overview.
+7. **Log streaming.** `GET /launches/{id}/logs` with `Accept: text/event-stream` streams `log` events with sequence ids,
+   resumes with `Last-Event-ID`, sends heartbeats and ends with an `end` event once the launch is terminal.

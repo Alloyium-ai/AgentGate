@@ -1,0 +1,21 @@
+{
+  "host_key_fingerprint": "SHA256:xdh19kPByiNZJOD5dY3ReqsU2sMM/jBxaLE86Xgs6hI",
+  "host_key_id": "ed25519:c5d875f643c1ca235924e0f9758dd17a",
+  "host_public_key": "pOMhW1_xxpXY_D5AozBIoqIIz-YXEkAX__ih5uctJ7U",
+  "not_after": "2026-11-24T00:35:58Z",
+  "record": {
+    "record": {
+      "format": "agentgate.sealkey.v1",
+      "host_key": "SHA256:xdh19kPByiNZJOD5dY3ReqsU2sMM/jBxaLE86Xgs6hI",
+      "key_id": "859e78cd4692f1e4494b6f6d67e0a35ef1767e9790305249756c230a5b1e701a",
+      "not_after": "2026-11-24T00:35:58Z",
+      "not_before": "2026-10-25T00:35:58Z",
+      "public_key": "ctZRKcK1BCrX-BFvRFth_ek50R3ZLCOlOAhIEGSw8iA",
+      "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
+      "target_id": "590c422db60dad1d354e64bc1cf9f38d"
+    },
+    "signature": "HjZuGW0S1i8qzjw_bI-dqz3bvxGthZ4cw9oWseoTXBwlsafwAHMbbEf6OCxS4m2w5TTB1xq1CmfHNJiNEekNCw"
+  },
+  "seal_key_id": "859e78cd4692f1e4494b6f6d67e0a35ef1767e9790305249756c230a5b1e701a",
+  "target_id": "590c422db60dad1d354e64bc1cf9f38d"
+}

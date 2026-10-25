@@ -610,11 +610,15 @@ func (e *env) printPlan(p LaunchPlan, name, launchID string, dryRun bool) {
 		web = strings.Join(perm.Web, ", ") + " to public addresses"
 	}
 	e.p.line("\n%s", e.p.paint(colorBold, "What this agent may do"))
+	taskboard := joinOr(nonEmpty(perm.Taskboard), "none")
+	if p.Broker != nil {
+		taskboard = "none (a launch with secrets reaches only its broker)"
+	}
 	rows := [][2]string{
 		{"network", "default " + perm.Network + "; IPv6 " + perm.IPv6},
 		{"web", web},
 		{"dns", joinOr(perm.DNS, "none")},
-		{"taskboard", joinOr(nonEmpty(perm.Taskboard), "none")},
+		{"taskboard", taskboard},
 		{"read", joinOr(perm.ReadOnly, "nothing")},
 		{"write", joinOr(perm.Writable, "nothing")},
 		{"execute", joinOr(perm.Execute, "nothing")},
@@ -630,7 +634,14 @@ func (e *env) printPlan(p LaunchPlan, name, launchID string, dryRun bool) {
 	if len(p.Mounts) == 0 {
 		rows = append(rows, [2]string{"mounts", "none"})
 	}
-	if perm.Broker != "" {
+	switch {
+	case p.Broker != nil:
+		endpoint := fmt.Sprintf("%s:%d", p.Broker.Address, p.Broker.Port)
+		rows = append(rows, [2]string{"broker", endpoint + " on network " + p.Broker.Subnet + " (agent at " + p.Broker.TargetAddress + "); the one private endpoint the agent may reach"})
+		if dryRun {
+			rows = append(rows, [2]string{"", "a dry run shows an example endpoint; the created launch is assigned its own"})
+		}
+	case perm.Broker != "":
 		rows = append(rows, [2]string{"broker", perm.Broker + " (the one private endpoint the agent may reach)"})
 	}
 	for _, s := range p.Secrets {
@@ -639,8 +650,11 @@ func (e *env) printPlan(p LaunchPlan, name, launchID string, dryRun bool) {
 			where = s.BaseURL + " -> " + strings.Join(s.Upstreams, ", ")
 		}
 		how := "header " + strings.TrimSpace(s.Header+" "+s.Scheme)
+		if s.Username != "" {
+			how += " (user " + s.Username + ")"
+		}
 		if s.Wildcard {
-			how += "; WILDCARD: every method and path"
+			how += "; WILDCARD: every method on every path"
 		} else if len(s.Rules) > 0 {
 			rules := []string{}
 			for _, r := range s.Rules {
@@ -648,12 +662,27 @@ func (e *env) printPlan(p LaunchPlan, name, launchID string, dryRun bool) {
 			}
 			how += "; only " + strings.Join(rules, ", ")
 		}
+		if len(s.ExtraHeaders) > 0 {
+			names := []string{}
+			for k := range s.ExtraHeaders {
+				names = append(names, k)
+			}
+			how += "; sets " + strings.Join(sortedStrings(names), ", ")
+		}
+		if s.ValueFingerprint != "" {
+			how += "; value " + s.ValueFingerprint
+		}
 		rows = append(rows, [2]string{"secret " + s.Ref, "$" + s.Env + " = " + where + " (" + how + "; the value never enters the sandbox)"})
 	}
 	if len(p.Secrets) == 0 {
 		rows = append(rows, [2]string{"secrets", "none"})
 	}
 	e.p.fields("  ", rows)
+	for _, s := range p.Secrets {
+		if s.Wildcard {
+			e.p.warn("secret %s uses wildcard broker rules: the broker forwards every method on every path of %s with the credential", s.Ref, strings.Join(s.Upstreams, ", "))
+		}
+	}
 	e.p.line("\n%s %s", e.p.paint(colorBold, "Approval:"), p.Approval)
 	for _, r := range p.ApprovalReasons {
 		e.p.line("  - %s", clean(r))

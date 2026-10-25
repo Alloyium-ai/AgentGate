@@ -14,8 +14,10 @@ import { Items, Launch, LaunchPlan, PolicyDocument, Profile, ProfileVersion, Tar
 import { AccessSummary, Capabilities, CodeBlock, CopyButton, Digest, Gate, Issues, KernelNotice, LiveRegion, ServerMessages } from "./prov-components";
 import { LIFETIME, LaunchForm, MountMode, buildSpec, cliCommands, emptyForm, envNameIssue, lifetimeText, parseSpec, predictApproval, specJSON } from "./launch-spec";
 import { webOf } from "./access-model";
+import { refusalHelp } from "./secret-rules";
 
 type PlanResponse = { dry_run: boolean; plan: LaunchPlan; spec: unknown; policy: PolicyDocument };
+
 
 export function PlanView({ plan, policy }: { plan: LaunchPlan; policy?: PolicyDocument }) {
   const perm = plan.permissions;
@@ -97,6 +99,14 @@ export function PlanView({ plan, policy }: { plan: LaunchPlan; policy?: PolicyDo
               <td>{list(perm.dns_resolvers)}</td>
             </tr>
             <tr>
+              <th scope="row">Task board</th>
+              <td>{perm.taskboard || "none"}</td>
+            </tr>
+            <tr>
+              <th scope="row">Secret broker</th>
+              <td>{perm.broker ? <code>{perm.broker}</code> : "none (no brokered secrets)"}</td>
+            </tr>
+            <tr>
               <th scope="row">Read-only</th>
               <td>{list(perm.read_only)}</td>
             </tr>
@@ -160,36 +170,96 @@ export function PlanView({ plan, policy }: { plan: LaunchPlan; policy?: PolicyDo
       )}
       <h3 className="subheading">Brokered secrets</h3>
       {plan.secrets?.length ? (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Secret</th>
-                <th scope="col">Broker address variable</th>
-                <th scope="col">Upstreams</th>
-                <th scope="col">Header</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plan.secrets.map((s) => (
-                <tr key={s.ref}>
-                  <td>
-                    {s.ref}
-                    <small>{s.secret_id}</small>
-                  </td>
-                  <td>
-                    <code>{s.env}</code>
-                  </td>
-                  <td>{s.upstreams?.join(", ")}</td>
-                  <td>
-                    <code>{s.header}</code>
-                  </td>
+        <>
+          {plan.broker && (
+            <div className="metadata">
+              <div>
+                <span>Broker endpoint (the launch's only private destination)</span>
+                <code>
+                  {plan.broker.address}:{plan.broker.port}
+                </code>
+              </div>
+              <div>
+                <span>Broker subnet</span>
+                <code>{plan.broker.subnet}</code>
+              </div>
+              <div>
+                <span>Agent address</span>
+                <code>{plan.broker.target_address}</code>
+              </div>
+            </div>
+          )}
+          {plan.secrets.some((s) => s.wildcard_rules) && (
+            <div className="evidence-warning" role="alert">
+              <strong>Wildcard broker rules:</strong> {plan.secrets.filter((s) => s.wildcard_rules).map((s) => s.ref).join(", ")} let the broker forward every method on every
+              path of the upstreams with the credential.
+            </div>
+          )}
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Secret</th>
+                  <th scope="col">What the agent receives</th>
+                  <th scope="col">Upstreams and credential</th>
+                  <th scope="col">Requests the broker forwards</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="form-note">The agent never receives a secret value. It gets only the broker address; the host's broker adds the credential to requests for these upstreams.</p>
-        </div>
+              </thead>
+              <tbody>
+                {plan.secrets.map((s) => (
+                  <tr key={s.ref}>
+                    <td>
+                      {s.ref}
+                      <small>{s.secret_id}</small>
+                      {s.value_fingerprint && <small>value {s.value_fingerprint}</small>}
+                    </td>
+                    <td>
+                      <code>
+                        {s.env}={s.base_url}
+                      </code>
+                    </td>
+                    <td>
+                      {s.upstreams?.join(", ")}
+                      <small>
+                        header <code>{s.header}</code>
+                        {s.scheme ? ` · ${s.scheme}` : ""}
+                        {s.username ? ` · user ${s.username}` : ""}
+                      </small>
+                      {Object.keys(s.extra_headers ?? {}).length > 0 && (
+                        <small>
+                          also sets{" "}
+                          {Object.entries(s.extra_headers)
+                            .map(([k, v]) => `${k}: ${v}`)
+                            .join("; ")}
+                        </small>
+                      )}
+                    </td>
+                    <td>
+                      {s.wildcard_rules ? (
+                        <span className="field-issue">every method on every path (wildcard)</span>
+                      ) : (
+                        <ul className="plain-list">
+                          {(s.rules ?? []).map((r, i) => (
+                            <li key={i}>
+                              <code>
+                                {r.methods.join(",")} {r.path}
+                              </code>{" "}
+                              {r.match === "prefix" ? "and below" : "exactly"}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="form-note">
+            The agent never receives a secret value. Each variable holds only the broker address; the host's broker adds the credential to requests that match the
+            rules and refuses every other request.
+          </p>
+        </>
       ) : (
         <p className="form-note">No secrets are brokered.</p>
       )}
@@ -739,6 +809,7 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
                 {planError instanceof ApiError ? (
                   <>
                     <code className="verbatim">{planError.code}</code>: <span className="verbatim">{planError.message}</span>
+                    {refusalHelp(planError.code) && <span className="form-note"> {refusalHelp(planError.code)}</span>}
                   </>
                 ) : (
                   String((planError as Error)?.message || planError)
@@ -756,6 +827,7 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
             )}
             <PlanView plan={plan.plan} policy={plan.policy} />
             {Boolean(launchError) && <ErrorBox error={launchError} />}
+            {launchError instanceof ApiError && refusalHelp(launchError.code) && <p className="form-note">{refusalHelp(launchError.code)}</p>}
             <div className="version-actions">
               <Gate
                 allowed={!stale && !launching && p.launch}

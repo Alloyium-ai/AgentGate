@@ -1,0 +1,68 @@
+{
+  "invalid_ciphertext": {
+    "body": {
+      "error": {
+        "code": "invalid_ciphertext",
+        "message": "Seal the value with secretseal to the target's published seal key (GET /targets/{id}/seal-key) and send Envelope.Encode()."
+      },
+      "request_id": "c53d3ad20c7eeabefea1c39b31028946"
+    },
+    "method": "POST",
+    "status": 422
+  },
+  "invalid_secret": {
+    "body": {
+      "error": {
+        "code": "invalid_secret",
+        "message": "Broker injection settings: an extra header names a header the broker never injects."
+      },
+      "request_id": "02833eec1b29b6341961a3f03b6a8a05"
+    },
+    "method": "POST",
+    "status": 422
+  },
+  "seal_key_changed": {
+    "body": {
+      "error": {
+        "code": "seal_key_changed",
+        "message": "The envelope is sealed to another seal key than the one the target publishes; fetch the seal key again and reseal."
+      },
+      "request_id": "3bde23f42e34eff291d00f15812912c6"
+    },
+    "method": "POST",
+    "status": 409
+  },
+  "seal_key_missing": {
+    "body": {
+      "error": {
+        "code": "seal_key_unavailable",
+        "message": "The target's host has not published a host-signed seal key yet. Start a current agentgate-hostd on it and wait for its next poll."
+      },
+      "request_id": "61071e027efacd20f616efaea33e2a4f"
+    },
+    "method": "GET",
+    "status": 404
+  },
+  "seal_key_unavailable": {
+    "body": {
+      "error": {
+        "code": "seal_key_unavailable",
+        "message": "The target has not published a host-signed seal key; no envelope can be sealed to it."
+      },
+      "request_id": "6206ce78243f0edbca5f6414af728f2f"
+    },
+    "method": "POST",
+    "status": 409
+  },
+  "secret_rules_missing": {
+    "body": {
+      "error": {
+        "code": "secret_rules_missing",
+        "message": "Secret bare-key has no broker rules, so it allows nothing (deny by default). Recreate it with explicit rules, for example [{\"methods\":[\"POST\"],\"path\":\"/v1/messages\",\"match\":\"exact\"}], or with the wildcard [{\"methods\":[\"*\"],\"path\":\"/\"}] to allow every method and path of its upstreams."
+      },
+      "request_id": "c051532d5a6f60587ccc312c4e01c8f5"
+    },
+    "method": "POST",
+    "status": 422
+  }
+}

@@ -32,14 +32,6 @@ import (
 
 const testToken = "agt_" + "TESTTOKENtesttokenTESTTOKENtesttokenTESTTOK"
 
-// proposedOps are operations the CLI uses that the service does not publish
-// yet: the control plane integration requests in docs/BROKER.md. The CLI
-// treats their 404 as "not published" and fails closed.
-var proposedOps = []apiOp{
-	{method: "GET", template: "/api/v1/targets/{id}/seal-key", re: regexp.MustCompile(`^/api/v1/targets/([^/]+)/seal-key$`)},
-	{method: "GET", template: "/api/v1/secrets/{id}/receipt", re: regexp.MustCompile(`^/api/v1/secrets/([^/]+)/receipt$`)},
-}
-
 type apiOp struct {
 	method, template string
 	re               *regexp.Regexp
@@ -205,11 +197,6 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			if m := f.ops[i].re.FindStringSubmatch(r.URL.Path); m != nil && f.ops[i].method == r.Method {
 				op, params = &f.ops[i], m[1:]
 				break
-			}
-		}
-		for i := range proposedOps {
-			if m := proposedOps[i].re.FindStringSubmatch(r.URL.Path); op == nil && m != nil && proposedOps[i].method == r.Method {
-				op, params = &proposedOps[i], m[1:]
 			}
 		}
 		if op == nil {

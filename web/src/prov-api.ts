@@ -113,6 +113,8 @@ export type Permissions = {
   web: string[];
   dns_resolvers: string[];
   taskboard: string;
+  // broker is the one private endpoint of a launch with secrets.
+  broker?: string;
   read_only: string[] | null;
   writable: string[] | null;
   execute: string[] | null;
@@ -122,13 +124,23 @@ export type Permissions = {
   anonymous_execute: boolean;
 };
 export type PlanMount = { name: string; source: string; mode: string; path: string };
+export type BrokerRule = { methods: string[]; path: string; match?: string };
 export type PlanSecret = {
   ref: string;
   secret_id: string;
   env: string;
   upstreams: string[];
   header: string;
+  scheme: string;
+  username?: string;
+  rules: BrokerRule[];
+  wildcard_rules: boolean;
+  extra_headers: Record<string, string>;
+  // base_url is what env receives inside the sandbox.
+  base_url: string;
+  value_fingerprint?: string;
 };
+export type PlanBroker = { address: string; port: number; subnet: string; target_address: string };
 export type LaunchPlan = {
   spec_digest: string;
   policy_digest: string;
@@ -146,6 +158,8 @@ export type LaunchPlan = {
   permissions: Permissions;
   mounts: PlanMount[];
   secrets: PlanSecret[];
+  // broker is the launch's broker endpoint, present exactly with secrets.
+  broker?: PlanBroker;
   kernel_verified: boolean;
   notices: string[];
 };
@@ -235,7 +249,14 @@ export type Secret = {
   target_id: string;
   upstreams: string[];
   header: string;
+  scheme: string;
+  username?: string;
+  rules: BrokerRule[];
+  wildcard_rules: boolean;
+  extra_headers: Record<string, string>;
   ciphertext_sha256: string;
+  envelope?: { format: string; key_id: string; version: number; nonce: string };
+  value_fingerprint?: string;
   allowed_profiles: string[];
   allowed_launchers: string[];
   state: string;

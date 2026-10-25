@@ -164,6 +164,13 @@ var codeHints = map[string]string{
 	"grant_usage":               "Check the value: agentgate grant --help lists each action's arguments.",
 	"grant_upgrade_required":    "The edit needs a version two profile: repeat it with --upgrade.",
 	"grant_rejected":            "The resulting policy fails validation; the message names the rule.",
+	"seal_key_changed":          "The target published a new seal key while this ran: run agentgate secret set again; it fetches and verifies the new key.",
+	"seal_key_unavailable":      "The target's host has not published a host-signed seal key: start a current agentgate-hostd on it and wait for its next poll.",
+	"invalid_ciphertext":        "The service refused the sealed envelope (another target, name or format): run agentgate secret set again; never reuse an envelope.",
+	"invalid_secret":            "Fix the broker setting the message names (--upstream, --header, --scheme, --username, --rule, --extra-header).",
+	"secret_rules_missing":      "The secret was stored without broker rules, so no launch can use it: an administrator removes it (agentgate secret rm) and stores it again with --rule or --allow-any-path.",
+	"secrets_on_host":           "Approve the host key so its host can remove the secrets, or retire with --force and wipe the host.",
+	"receipt_unavailable":       "The host has not answered the secret-put yet: agentgate secret ls shows its state.",
 }
 
 func hintForClass(exit int) string {

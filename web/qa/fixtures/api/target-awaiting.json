@@ -1,0 +1,26 @@
+{
+  "agent_version": "0.1.0",
+  "capabilities": [
+    "docker",
+    "live-mounts",
+    "snapshot-mounts",
+    "brokered-secrets",
+    "pocpolicy-v2"
+  ],
+  "created_at": "2026-10-25T00:35:58.928559494Z",
+  "created_by": "oidc:ada",
+  "encryption_key": "Il4p-fgB3BVCceFo3BPPwbhFnH_mTcsbyM9aE-pvsk0",
+  "heartbeat_seconds": 10,
+  "host_key_id": "ed25519:ab6588e83266efcac6d7097fb0db6ba0",
+  "host_public_key": "mD6YXDwlsXGNdVUFd1WsI6eEcJ_L7Vm59qD0BL046Fs",
+  "hostname": "host-1",
+  "id": "da77486e40733bddd6ee884c30355077",
+  "job_key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+  "kernel_verified": false,
+  "last_seen_at": "2026-10-25T00:35:58.759Z",
+  "name": "waiting-host",
+  "online": false,
+  "revision": 2,
+  "state": "awaiting_key_approval",
+  "updated_at": "2026-10-25T00:35:58.929945690Z"
+}

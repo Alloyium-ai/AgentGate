@@ -12,7 +12,7 @@ What this agent may do
   network           default deny; IPv6 deny
   web               https to public addresses
   dns               1.1.1.1
-  taskboard         10.0.0.1:8443
+  taskboard         none (a launch with secrets reaches only its broker)
   read              /usr, /lib, /var/lib/agentgate/mounts/repo
   write             /var/lib/agentgate/workspace, /tmp
   execute           /usr/bin, /usr/local/bin
@@ -21,7 +21,9 @@ What this agent may do
   signals           SIGTERM (own process tree only)
   anonymous exec    no
   mount repo        /srv/repos/app -> /var/lib/agentgate/mounts/repo (read-only, live)
-  secret anthropic  $ANTHROPIC_BASE_URL = broker for api.anthropic.com (header x-api-key; the value never enters the sandbox)
+  broker            172.30.7.2:8443 on network 172.30.7.0/29 (agent at 172.30.7.3); the one private endpoint the agent may reach
+                    a dry run shows an example endpoint; the created launch is assigned its own
+  secret anthropic  $ANTHROPIC_BASE_URL = http://172.30.7.2:8443/anthropic -> api.anthropic.com (header x-api-key; only POST /v1/messages (exact); sets anthropic-version; value sfp1_abababababababababababababababab; the value never enters the sandbox)
 
 Approval: required
   - brokered secrets anthropic
@@ -30,4 +32,5 @@ Approval: required
   A different human with the approver role decides it (agentgate approve ID); never the requester.
 
 Notices
+  - the agent reaches its secrets only through the broker at 172.30.7.2:8443; the taskboard TCP endpoint is not allowed in this launch
   - kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel

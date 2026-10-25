@@ -93,11 +93,12 @@ An administrator stores the key once, sealed to the target's host key (see [secr
 
 ```sh
 agentgate secret set anthropic --target local --upstream api.anthropic.com --header x-api-key \
+  --rule POST:/v1/messages --extra-header anthropic-version=2023-06-01 \
   --allow-profile python-dev --allow-launcher local:lin < ~/anthropic.key
 ```
 
-On a service that enforces broker rules, add the requests the broker may forward, for example
-`--rule POST:/v1/messages`. Then see exactly what the agent will be allowed to do, and launch it:
+The broker forwards nothing by default: `--rule` names the requests it may forward with the credential (here only
+`POST /v1/messages`). Then see exactly what the agent will be allowed to do, and launch it:
 
 ```sh
 agentgate launch --name repo-fixer --target local --mode session --lifetime 2h \
@@ -108,9 +109,12 @@ agentgate launch --name repo-fixer --target local --mode session --lifetime 2h \
 
 `--dry-run` posts the spec to `/launch-plans` and prints the resolved plan: target, profile version and digest, mode,
 lifetime and expiry, image, command, working directory, spec and policy digests, network, web, DNS, read, write,
-execute and denied trees, devices, signals, anonymous execute, each mount with its in-agent path, each brokered secret
-by name with its environment variable, upstreams and header (never a value), the approval decision with every reason,
-and the notices. `--json` prints the service's answer unchanged. Remove `--dry-run` and add `--wait` to launch it and
+execute and denied trees, devices, signals, anonymous execute, each mount with its in-agent path, the launch's broker
+endpoint (`plan.broker`: address, port and network, the one private destination of a launch with secrets; the task
+board is not reachable then), each brokered secret with the variable and the `base_url` it receives, the upstreams,
+the header and scheme, the requests the broker forwards (or a wildcard warning), the extra headers it sets and the
+host's value fingerprint (never a value), the approval decision with every reason, and the notices. A dry run shows an
+example broker endpoint; the created launch is assigned its own. `--json` prints the service's answer unchanged. Remove `--dry-run` and add `--wait` to launch it and
 follow it until it runs. The same launch from a file: `agentgate launch -f spec.json` (`agentgate schema launch-spec`
 prints the JSON Schema).
 
@@ -265,7 +269,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `stop ID [--wait] [--yes]` | `POST /launches/{id}/stop` | confirms for a running session |
 | `approve ID --reason R [--yes]`, `reject ID --reason R` | `POST /launches/{id}/approve`, `/reject` | approver; never your own launch |
 | `audit [--launch ID] [--since T] [--until T] [--actor A] [--action A] [--resource R] [--limit N]`, `audit catalog` | `GET /audit`, `GET /audit-catalog` | |
-| `secret set NAME --upstream HOST --allow-profile P [...]` | `GET /openapi.json`, `GET /targets/{id}`, `GET /targets/{id}/seal-key`, `POST /secrets`, `GET /secrets/{id}/receipt` | see below |
+| `secret set NAME --upstream HOST (--rule R... \| --allow-any-path) --allow-profile P [...]` | `GET /targets/{id}`, `GET /targets/{id}/seal-key`, `POST /secrets`, `GET /secrets/{id}/receipt` | see below |
 | `secret ls [--target T] [--profile P] [--for-launch]` | `GET /secrets` (administrators), `GET /targets/{id}/secrets` (launchers) | administrators see all metadata; everyone else (or `--for-launch`, `--profile`) sees the names a launch may use and why not; `-q` prints the usable names |
 | `secret rm NAME\|ID [--target T] [--yes]` | `DELETE /secrets/{id}` | administrators |
 | `token create [--role R] [--expires D] [--name N] [--save]`, `token ls`, `token revoke ID` | `/api-tokens` | password sign-in each time: a token cannot mint, list or revoke tokens |
@@ -313,7 +317,7 @@ sends a complete `agentgate.launch.v1` document as it is and cannot be combined 
 
 ```sh
 agentgate secret set NAME --upstream HOST [--upstream HOST] [--header x-api-key|Authorization] \
-  [--scheme Bearer|Basic [--basic-user U]] [--rule METHODS:PATH[:exact|prefix]]... [--allow-any-path] \
+  [--scheme Bearer|Basic [--username U]] (--rule METHODS:PATH[:exact|prefix]... | --allow-any-path) \
   [--extra-header NAME=VALUE]... [--target local] --allow-profile PROFILE [--allow-launcher SUBJECT] \
   [--wait [--wait-timeout 2m]] [--reason R]
 ```
@@ -321,21 +325,34 @@ agentgate secret set NAME --upstream HOST [--upstream HOST] [--header x-api-key|
 The value is read from a hidden prompt (entered twice) on a terminal, or from standard input otherwise; never from
 arguments or the environment. `--allow-launcher` defaults to your own subject.
 
-How the broker uses the credential follows what the service accepts, which the CLI reads from the service's OpenAPI
-document (`GET /openapi.json`, the `SecretInput` schema) and never guesses:
+How the broker uses the credential is part of the secret (`POST /secrets` fields `scheme`, `username`, `rules`,
+`extra_headers`), checked by the service with the broker's own validator before anything is stored:
 
-- A service with broker rules forwards nothing by default, so `secret set` needs at least one `--rule`, for example
-  `--rule POST:/v1/messages` or `--rule GET,HEAD:/v1/models:prefix`, or the explicit wildcard `--allow-any-path` (every
-  method and path of the upstreams; every plan that uses it says so and needs approval). `--scheme` (`Bearer` or
-  `Basic` with `--basic-user`) and `--extra-header` are sent as fields.
-- A service without them forwards every path of the upstreams; the CLI then refuses `--rule`, `--allow-any-path`,
-  `--extra-header` and `--scheme Basic`, and implements `--scheme Bearer` by sealing the value with a `Bearer `
-  prefix, because that API carries no scheme field.
-- `--wait` (only where the service relays receipts, `GET /secrets/{id}/receipt`) polls for the host's
-  `secretseal.Receipt` and verifies its tag with the sealing secret this run holds (`Sealed.VerifyReceipt`): only the
-  host that opened exactly this envelope can produce it, so a relay that swapped the ciphertext is detected (exit 13).
-  It then prints the host's keyed value fingerprint (`sfp1_...`). The sealing secret never leaves the process, so a
-  later run cannot verify the receipt.
+- The broker forwards nothing by default, so `secret set` needs at least one `--rule` or the explicit wildcard.
+  `--rule POST:/v1/messages` allows exactly that path; `--rule GET,HEAD:/v1/models:prefix` allows the path and
+  everything below it. A rule without `:exact` or `:prefix` is exact. Methods are GET, HEAD, POST, PUT, PATCH, DELETE
+  and OPTIONS; a path is canonical (no percent-encoding, no `.` or `..` segments, no `//`); at most 64 rules.
+- `--allow-any-path` is the wildcard `[{"methods":["*"],"path":"/"}]`: every method on every path of the upstreams.
+  The secret is stored with `wildcard_rules: true`, every plan that uses it carries a `WARNING:` notice and an
+  approval reason, and `secret ls` and the UI mark it. It cannot be combined with `--rule`.
+- `--header Authorization` sends the value as `Authorization: Bearer VALUE` (the service stores `scheme: Bearer`
+  explicitly); `--scheme Basic --username U` sends `Authorization: Basic base64(U:VALUE)`. A scheme needs the
+  Authorization header; `--username` (alias `--basic-user`) needs Basic.
+- `--extra-header NAME=VALUE` (at most 8) sets a header that is not secret, such as an API version, on every
+  forwarded request. It may not name the credential header, Authorization, X-Api-Key, Host, Cookie, `Proxy-*` or
+  `X-Forwarded-*`; values are 1 to 256 printable ASCII characters.
+- A secret stored without rules by an older client is listed as unusable, and every plan or launch that references
+  it is refused with `secret_rules_missing` until it is stored again with rules.
+- `--wait` polls `GET /secrets/{id}/receipt` for the host's `secretseal.Receipt` and verifies its tag with the
+  sealing secret this run holds (`Sealed.VerifyReceipt`): only the host that opened exactly this envelope can produce
+  it, so a relay that swapped the ciphertext is detected (exit 13). It then prints the host's keyed value fingerprint
+  (`sfp1_...`). The sealing secret never leaves the process, so a later run cannot verify the receipt.
+
+The service's refusals are shown with what to do: `409 seal_key_changed` (the host published a new seal key after the
+CLI fetched it: run the command again, which fetches and verifies the new key), `409 seal_key_unavailable` (the host
+has not published a signed seal key: start a current `agentgate-hostd` and wait for its next poll),
+`422 invalid_ciphertext` (the envelope names another target or name, or is not a `secretseal` envelope) and
+`422 invalid_secret` (the broker would refuse the settings; the message names the field, never a value).
 
 Before it reads the value, the CLI checks the target, and every failure is exit 13 with nothing read or sent:
 
@@ -343,15 +360,16 @@ Before it reads the value, the CLI checks the target, and every failure is exit 
    host key with `agentgate target approve-key` or `agentgate up`, or with `agentgate target pin` after comparing the
    fingerprint on the host console. No pin, or a service that now reports another `host_key_id`, is refused with
    what to compare.
-2. It fetches the target's signed seal key, `GET /targets/{id}/seal-key` returning
-   `{host_public_key, host_key_fingerprint, record}` (`record` is the `secretseal.SignedKeyRecord` the host
-   publishes; the endpoint is the control plane request in [BROKER.md](BROKER.md#integration-requests)). It requires
+2. It fetches the target's signed seal key, `GET /targets/{id}/seal-key` returning `{target_id, host_key_id,
+   host_public_key, host_key_fingerprint, seal_key_id, not_after, record}` (`record` is the
+   `secretseal.SignedKeyRecord` the host publishes and signs with its host key). It requires
    that `hostproto.KeyID(host_public_key)` equals the pinned `host_key_id`, that the SHA-256 fingerprint matches the
    one pinned earlier (recorded on first successful use), and that the record is signed by that key, names this
    target and is in date (`secretseal.VerifyKeyRecord`). A substituted host key, a seal key signed by anything else,
    a record for another target and an expired record are all refused.
-3. A service that does not serve the seal key (it answers 404) gives the CLI nothing to verify, and `secret set`
-   refuses. There is no option to seal to an unsigned key: the earlier `hostproto.SealSecret` format is retired.
+3. A target whose host has not published a seal key (`404 seal_key_unavailable`) gives the CLI nothing to verify, and
+   `secret set` refuses. There is no option to seal to an unsigned key: the earlier `hostproto.SealSecret` format is
+   retired.
 
 The value is sealed with `internal/secretseal` (RFC 9180 HPKE; the associated data binds the target, the name, a
 version and a nonce), and only the envelope (`Envelope.Encode()`) is submitted, in the `ciphertext` field. The buffers
@@ -365,4 +383,4 @@ ciphertext SHA-256 than the one sent, the CLI reports it with exit 13.
 - It does not touch Docker, cgroups, BPF or the appliance scripts itself: `up` delegates to `docker compose` and
   `agentgate-hostd` with argument vectors (never a shell string) and a minimal environment.
 - It does not manage users; the UI and `community first-admin` do.
-- It verifies the host's secret receipt only with `secret set --wait`, and only where the service relays it.
+- It verifies the host's secret receipt only with `secret set --wait` (the sealing secret exists only in that run).

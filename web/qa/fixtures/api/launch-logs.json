@@ -1,0 +1,19 @@
+{
+  "bytes": 32,
+  "items": [
+    {
+      "seq": 1,
+      "stream": "stdout",
+      "text": "collecting the docs",
+      "time": "2026-10-25T00:35:58.759Z"
+    },
+    {
+      "seq": 2,
+      "stream": "stdout",
+      "text": "wrote 3 files",
+      "time": "2026-10-25T00:35:58.759Z"
+    }
+  ],
+  "limit_bytes": 1048576,
+  "truncated": false
+}

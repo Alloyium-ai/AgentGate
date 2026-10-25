@@ -1,0 +1,157 @@
+{
+  "items": [
+    {
+      "agent_version": "0.1.0",
+      "capabilities": [
+        "docker",
+        "live-mounts",
+        "snapshot-mounts",
+        "brokered-secrets",
+        "pocpolicy-v2"
+      ],
+      "created_at": "2026-10-25T00:35:58.940509711Z",
+      "created_by": "oidc:ada",
+      "encryption_key": "EfiEDaneTphaVKYbGuuL5SLyzP5KNnUOijUTzj664hA",
+      "heartbeat_seconds": 10,
+      "host_key_id": "ed25519:b69512d9a9f44c79abd2e7bee0a9243b",
+      "host_public_key": "51aqKTTsrfQ5-b_vGSE1xS8rPeVpFkYt8zrMFwf5tSU",
+      "hostname": "host-1",
+      "id": "ad5993123ca9f5adb93cd32a56d292d8",
+      "job_key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+      "kernel_verified": false,
+      "last_seen_at": "2026-10-25T00:35:58.759Z",
+      "name": "old-host",
+      "online": true,
+      "retiring_since": "2026-10-25T00:35:58.956403460Z",
+      "revision": 5,
+      "seal_key": {
+        "record": {
+          "format": "agentgate.sealkey.v1",
+          "host_key": "SHA256:tpUS2an0THmr0ue+4KkkO3pu86Ljr2cqGke5SDCGuTs",
+          "key_id": "caf0f103b29f152e95ffb955cb1e24c05f514b9c5024e8f69132c18ffb6dda40",
+          "not_after": "2026-11-24T00:35:58Z",
+          "not_before": "2026-10-25T00:35:58Z",
+          "public_key": "EfiEDaneTphaVKYbGuuL5SLyzP5KNnUOijUTzj664hA",
+          "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
+          "target_id": "ad5993123ca9f5adb93cd32a56d292d8"
+        },
+        "signature": "qacAHxaBHFvM9u8Atck_YIRUjFlaNKLQAQvmXeieGRvRp_ae6-Sl8a7VK5NVjxidxq5gSr06KI6pWY7X5V7QAQ"
+      },
+      "seal_key_id": "caf0f103b29f152e95ffb955cb1e24c05f514b9c5024e8f69132c18ffb6dda40",
+      "seal_key_not_after": "2026-11-24T00:35:58Z",
+      "state": "retiring",
+      "updated_at": "2026-10-25T00:35:58.956403460Z"
+    },
+    {
+      "agent_version": "0.1.0",
+      "capabilities": [
+        "docker",
+        "live-mounts",
+        "snapshot-mounts",
+        "brokered-secrets",
+        "pocpolicy-v2"
+      ],
+      "created_at": "2026-10-25T00:35:58.928559494Z",
+      "created_by": "oidc:ada",
+      "encryption_key": "Il4p-fgB3BVCceFo3BPPwbhFnH_mTcsbyM9aE-pvsk0",
+      "heartbeat_seconds": 10,
+      "host_key_id": "ed25519:ab6588e83266efcac6d7097fb0db6ba0",
+      "host_public_key": "mD6YXDwlsXGNdVUFd1WsI6eEcJ_L7Vm59qD0BL046Fs",
+      "hostname": "host-1",
+      "id": "da77486e40733bddd6ee884c30355077",
+      "job_key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+      "kernel_verified": false,
+      "last_seen_at": "2026-10-25T00:35:58.759Z",
+      "name": "waiting-host",
+      "online": false,
+      "revision": 2,
+      "state": "awaiting_key_approval",
+      "updated_at": "2026-10-25T00:35:58.929945690Z"
+    },
+    {
+      "agent_version": "",
+      "capabilities": [],
+      "created_at": "2026-10-25T00:35:58.925191193Z",
+      "created_by": "oidc:ada",
+      "encryption_key": "",
+      "heartbeat_seconds": 10,
+      "host_key_id": "",
+      "hostname": "",
+      "id": "700994ebcfece6c9fb5a590bf1db99ae",
+      "job_key_id": "",
+      "kernel_verified": false,
+      "name": "new-host",
+      "online": false,
+      "revision": 1,
+      "state": "pending",
+      "updated_at": "2026-10-25T00:35:58.925191193Z"
+    },
+    {
+      "agent_version": "0.1.0",
+      "capabilities": [
+        "docker",
+        "live-mounts",
+        "snapshot-mounts",
+        "brokered-secrets",
+        "pocpolicy-v2"
+      ],
+      "created_at": "2026-10-25T00:35:58.913390761Z",
+      "created_by": "oidc:ada",
+      "encryption_key": "4D_qlN_-mx2EzUv8FBKR4S3_Sgv_9LiJSa4UqMxnFiw",
+      "heartbeat_seconds": 10,
+      "host_key_id": "ed25519:4f2ef50b37ce2084e86bb77d574a20d8",
+      "host_public_key": "vQUCkzCac-sJfCTK-nsz2MC8ChaDHjx-rDHhfqoO3bs",
+      "hostname": "host-1",
+      "id": "de1df681ae3e1ae66ebb03d7a7c4794c",
+      "job_key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+      "kernel_verified": false,
+      "last_seen_at": "2026-10-25T00:35:58.759Z",
+      "name": "fresh-host",
+      "online": true,
+      "revision": 3,
+      "state": "active",
+      "updated_at": "2026-10-25T00:35:58.918094482Z"
+    },
+    {
+      "agent_version": "0.1.0",
+      "capabilities": [
+        "docker",
+        "live-mounts",
+        "snapshot-mounts",
+        "brokered-secrets",
+        "pocpolicy-v2"
+      ],
+      "created_at": "2026-10-25T00:35:58.786750109Z",
+      "created_by": "oidc:ada",
+      "encryption_key": "ctZRKcK1BCrX-BFvRFth_ek50R3ZLCOlOAhIEGSw8iA",
+      "heartbeat_seconds": 10,
+      "host_key_id": "ed25519:c5d875f643c1ca235924e0f9758dd17a",
+      "host_public_key": "pOMhW1_xxpXY_D5AozBIoqIIz-YXEkAX__ih5uctJ7U",
+      "hostname": "host-1",
+      "id": "590c422db60dad1d354e64bc1cf9f38d",
+      "job_key_id": "ed25519:fe083c87b69f5c80f90e7e61b882e343",
+      "kernel_verified": false,
+      "last_seen_at": "2026-10-25T00:35:58.759Z",
+      "name": "local",
+      "online": true,
+      "revision": 4,
+      "seal_key": {
+        "record": {
+          "format": "agentgate.sealkey.v1",
+          "host_key": "SHA256:xdh19kPByiNZJOD5dY3ReqsU2sMM/jBxaLE86Xgs6hI",
+          "key_id": "859e78cd4692f1e4494b6f6d67e0a35ef1767e9790305249756c230a5b1e701a",
+          "not_after": "2026-11-24T00:35:58Z",
+          "not_before": "2026-10-25T00:35:58Z",
+          "public_key": "ctZRKcK1BCrX-BFvRFth_ek50R3ZLCOlOAhIEGSw8iA",
+          "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
+          "target_id": "590c422db60dad1d354e64bc1cf9f38d"
+        },
+        "signature": "HjZuGW0S1i8qzjw_bI-dqz3bvxGthZ4cw9oWseoTXBwlsafwAHMbbEf6OCxS4m2w5TTB1xq1CmfHNJiNEekNCw"
+      },
+      "seal_key_id": "859e78cd4692f1e4494b6f6d67e0a35ef1767e9790305249756c230a5b1e701a",
+      "seal_key_not_after": "2026-11-24T00:35:58Z",
+      "state": "active",
+      "updated_at": "2026-10-25T00:35:58.790794943Z"
+    }
+  ]
+}

@@ -44,7 +44,6 @@ func newSealFixture(t *testing.T) *sealFixture {
 	if f.seal, err = secretseal.GenerateHostKey(f.target.ID, f.hostKey, h.now, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	h.api.reply("GET /api/v1/openapi.json", 200, openAPIWith(false))
 	h.api.handle("POST /api/v1/secrets", func(w http.ResponseWriter, r *http.Request, body []byte, _ []string) {
 		f.posted = append(f.posted, body)
 		var in control.SecretInput
@@ -80,9 +79,17 @@ func (f *sealFixture) pin() {
 	}
 }
 
+// set runs secret set with one broker rule unless extra names the rules.
 func (f *sealFixture) set(stdin string, extra ...string) result {
-	args := append([]string{"secret", "set", "anthropic", "--upstream", "api.anthropic.com", "--allow-profile", "python-dev", "--allow-launcher", "local:lin", "--verbose"}, extra...)
-	return f.h.run(stdin, args...)
+	args := []string{"secret", "set", "anthropic", "--upstream", "api.anthropic.com", "--allow-profile", "python-dev", "--allow-launcher", "local:lin", "--verbose"}
+	rules := false
+	for _, a := range extra {
+		rules = rules || a == "--rule" || a == "--allow-any-path"
+	}
+	if !rules {
+		args = append(args, "--rule", "POST:/v1/messages")
+	}
+	return f.h.run(stdin, append(args, extra...)...)
 }
 
 func assertNoSecret(t *testing.T, f *sealFixture, r result) {
@@ -220,8 +227,8 @@ func TestSecretSetBearerSchemeAndFingerprintPin(t *testing.T) {
 	mustDecode(t, f.posted[0], &in)
 	env, _ := secretseal.DecodeEnvelope(in.Ciphertext)
 	opened, err := secretseal.Open(f.seal, env, 0, f.h.now)
-	if err != nil || string(opened.Value) != "Bearer "+plaintext || in.Header != "Authorization" {
-		t.Fatalf("the host opens %q (%v)", opened.Value, err)
+	if err != nil || string(opened.Value) != plaintext || in.Header != "Authorization" || in.Scheme != "Bearer" {
+		t.Fatalf("the scheme is a field, never part of the value: %q %+v (%v)", opened.Value, in, err)
 	}
 	st := store{dir: f.h.dir, euid: os.Geteuid()}
 	k, _ := st.loadTrust()
@@ -272,38 +279,10 @@ func TestSecretSetDetectsAChangedCiphertext(t *testing.T) {
 	}
 }
 
-// openAPIWith is the service's document with the secret injection fields and
-// the receipt endpoint present (the control plane is adding them) or absent
-// (the service before that change), whichever version the build has.
-func openAPIWith(injection bool) map[string]any {
-	raw, _ := json.Marshal(control.OpenAPI())
-	var out map[string]any
-	json.Unmarshal(raw, &out)
-	props := out["components"].(map[string]any)["schemas"].(map[string]any)["SecretInput"].(map[string]any)["properties"].(map[string]any)
-	paths := out["paths"].(map[string]any)
-	for _, k := range []string{"scheme", "username", "rules", "extra_headers"} {
-		if injection {
-			props[k] = map[string]any{}
-		} else {
-			delete(props, k)
-		}
-	}
-	if injection {
-		paths["/api/v1/secrets/{id}/receipt"] = map[string]any{"get": map[string]any{}}
-	} else {
-		delete(paths, "/api/v1/secrets/{id}/receipt")
-	}
-	return out
-}
-
-func upcomingOpenAPI() map[string]any { return openAPIWith(true) }
-
 func TestSecretSetUsesTheServiceInjectionFieldsAndVerifiesTheReceipt(t *testing.T) {
 	f := newSealFixture(t)
 	f.pin()
 	f.serve(f.hostPub, f.seal.Published())
-	f.h.api.lenient = true
-	f.h.api.reply("GET /api/v1/openapi.json", 200, upcomingOpenAPI())
 	var receipt json.RawMessage
 	f.h.api.handle("GET /api/v1/secrets/{id}/receipt", func(w http.ResponseWriter, r *http.Request, _ []byte, _ []string) {
 		if receipt == nil {
@@ -321,9 +300,6 @@ func TestSecretSetUsesTheServiceInjectionFieldsAndVerifiesTheReceipt(t *testing.
 		writeJSON(w, 200, map[string]any{"secret_id": "s1", "state": "stored", "value_fingerprint": "sfp1_" + strings.Repeat("ab", 16), "receipt": receipt})
 	})
 	f.h.api.reply("GET /api/v1/secrets", 200, map[string]any{"items": []control.Secret{{ID: "s1", Name: "anthropic", State: "pending"}}})
-	if r := f.set(plaintext+"\n", "--header", "Authorization", "--scheme", "Bearer"); r.code != ExitUsage || !strings.Contains(r.stderr, "forwards nothing by default") {
-		t.Fatalf("rules are required when the service enforces them: %v", r)
-	}
 	r := f.set(plaintext+"\n", "--header", "Authorization", "--scheme", "Bearer", "--rule", "POST:/v1/messages:exact", "--rule", "get,head:/v1/models:prefix", "--extra-header", "anthropic-version=2023-06-01", "--wait")
 	if r.code != 0 || !strings.Contains(r.stdout, "receipt verifies") || !strings.Contains(r.stdout, "sfp1_abab") {
 		t.Fatalf("%v", r)
@@ -362,19 +338,54 @@ func TestSecretSetUsesTheServiceInjectionFieldsAndVerifiesTheReceipt(t *testing.
 	}
 }
 
-func TestSecretSetOnTheCurrentServiceRefusesUnsupportedFlags(t *testing.T) {
+func TestSecretSetBrokerSettingsAreCheckedBeforeAnythingIsRead(t *testing.T) {
 	f := newSealFixture(t)
 	f.pin()
 	f.serve(f.hostPub, f.seal.Published())
-	for _, extra := range [][]string{{"--rule", "POST:/v1/messages"}, {"--allow-any-path"}, {"--extra-header", "x-v=1"}, {"--header", "Authorization", "--scheme", "Basic"}, {"--wait"}} {
-		if r := f.set(plaintext+"\n", extra...); r.code != ExitUsage || len(f.posted) != 0 {
-			t.Fatalf("%v: %v", extra, r)
-		}
+	base := []string{"secret", "set", "anthropic", "--upstream", "api.anthropic.com", "--allow-profile", "python-dev"}
+	if r := f.h.run(plaintext+"\n", base...); r.code != ExitUsage || !strings.Contains(r.stderr, "forwards nothing by default") {
+		t.Fatalf("rules are required (deny by default): %v", r)
 	}
-	for _, bad := range [][]string{{"--rule", "POST"}, {"--rule", "*:/"}, {"--basic-user", "u"}, {"--scheme", "Digest", "--header", "Authorization"}} {
-		if r := f.set(plaintext+"\n", bad...); r.code != ExitUsage {
+	for _, bad := range [][]string{{"--rule", "POST"}, {"--rule", "*:/"}, {"--rule", "POST:v1"}, {"--basic-user", "u"}, {"--username", "u"},
+		{"--scheme", "Digest", "--header", "Authorization"}, {"--scheme", "Basic", "--header", "Authorization"}, {"--scheme", "Bearer"},
+		{"--allow-any-path", "--rule", "GET:/"}, {"--extra-header", "novalue"}, {"--extra-header", "a b=1"}, {"--extra-header", "x-v=1", "--extra-header", "x-v=2"}} {
+		if r := f.set(plaintext+"\n", bad...); r.code != ExitUsage || len(f.posted) != 0 {
 			t.Fatalf("%v: %v", bad, r)
 		}
+	}
+	r := f.set(plaintext+"\n", "--header", "Authorization", "--scheme", "basic", "--username", "deploy", "--rule", "GET,POST:/api/:prefix")
+	if r.code != 0 {
+		t.Fatalf("%v", r)
+	}
+	var body map[string]json.RawMessage
+	mustDecode(t, f.posted[0], &body)
+	if string(body["scheme"]) != `"Basic"` || string(body["username"]) != `"deploy"` || string(body["rules"]) != `[{"methods":["GET","POST"],"path":"/api/","match":"prefix"}]` {
+		t.Fatalf("%s", f.posted[0])
+	}
+}
+
+func TestSecretSetExplainsTheServicesRefusals(t *testing.T) {
+	for code, want := range map[string]string{
+		"seal_key_changed":     "run agentgate secret set again",
+		"seal_key_unavailable": "has not published a host-signed seal key",
+		"invalid_ciphertext":   "never reuse an envelope",
+		"invalid_secret":       "Fix the broker setting",
+	} {
+		f := newSealFixture(t)
+		f.pin()
+		f.serve(f.hostPub, f.seal.Published())
+		status := map[string]int{"seal_key_changed": 409, "seal_key_unavailable": 409}[code]
+		if status == 0 {
+			status = 422
+		}
+		f.h.api.handle("POST /api/v1/secrets", func(w http.ResponseWriter, r *http.Request, body []byte, _ []string) {
+			apiError(w, status, code, "The service refused the secret ("+code+").")
+		})
+		r := f.set(plaintext + "\n")
+		if r.code == 0 || !strings.Contains(r.stderr, code) || !strings.Contains(r.stderr, want) {
+			t.Fatalf("%s: %v", code, r)
+		}
+		assertNoSecret(t, f, r)
 	}
 }
 

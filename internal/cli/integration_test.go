@@ -26,6 +26,7 @@ import (
 	"alloyium.local/kernel-poc/internal/access"
 	"alloyium.local/kernel-poc/internal/control"
 	"alloyium.local/kernel-poc/internal/hostproto"
+	"alloyium.local/kernel-poc/internal/secretseal"
 )
 
 // The end-to-end test runs the real control service (internal/control) in
@@ -75,7 +76,9 @@ func startRealService(t *testing.T) *realService {
 	return &realService{t: t, srv: srv, store: store, ca: ca}
 }
 
-// fakeHostd plays agentgate-hostd over the real host protocol.
+// fakeHostd plays agentgate-hostd over the real host protocol: it publishes
+// a seal key signed by its host key and stores sealed secrets in a real
+// secretseal store.
 type fakeHostd struct {
 	t      *testing.T
 	url    string
@@ -85,7 +88,11 @@ type fakeHostd struct {
 	id     string
 	jobKey ed25519.PublicKey
 	seq    uint64
+	seal   *secretseal.HostKey
+	store  *secretseal.Store
 }
+
+var fakeHostCaps = []string{hostproto.CapabilityDocker, hostproto.CapabilityLiveMounts, hostproto.CapabilitySnapshots, hostproto.CapabilityBroker, hostproto.CapabilityBrokeredSecrets, hostproto.CapabilityPOCPolicyV2}
 
 func (h *fakeHostd) post(path string, domain string, v any, out any) {
 	h.t.Helper()
@@ -122,9 +129,8 @@ func (h *fakeHostd) header() hostproto.Header {
 }
 
 func (h *fakeHostd) enroll(token string) hostproto.EnrollResponse {
-	caps := []string{hostproto.CapabilityDocker, hostproto.CapabilityLiveMounts, hostproto.CapabilitySnapshots, hostproto.CapabilityBroker, hostproto.CapabilityPOCPolicyV2}
 	req := hostproto.EnrollRequest{Token: token, PublicKey: hostproto.EncodeKey(h.key.Public().(ed25519.PublicKey)), EncryptionKey: hostproto.EncodeKey(h.box.PublicKey().Bytes()),
-		Hostname: "host-1", Capabilities: caps, AgentVersion: "0.1.0", Nonce: hostNonce(), TimestampMS: time.Now().UnixMilli()}
+		Hostname: "host-1", Capabilities: fakeHostCaps, AgentVersion: "0.1.0", Nonce: hostNonce(), TimestampMS: time.Now().UnixMilli()}
 	var resp hostproto.EnrollResponse
 	h.post(hostproto.PathEnroll, hostproto.DomainEnroll, req, &resp)
 	if err := hostproto.VerifyEnrollResponse(token, resp); err != nil {
@@ -132,6 +138,10 @@ func (h *fakeHostd) enroll(token string) hostproto.EnrollResponse {
 	}
 	h.id = resp.TargetID
 	h.jobKey, _ = hostproto.DecodeKey(resp.JobKey)
+	var err error
+	if h.seal, err = secretseal.HostKeyFromECDH(resp.TargetID, h.box, h.key, time.Now(), 30*24*time.Hour); err != nil {
+		h.t.Fatal(err)
+	}
 	return resp
 }
 
@@ -139,9 +149,12 @@ func (h *fakeHostd) poll(running ...string) []hostproto.Job {
 	if running == nil {
 		running = []string{}
 	}
-	caps := []string{hostproto.CapabilityDocker, hostproto.CapabilityLiveMounts, hostproto.CapabilitySnapshots, hostproto.CapabilityBroker, hostproto.CapabilityPOCPolicyV2}
+	var record json.RawMessage
+	if h.seal != nil {
+		record, _ = json.Marshal(h.seal.Published())
+	}
 	var resp hostproto.PollResponse
-	h.post(hostproto.PathPoll, hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: caps, RunningLaunches: running, AgentVersion: "0.1.0"}, MaxJobs: 16}, &resp)
+	h.post(hostproto.PathPoll, hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: fakeHostCaps, RunningLaunches: running, AgentVersion: "0.1.0", SealKey: record}, MaxJobs: 16}, &resp)
 	jobs := []hostproto.Job{}
 	for _, env := range resp.Jobs {
 		var job hostproto.Job
@@ -159,6 +172,26 @@ func (h *fakeHostd) poll(running ...string) []hostproto.Job {
 func (h *fakeHostd) events(job hostproto.Job, events ...hostproto.Event) {
 	path := strings.Replace(hostproto.PathEvents, "{id}", job.ID, 1)
 	h.post(path, hostproto.DomainEvents, hostproto.EventsRequest{Header: h.header(), JobID: job.ID, Events: events}, nil)
+}
+
+// acceptSecret opens a secret-put envelope into the host's store and answers
+// with the store's receipt, as agentgate-hostd does.
+func (h *fakeHostd) acceptSecret(job hostproto.Job) {
+	h.t.Helper()
+	var p hostproto.SecretPutPayload
+	if err := json.Unmarshal(job.Payload, &p); err != nil {
+		h.t.Fatal(err)
+	}
+	env, err := secretseal.DecodeEnvelope(p.Ciphertext)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	receipt, err := h.store.Accept(h.seal, env, time.Now())
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	r := hostproto.SecretReceipt(*receipt)
+	h.events(job, hostproto.Event{Seq: 1, TimeMS: time.Now().UnixMilli(), Kind: hostproto.EventResult, Result: &hostproto.JobResult{Status: hostproto.ResultSucceeded, Reason: "stored", SecretReceipt: &r}})
 }
 
 func (h *fakeHostd) receipt(job hostproto.Job) *hostproto.Receipt {
@@ -316,17 +349,72 @@ func TestEndToEndAgainstTheRealService(t *testing.T) {
 		}
 	}
 
-	// A secret: the service does not publish the target's signed seal key
-	// yet, so secret set refuses before it reads the value.
-	secretArgs := []string{"secret", "set", "model-api", "--upstream", "api.model.example", "--allow-profile", "dev", "--allow-launcher", "local:ada"}
-	r := run("sk-e2e-value-0123456789\n", secretArgs...)
-	if r.code == ExitUsage && strings.Contains(r.stderr, "forwards nothing by default") {
-		// A service that enforces broker rules needs them first.
-		r = run("sk-e2e-value-0123456789\n", append(secretArgs, "--rule", "POST:/v1/messages")...)
+	// A secret, sealed on this machine to the seal key the host signed; the
+	// host stores it and the CLI verifies the host's receipt.
+	secretDir := filepath.Join(t.TempDir(), "host-secrets")
+	os.Mkdir(secretDir, 0o700)
+	if host.store, err = secretseal.OpenStore(secretDir); err != nil {
+		t.Fatal(err)
 	}
-	must(r, ExitTrust, "seal_key_unpublished")
-	must(run("", "secret", "ls", "-q"), 0)
+	const value = "sk-e2e-value-0123456789"
+	secretArgs := []string{"secret", "set", "model-api", "--upstream", "api.model.example", "--header", "x-api-key", "--allow-profile", "dev", "--allow-launcher", "local:ada"}
+	must(run(value+"\n", secretArgs...), ExitUsage, "forwards nothing by default")
+	got := make(chan result, 1)
+	go func() {
+		got <- run(value+"\n", append(secretArgs, "--rule", "POST:/v1/messages", "--extra-header", "anthropic-version=2023-06-01", "--wait", "--wait-timeout", "30s")...)
+	}()
+	var put []hostproto.Job
+	for deadline := time.Now().Add(20 * time.Second); len(put) == 0 && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		put = host.poll()
+	}
+	if len(put) != 1 || put[0].Type != hostproto.JobSecretPut {
+		select {
+		case r := <-got:
+			t.Fatalf("no secret-put job: %+v; secret set: %v", put, r)
+		default:
+			t.Fatalf("no secret-put job: %+v", put)
+		}
+	}
+	host.acceptSecret(put[0])
+	var stored result
+	select {
+	case stored = <-got:
+	case <-time.After(30 * time.Second):
+		t.Fatal("secret set --wait did not see the receipt")
+	}
+	must(stored, 0, "Stored secret model-api for target local", "sealed with", "rules", "POST /v1/messages (exact)", "The host's receipt verifies: it stored exactly this value (fingerprint sfp1_")
+	if raw, err := os.ReadFile(filepath.Join(secretDir, "model-api")); err != nil || string(raw) != value {
+		t.Fatal("the host store does not hold exactly the value")
+	}
+	must(run("", "secret", "ls"), 0, "model-api", "stored", "sfp1_", "POST /v1/messages (exact)")
+	must(run("", "secret", "ls", "--for-launch", "--profile", "dev", "-q"), 0, "model-api")
+	brokered := func(flags ...string) []string {
+		args := append([]string{"launch", "--name", "brokered", "--mode", "session", "--lifetime", "1h", "--profile", "dev", "--image", image, "--secret", "model-api:MODEL_BASE_URL"}, flags...)
+		return append(args, "--", "agent", "--print", "call the model")
+	}
+	must(run("", brokered("--secret", "missing")...), ExitUsage, "holds no secret of that name (usable: model-api)")
+	must(run("", brokered("--dry-run")...), 0, "broker            172.30.", "$MODEL_BASE_URL = http://172.30.", "only POST /v1/messages (exact)", "sets anthropic-version", "value sfp1_", "brokered secrets model-api")
+	launched := strings.TrimSpace(must(run("", brokered("-q")...), ExitApprovalPending).stdout)
+	must(run("", "--context", "approver", "approve", launched, "--reason", "Reviewed the brokered plan", "--yes"), 0, "approved: queued")
+	show := must(run("", "show", launched), 0, "broker            172.30.", "the agent reaches its secrets only through the broker").stdout
+	jobs = host.poll()
+	if len(jobs) != 1 || jobs[0].Type != hostproto.JobLaunch {
+		t.Fatalf("jobs %+v", jobs)
+	}
+	var payload hostproto.LaunchPayload
+	json.Unmarshal(jobs[0].Payload, &payload)
+	if len(payload.Secrets) != 1 || payload.Secrets[0].Ref != "model-api" || len(payload.Secrets[0].Rules) != 1 || payload.Secrets[0].ExtraHeaders["anthropic-version"] != "2023-06-01" ||
+		!strings.Contains(string(payload.Policy), `"broker":{"address":"172.30.`) || strings.Contains(string(jobs[0].Payload), value) || strings.Contains(show, value) {
+		t.Fatalf("the launch job: %s", jobs[0].Payload)
+	}
+	for _, r := range []result{stored} {
+		if strings.Contains(r.stdout+r.stderr, value) {
+			t.Fatal("the value was printed")
+		}
+	}
 	must(run("", "target", "retire", "local"), ExitUsage, "--yes")
+	must(run("", "target", "retire", "local", "--yes"), ExitConflict, "launches_active")
 }
 
 func mustURL(t *testing.T, raw string) *url.URL {

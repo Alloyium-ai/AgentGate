@@ -19,6 +19,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { hostFingerprint, hostKeyID, hostReceipt, makeRecord, newHost, openEnvelope, rfc3339 } from "./hpke-node.mjs";
 import { loadTS } from "./load-ts.mjs";
+import { shapeIssues } from "./api-shapes.mjs";
 
 // The fixture's grant change list uses the UI's own diff; the unit tests
 // check that diff against the real service's answers.
@@ -50,6 +51,7 @@ let streamMode = "ok";
 const streamRequests = [];
 const logStreams = [];
 const requests = [];
+const served = [];
 const opened = [];
 const targets = [];
 const profiles = [];
@@ -156,6 +158,31 @@ function progress(l, kind, reason, data = {}) {
   const list = events[l.id];
   list.push({ seq: list.length + 1, time: now(), kind, from_state: l.state, to_state: l.state, actor: "hostd:" + l.target_id, reason, data });
 }
+// brokerSettings applies the service's checks of a secret's broker
+// settings (internal/control secretInjection) that the UI must explain.
+const BROKER_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+let sealRotated = false;
+function brokerSettings(input) {
+  const out = { scheme: input.scheme || "", rules: [], wildcard_rules: false, extra_headers: { ...(input.extra_headers || {}) } };
+  if (input.username) out.username = input.username;
+  if (!out.scheme && input.header.toLowerCase() === "authorization") out.scheme = "Bearer";
+  if (out.scheme && input.header.toLowerCase() !== "authorization") throw new Fail(422, "invalid_secret", "Broker injection settings: a scheme needs the Authorization header.");
+  if (out.scheme === "Basic" && !/^[\x21-\x39\x3b-\x7e]{1,64}$/.test(input.username || "")) throw new Fail(422, "invalid_secret", "Broker injection settings: Basic needs a user name.");
+  const rules = input.rules || [];
+  if (rules.some((r) => r.methods.includes("*"))) {
+    if (rules.length !== 1 || rules[0].methods.length !== 1 || rules[0].path !== "/" || (rules[0].match && rules[0].match !== "prefix"))
+      throw new Fail(422, "invalid_secret", 'The wildcard is exactly one rule {"methods":["*"],"path":"/"}: every method on every path of the upstreams.');
+    return { ...out, wildcard_rules: true, rules: [{ methods: BROKER_METHODS, path: "/", match: "prefix" }] };
+  }
+  for (const r of rules) {
+    if (!["exact", "prefix"].includes(r.match)) throw new Fail(422, "invalid_secret", "Broker injection settings: a rule match is exact or prefix.");
+    if (!r.methods.length || r.methods.some((m) => !BROKER_METHODS.includes(m))) throw new Fail(422, "invalid_secret", "Broker injection settings: a rule method is not allowed.");
+  }
+  for (const k of Object.keys(out.extra_headers)) if (["authorization", "x-api-key", "host", "cookie", input.header.toLowerCase()].includes(k.toLowerCase())) throw new Fail(422, "invalid_secret", "Broker injection settings: an extra header names a header the broker never injects.");
+  out.rules = rules.map((r) => ({ methods: r.methods, path: r.path, match: r.match }));
+  return out;
+}
+const BROKER = { address: "172.30.25.218", port: 8443, subnet: "172.30.25.216/29", target_address: "172.30.25.219" };
 function plan(spec, actor) {
   need("launcher");
   if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(spec.name || "")) throw new Fail(422, "invalid_launch_spec", "name must match ^[a-z0-9][a-z0-9-]{0,39}$");
@@ -172,8 +199,13 @@ function plan(spec, actor) {
   for (const s of spec.secrets) {
     const sec = secrets.find((x) => x.target_id === target.id && x.name === s.ref && x.state === "stored");
     if (!sec) throw new Fail(422, "secret_unavailable", `Secret ${s.ref} is not stored on the launch target.`);
+    if (!sec.rules?.length)
+      throw new Fail(422, "secret_rules_missing", `Secret ${s.ref} has no broker rules, so it allows nothing (deny by default). Recreate it with explicit rules, or with the wildcard [{"methods":["*"],"path":"/"}] to allow every method and path of its upstreams.`);
     if (!sec.allowed_launchers.includes(actor)) throw new Fail(403, "secret_scope", "The secret is not scoped to this launcher.");
-    planned.push({ ref: s.ref, secret_id: sec.id, env: s.expose.env, upstreams: sec.upstreams, header: sec.header });
+    const item = { ref: s.ref, secret_id: sec.id, env: s.expose.env, upstreams: sec.upstreams, header: sec.header, scheme: sec.scheme, rules: sec.rules, wildcard_rules: sec.wildcard_rules, extra_headers: sec.extra_headers, base_url: `http://${BROKER.address}:${BROKER.port}/${s.ref}`, value_fingerprint: sec.value_fingerprint };
+    if (sec.username) item.username = sec.username;
+    planned.push(item);
+    if (sec.wildcard_rules) reasons.push(`secret ${s.ref} has wildcard broker rules`);
   }
   if (spec.secrets.length) reasons.push("brokered secrets " + spec.secrets.map((s) => s.ref).join(", "));
   const policy = structuredClone(v.document);
@@ -198,11 +230,16 @@ function plan(spec, actor) {
       workdir: spec.agent.workdir || "/var/lib/agentgate/workspace",
       approval: reasons.length ? "required" : "auto",
       approval_reasons: reasons.sort(),
-      permissions: { network_default: "deny", ipv6: "deny", web: Object.keys(WEB).filter((n) => policy.web.rules.some((r) => r.protocol === WEB[n].protocol && r.port === WEB[n].port)), dns_resolvers: policy.dns.resolvers, taskboard: "10.10.10.10:8080", read_only: fs.read_only, writable: [fs.workspace, ...fs.scratch], execute: fs.execute, deny: fs.deny, devices: fs.devices, signals: policy.process.signals, anonymous_execute: false },
+      permissions: { network_default: "deny", ipv6: "deny", web: Object.keys(WEB).filter((n) => policy.web.rules.some((r) => r.protocol === WEB[n].protocol && r.port === WEB[n].port)), dns_resolvers: policy.dns.resolvers, taskboard: planned.length ? "" : "10.10.10.10:8080", ...(planned.length ? { broker: `${BROKER.address}:${BROKER.port}` } : {}), read_only: fs.read_only, writable: [fs.workspace, ...fs.scratch], execute: fs.execute, deny: fs.deny, devices: fs.devices, signals: policy.process.signals, anonymous_execute: false },
       mounts: spec.mounts.map((m) => ({ ...m, path: "/var/lib/agentgate/mounts/" + m.name })),
       secrets: planned,
+      ...(planned.length ? { broker: BROKER } : {}),
       kernel_verified: false,
-      notices: ["kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel"],
+      notices: [
+        ...planned.filter((x) => x.wildcard_rules).map((x) => `WARNING: secret ${x.ref} uses wildcard rules: the broker forwards every method on every path of ${x.upstreams.join(", ")} with the credential`),
+        ...(planned.length ? [`the agent reaches its secrets only through the broker at ${BROKER.address}:${BROKER.port}; the taskboard TCP endpoint is not allowed in this launch`] : []),
+        "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
+      ],
     },
   };
 }
@@ -237,9 +274,15 @@ function api(method, path, query, input, headers) {
       if (sealMode === "missing") throw new Fail(404, "not_found", "The API endpoint does not exist.");
       const nb = rfc3339(Date.now() - 3600000);
       const na = rfc3339(Date.now() + 30 * 86400000);
-      if (sealMode === "good") return { record: makeRecord(host.signingKey, host.hostPub, host.sealPub, t.id, nb, na), host_public_key: host.hostPub.toString("base64url"), host_key_fingerprint: hostFingerprint(host.hostPub) };
-      if (sealMode === "substituted") return { record: makeRecord(attacker.signingKey, attacker.hostPub, attacker.sealPub, t.id, nb, na), host_public_key: attacker.hostPub.toString("base64url"), host_key_fingerprint: hostFingerprint(attacker.hostPub) };
-      if (sealMode === "forged") return { record: makeRecord(attacker.signingKey, attacker.hostPub, attacker.sealPub, t.id, nb, na), host_public_key: host.hostPub.toString("base64url"), host_key_fingerprint: hostFingerprint(host.hostPub) };
+      // GET /targets/{id}/seal-key as the service answers it; the record's
+      // signer and the host key it sends vary with the attack being tested.
+      const answer = (signer, recordHostPub, sealPub, sentHostPub) => {
+        const record = makeRecord(signer, recordHostPub, sealPub, t.id, nb, na);
+        return { target_id: t.id, host_key_id: hostKeyID(sentHostPub), host_public_key: sentHostPub.toString("base64url"), host_key_fingerprint: hostFingerprint(sentHostPub), seal_key_id: record.record.key_id, not_after: na, record };
+      };
+      if (sealMode === "good") return answer(host.signingKey, host.hostPub, host.sealPub, host.hostPub);
+      if (sealMode === "substituted") return answer(attacker.signingKey, attacker.hostPub, attacker.sealPub, attacker.hostPub);
+      if (sealMode === "forged") return answer(attacker.signingKey, attacker.hostPub, attacker.sealPub, host.hostPub);
     }
     if (method === "GET" && sub === "secrets") {
       need("launcher");
@@ -363,16 +406,18 @@ function api(method, path, query, input, headers) {
     }
     if (method === "POST" && !id) {
       const out = plan(input, actors[who].subject);
-      const l = { id: newID(), name: input.name, spec_digest: out.plan.spec_digest, target_id: out.plan.target.id, policy_digest: out.plan.policy_digest, mode: input.mode, lifetime_seconds: input.lifetime_seconds, approval_required: out.plan.approval === "required", state: "requested", requested_by: actors[who].subject, kernel_verified: false, created_at: now(), updated_at: now(), revision: 1, plan: { ...out.plan, expires_at: undefined }, spec: input, policy: out.policy };
+      const l = { id: newID(), name: input.name, spec_digest: out.plan.spec_digest, target_id: out.plan.target.id, policy_digest: out.plan.policy_digest, mode: input.mode, lifetime_seconds: input.lifetime_seconds, approval_required: out.plan.approval === "required", state: "requested", requested_by: actors[who].subject, kernel_verified: false, created_at: now(), updated_at: now(), revision: 1, profile_version_id: out.plan.profile.version_id, plan: { ...out.plan, expires_at: undefined }, spec: input, policy: out.policy };
       launches.push(l);
       events[l.id] = [{ seq: 1, time: now(), kind: "state", from_state: "", to_state: "requested", actor: l.requested_by, reason: "Launch requested", data: { spec_digest: l.spec_digest, policy_digest: l.policy_digest } }];
       logs[l.id] = [];
       transition(l, out.plan.approval === "required" ? "approval_pending" : "approved", l.requested_by, out.plan.approval === "required" ? "Approval required: " + out.plan.approval_reasons.join("; ") : "Automatic approval");
-      return { launch: summary(l), plan: out.plan };
+      // The plan of a created launch has no expiry yet: it starts when queued.
+      const created = JSON.parse(JSON.stringify(l.plan));
+      return { launch: { ...summary(l), plan: created }, plan: created };
     }
     const l = launches.find((x) => x.id === id);
     if (!l) throw new Fail(404, "not_found", "The launch does not exist.");
-    if (method === "GET" && !sub) return { launch: l, jobs: [{ id: "job-" + l.id.slice(-6), type: "launch", target_id: l.target_id, launch_id: l.id, state: ["queued", "provisioning", "running", "stopping", "stopped"].includes(l.state) ? "delivered" : "queued", attempts: 1, created_at: l.created_at, deadline: new Date(Date.now() + 3600000).toISOString(), key_id: "ed25519:job" }] };
+    if (method === "GET" && !sub) return { launch: l, jobs: [{ id: "job-" + l.id.slice(-6), type: "launch", target_id: l.target_id, launch_id: l.id, state: ["queued", "provisioning", "running", "stopping", "stopped"].includes(l.state) ? "delivered" : "queued", attempts: 1, created_at: l.created_at, deadline: new Date(Date.now() + 3600000).toISOString(), key_id: "ed25519:job", event_seq: events[l.id].length, spec_digest: l.spec_digest, policy_digest: l.policy_digest }] };
     if (method === "GET" && sub === "events") {
       const after = Number(query.get("after") || 0);
       if ((headers.accept || "").includes("text/event-stream")) {
@@ -389,7 +434,7 @@ function api(method, path, query, input, headers) {
         const body = logs[id].filter((x) => x.seq > after).map((x) => `id: ${x.seq}\nevent: log\ndata: ${JSON.stringify(x)}\n\n`).join("");
         const ended = ["stopped", "expired", "failed", "rejected", "cancelled"].includes(l.state);
         const truncated = logs[id].some((x) => x.text.includes("[output truncated"));
-        return { __sse: "event: ready\ndata: {}\n\n" + body + (ended ? `event: end\ndata: ${JSON.stringify({ state: l.state, last_seq: logs[id].at(-1)?.seq || 0, truncated })}\n\n` : "") };
+        return { __sse: `retry: 2000\nevent: ready\ndata: ${JSON.stringify({ after })}\n\n` + body + (ended ? `event: end\ndata: ${JSON.stringify({ state: l.state, last_seq: logs[id].at(-1)?.seq || 0, truncated })}\n\n` : "") };
       }
       return { items: logs[id].filter((x) => x.seq > after), bytes: 1024, limit_bytes: 1 << 20, truncated: logs[id].some((x) => x.text.includes("[output truncated")) };
     }
@@ -424,6 +469,12 @@ function api(method, path, query, input, headers) {
   }
   if (area === "secrets") {
     need("admin");
+    if (method === "GET" && id && sub === "receipt") {
+      const x = secrets.find((y) => y.id === id);
+      if (!x) throw new Fail(404, "not_found", "The secret does not exist.");
+      if (!x.receipt) throw new Fail(404, "receipt_unavailable", `The host has not returned a receipt for this secret (state ${x.state}).`);
+      return { secret_id: x.id, target_id: x.target_id, name: x.name, state: x.state, ciphertext_sha256: x.ciphertext_sha256, value_fingerprint: x.value_fingerprint, receipt: x.receipt };
+    }
     if (method === "GET") return { items: secrets };
     if (method === "POST") {
       let envelope;
@@ -436,12 +487,30 @@ function api(method, path, query, input, headers) {
       }
       const t = findTarget(input.target);
       if (envelope.target_id !== t.id || envelope.name !== input.name) throw new Fail(422, "invalid_ciphertext", "The envelope is for another target or name.");
+      if (sealRotated) throw new Fail(409, "seal_key_changed", "The envelope is sealed to another seal key than the one the target publishes; fetch the seal key again and reseal.");
+      const inject = brokerSettings(input);
       const { plaintext, confirm } = openEnvelope(host.sealPrivate, envelope);
       opened.push(plaintext.toString());
-      const s = { id: newID(), name: input.name, target_id: t.id, upstreams: input.upstreams, header: input.header, ciphertext_sha256: sha(raw), allowed_profiles: input.allowed_profiles, allowed_launchers: input.allowed_launchers, state: "pending", created_at: now(), created_by: actors[who].subject, updated_at: now(), revision: 1 };
+      const s = {
+        id: newID(),
+        name: input.name,
+        target_id: t.id,
+        upstreams: input.upstreams,
+        header: input.header,
+        ...inject,
+        ciphertext_sha256: sha(raw),
+        envelope: { format: envelope.format, key_id: envelope.key_id, version: envelope.version, nonce: envelope.nonce },
+        allowed_profiles: input.allowed_profiles,
+        allowed_launchers: input.allowed_launchers,
+        state: "pending",
+        created_at: now(),
+        created_by: actors[who].subject,
+        updated_at: now(),
+        revision: 1,
+      };
       secrets.push(s);
-      // The host accepts the value and relays its receipt as raw JSON.
-      setTimeout(() => Object.assign(s, { state: "stored", receipt: JSON.stringify(hostReceipt(envelope, confirm, "sfp1_" + "ab".repeat(16))) }), 1500);
+      // The host accepts the value; the service relays its receipt.
+      setTimeout(() => Object.assign(s, { state: "stored", value_fingerprint: "sfp1_" + "ab".repeat(16), receipt: hostReceipt(envelope, confirm, "sfp1_" + "ab".repeat(16)) }), 1500);
       return s;
     }
   }
@@ -531,11 +600,23 @@ await ctx.route("**/api/v1/**", async (route) => {
   if (path === "events") return route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
   try {
     const value = api(req.method(), path, url.searchParams, input, headers);
-    if (value && value.__sse !== undefined) return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body: value.__sse });
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(value) });
+    if (value && value.__sse !== undefined) {
+      // Each frame's data, by event name, for the shape check.
+      for (const frame of value.__sse.split("\n\n")) {
+        const ev = /^event: (.*)$/m.exec(frame)?.[1];
+        const data = /^data: (.*)$/m.exec(frame)?.[1];
+        if (ev && data) served.push({ method: "SSE", path, status: 200, event: ev, body: JSON.parse(data) });
+      }
+      return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body: value.__sse });
+    }
+    const body = JSON.stringify(value);
+    served.push({ method: req.method(), path, status: 200, input, body: JSON.parse(body) });
+    return route.fulfill({ status: 200, contentType: "application/json", body });
   } catch (e) {
     if (!(e instanceof Fail)) throw e;
-    return route.fulfill({ status: e.status, contentType: "application/json", body: JSON.stringify({ error: { code: e.code, message: e.message }, request_id: "qa-" + requests.length }) });
+    const body = { error: { code: e.code, message: e.message }, request_id: "qa-" + requests.length };
+    served.push({ method: req.method(), path, status: e.status, input, body });
+    return route.fulfill({ status: e.status, contentType: "application/json", body: JSON.stringify(body) });
   }
 });
 const page = await ctx.newPage();
@@ -884,6 +965,18 @@ try {
     await d.getByText("8 to 8192 visible ASCII characters (no spaces or line breaks). Nothing was sealed").waitFor();
     assert.equal(await d.getByLabel("Secret value").inputValue(), "", "the field is cleared even when refused");
     assert.equal(posts(), 0);
+    // Broker settings: deny by default, explicit rules, a non-secret header.
+    await d.getByRole("button", { name: "Remove rule 1" }).click();
+    await d.getByText("The broker forwards nothing by default").waitFor();
+    await d.getByRole("button", { name: "Add a rule" }).click();
+    await d.getByLabel("Methods", { exact: true }).fill("POST");
+    await d.getByLabel("Path", { exact: true }).fill("/v1/messages");
+    await pick("Match", d).selectOption("exact");
+    await d.getByRole("button", { name: "Add an extra header" }).click();
+    await d.getByLabel("Header name").fill("x-api-key");
+    await d.getByLabel("Header value").fill("2023-06-01");
+    await d.getByText("Extra header 1: a header name the broker may set").waitFor();
+    await d.getByLabel("Header name").fill("anthropic-version");
     await d.getByLabel("Secret value").fill(value);
     await d.getByRole("button", { name: "Seal in this browser and store" }).click();
     await page.getByRole("heading", { name: "Secret stored" }).waitFor();
@@ -891,9 +984,12 @@ try {
     assert.deepEqual(opened, [value], "the host side opened exactly the typed value");
     const post = requests.filter((r) => r.path === "secrets" && r.method === "POST").at(-1);
     const body = JSON.parse(post.body);
-    assert.deepEqual(Object.keys(body).sort(), ["allowed_launchers", "allowed_profiles", "ciphertext", "header", "name", "reason", "target", "upstreams"]);
+    assert.deepEqual(Object.keys(body).sort(), ["allowed_launchers", "allowed_profiles", "ciphertext", "extra_headers", "header", "name", "reason", "rules", "target", "upstreams"]);
+    assert.deepEqual(body.rules, [{ methods: ["POST"], path: "/v1/messages", match: "exact" }]);
+    assert.deepEqual(body.extra_headers, { "anthropic-version": "2023-06-01" });
     assert.equal(JSON.parse(Buffer.from(body.ciphertext, "base64url")).format, "agentgate.secretseal.v1");
     await text("The host proved it opened exactly this envelope. Value fingerprint sfp1_" + "ab".repeat(16)).waitFor({ timeout: 10000 });
+    assert.ok(requests.some((r) => r.method === "GET" && /^secrets\/[0-9a-f]+\/receipt$/.test(r.path)), "the dialog reads the receipt from GET /secrets/{id}/receipt");
     await page.getByRole("button", { name: "Done" }).click();
     // The browser pinned the host key; a service that rewrites the target's
     // approved fingerprint to its own key is refused by the pin.
@@ -919,6 +1015,62 @@ try {
     await page.getByRole("cell", { name: "model-api" }).first().waitFor();
   });
 
+  await step("broker rules: the wildcard needs confirmation, Basic needs a user, and every refusal is explained", async () => {
+    await go("secrets", "alice");
+    await page.getByRole("button", { name: "Store a secret" }).click();
+    const d = page.locator("dialog");
+    await pick("Target", d).selectOption({ label: "build-host" });
+    await d.getByLabel("Secret name").fill("wide-api");
+    await d.getByLabel(/Upstreams/).fill("api.wide.example");
+    await d.getByLabel("python-dev").check();
+    await d.getByRole("textbox", { name: "Reason", exact: true }).fill("A key the agent may use fully");
+    await d.getByRole("textbox", { name: "Header the broker sets" }).fill("Authorization");
+    await pick("Scheme", d).selectOption("Basic");
+    await d.getByText("The Basic scheme needs a user name").waitFor();
+    await d.getByLabel("Basic user name").fill("agent");
+    await d.getByLabel("Allow every method on every path (wildcard)").check();
+    await d.getByText("with the wildcard the broker forwards every method on every path of api.wide.example").waitFor();
+    await d.getByText("Confirm that the wildcard lets the broker forward every method").waitFor();
+    await checkLabels("secret dialog with broker rules");
+    await d.locator("fieldset").filter({ hasText: "Requests the broker may forward" }).screenshot({ path: `${output}/secret-broker-rules.png` });
+    await d.getByLabel("I understand, and I want the wildcard for this secret.").check();
+    await d.getByRole("button", { name: "Verify seal key" }).click();
+    await d.getByText("Matches the fingerprint this browser pinned for build-host.").waitFor();
+    // The host published a new seal key after the verification.
+    sealRotated = true;
+    await d.getByLabel("Secret value").fill(value);
+    await d.getByRole("button", { name: "Seal in this browser and store" }).click();
+    await d.getByText("The target published a new seal key after this browser verified it.").waitFor();
+    assert.equal(await d.getByLabel("Secret value").isDisabled(), true, "a changed seal key needs a new verification");
+    sealRotated = false;
+    await d.getByRole("button", { name: "Verify seal key" }).click();
+    await d.getByText("Matches the fingerprint this browser pinned for build-host.").waitFor();
+    await d.getByLabel("Secret value").fill(value);
+    await d.getByRole("button", { name: "Seal in this browser and store" }).click();
+    await page.getByRole("heading", { name: "Secret stored" }).waitFor();
+    const body = JSON.parse(requests.filter((r) => r.path === "secrets" && r.method === "POST").at(-1).body);
+    assert.deepEqual(body.rules, [{ methods: ["*"], path: "/" }]);
+    assert.equal(body.scheme, "Basic");
+    assert.equal(body.username, "agent");
+    assert.equal(body.extra_headers, undefined);
+    await page.getByRole("button", { name: "Done" }).click();
+    await text("Wildcard rules: every method on every path.").waitFor();
+    // A secret stored without rules (an older client) is listed as unusable.
+    secrets.push({ ...structuredClone(secrets.find((x) => x.name === "model-api")), id: newID(), name: "bare-key", rules: [], wildcard_rules: false, state: "stored" });
+    await go("secrets", "alice");
+    await text("No broker rules: no launch can use it (secret_rules_missing).").waitFor();
+    await go(`launch/from/${launchID}`, "alice");
+    await page.getByLabel("Launch name").waitFor();
+    const spec = { ...structuredClone(launches.find((l) => l.id === launchID).spec), secrets: [{ ref: "bare-key", expose: { env: "BARE_BASE_URL" } }] };
+    await page.getByRole("button", { name: "Import spec JSON" }).click();
+    await page.locator("dialog").getByLabel("Spec JSON").fill(JSON.stringify(spec));
+    await page.locator("dialog").getByRole("button", { name: "Load into the form" }).click();
+    await page.locator("dialog").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Review & plan" }).click();
+    await text("The secret was stored without broker rules, so the broker would forward nothing with it.").waitFor();
+    secrets.splice(secrets.findIndex((x) => x.name === "bare-key"), 1);
+  });
+
   await step("brokered secrets are picked by name and planned without values", async () => {
     await go(`launch/from/${launchID}`, "alice");
     await page.getByLabel("Launch name").waitFor();
@@ -928,7 +1080,13 @@ try {
     assert.ok(requests.some((r) => r.method === "GET" && r.path === `targets/${findTarget("build-host").id}/secrets` && r.url.includes("profile=python-dev")), "the form lists the target's secrets for launchers");
     await page.getByRole("button", { name: "Review & plan" }).click();
     await page.locator(".plan").getByText("brokered secrets model-api").waitFor();
-    await page.locator(".plan").getByRole("cell", { name: "MODEL_API_BASE_URL" }).waitFor();
+    await page.locator(".plan").getByText("MODEL_API_BASE_URL=http://172.30.25.218:8443/model-api").waitFor();
+    await page.locator(".plan").getByText("172.30.25.218:8443").first().waitFor();
+    await page.locator(".plan").getByText("POST /v1/messages").waitFor();
+    await page.locator(".plan").getByText("also sets anthropic-version: 2023-06-01").waitFor();
+    await page.locator(".plan h3", { hasText: "Brokered secrets" }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${output}/launch-plan-secrets.png` });
+    await noHorizontalScroll("launch-plan-secrets");
     const planned = requests.filter((r) => r.path === "launch-plans").at(-1).body;
     assert.ok(!planned.includes(value));
     assert.deepEqual(JSON.parse(planned).secrets, [{ ref: "model-api", expose: { env: "MODEL_API_BASE_URL" } }]);
@@ -990,7 +1148,7 @@ try {
   await step("the launch list is filtered and paged by the service", async () => {
     const t = findTarget("build-host");
     for (let i = 0; i < 30; i++) {
-      const l = { id: newID(), name: `batch-${String(i).padStart(2, "0")}`, spec_digest: "e".repeat(64), target_id: t.id, policy_digest: "f".repeat(64), mode: "oneshot", lifetime_seconds: 60, approval_required: false, state: "stopped", requested_by: "local:bob", kernel_verified: false, created_at: new Date(Date.now() - 86400000 + i * 1000).toISOString(), updated_at: now(), revision: 4 };
+      const l = { id: newID(), name: `batch-${String(i).padStart(2, "0")}`, spec_digest: "e".repeat(64), target_id: t.id, profile_version_id: "d".repeat(32), policy_digest: "f".repeat(64), mode: "oneshot", lifetime_seconds: 60, approval_required: false, state: "stopped", requested_by: "local:bob", kernel_verified: false, created_at: new Date(Date.now() - 86400000 + i * 1000).toISOString(), updated_at: now(), revision: 4 };
       events[l.id] = [];
       logs[l.id] = [];
       launches.unshift(l);
@@ -1010,6 +1168,7 @@ try {
     await text("Page 1 ·").waitFor();
     await page.getByLabel("Name contains").fill("batch-1");
     await page.getByRole("button", { name: "batch-19" }).waitFor();
+    for (let i = 0; i < 50 && (await rows.count()) !== 10; i++) await page.waitForTimeout(100);
     assert.equal(await rows.count(), 10, "the service filters by name");
     await page.getByLabel("Only mine").check();
     await text("No launches match").waitFor();
@@ -1085,6 +1244,62 @@ try {
     await go("secrets", "alice");
     await page.getByLabel("Show deleted").check();
     await text("Removal unconfirmed: the value may remain on the retired host.").waitFor();
+  });
+
+  await step("the fixture answers with the real service's shapes", async () => {
+    const real = async (name) => JSON.parse(await readFile(new URL(`./fixtures/api/${name}`, import.meta.url), "utf8"));
+    const errors = Object.values(await real("errors.json")).map((e) => e.body);
+    const ok = (method, re) => (r) => r.status === 200 && r.method === method && re.test(r.path);
+    const checks = [
+      ["GET targets", ok("GET", /^targets$/), [await real("targets.json")]],
+      [
+        "GET targets/{id}",
+        ok("GET", /^targets\/[0-9a-f]+$/),
+        await Promise.all(["target.json", "target-new.json", "target-awaiting.json", "target-unpolled.json", "target-retiring.json"].map(real)),
+      ],
+      ["POST targets", ok("POST", /^targets$/), [await real("target-created.json")]],
+      ["GET targets/{id}/seal-key", ok("GET", /^targets\/[0-9a-f]+\/seal-key$/), [await real("seal-key.json")]],
+      ["GET targets/{id}/secrets", ok("GET", /^targets\/[0-9a-f]+\/secrets$/), [await real("target-secrets.json")]],
+      ["POST secrets", ok("POST", /^secrets$/), [(await real("secret-created.json")).response, (await real("secret-wildcard.json")).response]],
+      ["GET secrets", ok("GET", /^secrets$/), [await real("secrets.json")]],
+      ["GET secrets/{id}/receipt", ok("GET", /^secrets\/[0-9a-f]+\/receipt$/), [await real("secret-receipt.json")]],
+      ["POST launch-plans", ok("POST", /^launch-plans$/), [(await real("launch-plan.json")).response, (await real("launch-plan-plain.json")).response]],
+      ["POST launches", ok("POST", /^launches$/), [await real("launch-created.json"), await real("launch-created-plain.json")]],
+      ["GET launches/{id}", ok("GET", /^launches\/[0-9a-f]+$/), await Promise.all(["launch-detail.json", "launch-detail-pending.json", "launch-detail-stopped.json"].map(real))],
+      ["GET launches", ok("GET", /^launches$/), [await real("launches-page.json"), await real("launches-all.json")]],
+      ["GET launches/summary", ok("GET", /^launches\/summary$/), [await real("launches-summary.json")]],
+      ["GET launches/{id}/logs (stream: ready)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "ready", [(await real("launch-log-stream.json")).ready]],
+      ["GET launches/{id}/logs (stream: log)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "log", [(await real("launch-log-stream.json")).log, ...(await real("launch-logs.json")).items]],
+      ["GET launches/{id}/logs (stream: end)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "end", [(await real("launch-log-stream.json")).end]],
+      ["POST grants (dry run)", (r) => ok("POST", /\/grants$/)(r) && r.input?.dry_run, [(await real("grant-dry-run.json")).response]],
+      ["POST grants", (r) => ok("POST", /\/grants$/)(r) && !r.input?.dry_run, [(await real("grant-applied.json")).response]],
+      ["errors", (r) => r.status >= 400, errors],
+    ];
+    const options = {
+      maps: [".extra_headers", ".items[].extra_headers", ".plan.secrets[].extra_headers", ".launch.plan.secrets[].extra_headers", ".counts", ".launch.receipt.bpf_objects", ".launch.receipt.broker_counts"],
+      // The spec is the client's own document, echoed.
+      skip: [".spec", ".launch.spec"],
+      // Fields the service omits when empty, in states the samples do not
+      // all cover.
+      // Sent only in states the recorded samples do not reach: removal after a
+      // forced retirement, evidence_missing after a launch ended without a
+      // receipt, the receipt's evidence blocks from a real host.
+      optional: [".items[].removal", ".launch.evidence_missing", ".items[].evidence_missing", ".launch.receipt.network_evidence", ".launch.receipt.host_control_evidence", ".next_cursor", ".profile", ".items[].profile_allowed"],
+    };
+    const found = {};
+    for (const [name, match, samples] of checks) {
+      const answers = served.filter(match);
+      assert.ok(answers.length, `the QA never exercised ${name}`);
+      const issues = [...new Set(answers.flatMap((a) => shapeIssues(a.body, samples, options)))];
+      found[name] = { answers: answers.length, issues };
+    }
+    report.shapes = found;
+    const bad = Object.entries(found).filter(([, v]) => v.issues.length);
+    assert.deepEqual(bad, [], "the fixture's answers differ from the real service's");
+    // The UI's secret request has only fields the real request has.
+    const sent = requests.filter((r) => r.path === "secrets" && r.method === "POST").map((r) => JSON.parse(r.body));
+    const reqs = [(await real("secret-created.json")).request, (await real("secret-wildcard.json")).request];
+    for (const b of sent) assert.deepEqual(shapeIssues(b, reqs, { required: false, maps: [".extra_headers"] }), []);
   });
 
   await step("every write carried the CSRF token and an idempotency key", async () => {

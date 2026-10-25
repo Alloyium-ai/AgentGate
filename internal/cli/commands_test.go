@@ -57,12 +57,15 @@ func samplePlan() control.LaunchPlan {
 		Mode:    "session", LifetimeSeconds: 3600, ExpiresAt: "2026-10-24T13:00:00Z", ExpiryRule: "the lifetime starts when the launch is queued; the host and the kernel policy end it at expires_at",
 		Image: imageRef, Command: []string{"claude", "--print", "fix the failing tests"}, Workdir: "/var/lib/agentgate/workspace",
 		Approval: "required", ApprovalReasons: []string{"brokered secrets anthropic", "live host folder repo", "the profile requires approval"},
-		Permissions: control.Permissions{Network: "deny", IPv6: "deny", Web: []string{"https"}, DNS: []string{"1.1.1.1"}, Taskboard: "10.0.0.1:8443",
+		Permissions: control.Permissions{Network: "deny", IPv6: "deny", Web: []string{"https"}, DNS: []string{"1.1.1.1"}, Broker: "172.30.7.2:8443",
 			ReadOnly: []string{"/usr", "/lib", "/var/lib/agentgate/mounts/repo"}, Writable: []string{"/var/lib/agentgate/workspace", "/tmp"}, Execute: []string{"/usr/bin", "/usr/local/bin"},
 			Deny: []string{"/etc/shadow"}, Devices: []string{"/dev/null", "/dev/urandom"}, Signals: []string{"SIGTERM"}},
-		Mounts:  []hostproto.LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: "/var/lib/agentgate/mounts/repo"}},
-		Secrets: []control.PlanSecret{{Ref: "anthropic", SecretID: "s1", Env: "ANTHROPIC_BASE_URL", Upstreams: []string{"api.anthropic.com"}, Header: "x-api-key"}},
-		Notices: []string{"kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel"}}
+		Mounts: []hostproto.LaunchMount{{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: "/var/lib/agentgate/mounts/repo"}},
+		Secrets: []control.PlanSecret{{Ref: "anthropic", SecretID: "s1", Env: "ANTHROPIC_BASE_URL", Upstreams: []string{"api.anthropic.com"}, Header: "x-api-key",
+			Rules: []hostproto.BrokerRule{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}}, ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
+			BaseURL: "http://172.30.7.2:8443/anthropic", ValueFingerprint: "sfp1_" + strings.Repeat("ab", 16)}},
+		Broker:  &control.PlanBroker{Address: "172.30.7.2", Port: 8443, Subnet: "172.30.7.0/29", TargetAddress: "172.30.7.3"},
+		Notices: []string{"the agent reaches its secrets only through the broker at 172.30.7.2:8443; the taskboard TCP endpoint is not allowed in this launch", "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel"}}
 }
 
 func sampleLaunch(state string) control.Launch {

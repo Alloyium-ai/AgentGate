@@ -8,12 +8,13 @@
 // is cleared before the request is sent.
 
 import React, { useEffect, useRef, useState } from "react";
-import { KeyRound, Lock, Plus } from "lucide-react";
+import { KeyRound, Lock, Plus, Trash2 } from "lucide-react";
 import { Actor, ApiError, api, when } from "./api";
 import { Empty, ErrorBox, Loading, Modal, SectionTitle } from "./components";
 import { Items, Profile, Secret, Target, permissions, roleText, targetName, useResource } from "./prov-api";
 import { ConfirmDialog, Digest, Gate, LiveRegion, StateBadge } from "./prov-components";
 import { ClientPager, useClientPages } from "./prov-paging";
+import { BASIC_USER, HeaderRow, RuleRow, SECRET_HEADER, headerIssues, ruleIssues, sealFailureText } from "./secret-rules";
 import {
   SealError,
   SealReceipt,
@@ -38,7 +39,7 @@ import {
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const UPSTREAM = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+(:[0-9]{1,5})?$/;
-const HEADER = /^[A-Za-z0-9-]{1,64}$/;
+const HEADER = SECRET_HEADER;
 const SUBJECT = /^[A-Za-z0-9_.:-]{1,100}$/;
 // GET /targets/{id}/seal-key as requested in docs/BROKER.md (integration
 // request 2). host_key_fingerprint is the service's claim and is ignored: the
@@ -61,6 +62,19 @@ type Verified = { target: Target; key: VerifiedKey; fingerprint: string; hostKey
 const words = (s: string) => s.split(/[\s,]+/).filter(Boolean);
 
 function SealFailure({ error }: { error: unknown }) {
+  // POST /secrets refusals; a missing seal key on GET (404) is explained by
+  // verify() itself.
+  if (error instanceof ApiError && error.status !== 404 && sealFailureText(error.code, error.message))
+    return (
+      <div className="error-box" role="alert">
+        <div>
+          <strong>
+            The service refused the secret (<code>{error.code}</code>)
+          </strong>
+          <p>{sealFailureText(error.code, error.message)}</p>
+        </div>
+      </div>
+    );
   if (error instanceof SealError)
     return (
       <div className="error-box" role="alert">
@@ -82,6 +96,12 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
   const [name, setName] = useState("");
   const [upstreams, setUpstreams] = useState("");
   const [header, setHeader] = useState("x-api-key");
+  const [scheme, setScheme] = useState<"" | "Bearer" | "Basic">("");
+  const [username, setUsername] = useState("");
+  const [rules, setRules] = useState<RuleRow[]>([{ methods: "POST", path: "/v1/messages", match: "exact" }]);
+  const [wildcard, setWildcard] = useState(false);
+  const [wildcardConfirmed, setWildcardConfirmed] = useState(false);
+  const [extra, setExtra] = useState<HeaderRow[]>([]);
   const [allowedProfiles, setAllowedProfiles] = useState<string[]>([]);
   const [launchers, setLaunchers] = useState(actor.subject);
   const [reason, setReason] = useState("");
@@ -115,7 +135,11 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
         const list = await api<Items<StoredSecret>>("secrets", "GET", undefined, undefined, undefined, controller.signal);
         const now = list.items.find((x) => x.id === stored.id);
         if (now && now.state !== stored.state) {
-          setStored(now);
+          // The host's receipt for this envelope: GET /secrets/{id}/receipt.
+          if (now.state === "stored") {
+            const r = await api<{ receipt: SealReceipt | string }>(`secrets/${encodeURIComponent(stored.id)}/receipt`, "GET", undefined, undefined, undefined, controller.signal).catch(() => undefined);
+            setStored({ ...now, receipt: r?.receipt ?? now.receipt });
+          } else setStored(now);
           return;
         }
       } catch {
@@ -151,6 +175,10 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
     !NAME.test(name) && "A secret name is 1 to 40 lowercase letters, digits and -.",
     (ups.length < 1 || ups.length > 8 || ups.some((u) => !UPSTREAM.test(u) || u.length > 253) || new Set(ups).size !== ups.length) && "List 1 to 8 unique lowercase host names (optionally with :port).",
     !HEADER.test(header) && "The header is an HTTP header name such as x-api-key or Authorization.",
+    scheme && header.toLowerCase() !== "authorization" && `The ${scheme} scheme needs the Authorization header.`,
+    scheme === "Basic" && !BASIC_USER.test(username) && "The Basic scheme needs a user name of 1 to 64 visible ASCII characters without a colon.",
+    ...ruleIssues(rules, wildcard, wildcardConfirmed),
+    ...headerIssues(extra, header),
     (allowedProfiles.length < 1 || allowedProfiles.length > 32) && "Choose at least one profile that may use the secret.",
     (subjects.length < 1 || subjects.length > 64 || subjects.some((s) => !SUBJECT.test(s)) || new Set(subjects).size !== subjects.length) && "List 1 to 64 unique people (subjects such as local:alice) who may launch with it.",
     reason.trim().length < 3 && "Give a reason.",
@@ -238,16 +266,30 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
       sealedRef.current = sealed;
       const ciphertext = encodeEnvelope(sealed.envelope);
       const sent = await envelopeDigest(ciphertext);
-      const out = await api<StoredSecret>("secrets", "POST", {
+      const body: Record<string, unknown> = {
         name,
         target: verified.target.id,
         upstreams: ups,
         header,
+        rules: wildcard
+          ? [{ methods: ["*"], path: "/" }]
+          : rules.map((r) => ({ methods: r.methods.split(/[\s,]+/).filter(Boolean).map((m) => m.toUpperCase()), path: r.path, match: r.match })),
         ciphertext,
         allowed_profiles: allowedProfiles,
         allowed_launchers: subjects,
         reason: reason.trim(),
-      });
+      };
+      if (scheme) body.scheme = scheme;
+      if (scheme === "Basic") body.username = username;
+      if (extra.length) body.extra_headers = Object.fromEntries(extra.map((h) => [h.name, h.value]));
+      let out: StoredSecret;
+      try {
+        out = await api<StoredSecret>("secrets", "POST", body);
+      } catch (cause) {
+        // A changed seal key means this browser must verify the new one.
+        if (cause instanceof ApiError && cause.code === "seal_key_changed") setVerified(undefined);
+        throw cause;
+      }
       setStored(out);
       setSentDigest(sent);
       setAnnounce(`Secret ${out.name} sent for ${verified.target.name}.`);
@@ -340,6 +382,98 @@ function NewSecret({ actor, onClose, onDone }: { actor: Actor; onClose: () => vo
           Header the broker sets
           <input value={header} onChange={(e) => setHeader(e.target.value)} spellCheck={false} />
         </label>
+        <label>
+          Scheme
+          <select value={scheme} onChange={(e) => setScheme(e.target.value as "" | "Bearer" | "Basic")}>
+            <option value="">The value as it is{header.toLowerCase() === "authorization" ? " (Bearer, the broker's default for Authorization)" : ""}</option>
+            <option value="Bearer">Bearer (Authorization: Bearer VALUE)</option>
+            <option value="Basic">Basic (Authorization: Basic user:VALUE)</option>
+          </select>
+        </label>
+        {scheme === "Basic" && (
+          <label>
+            Basic user name
+            <input value={username} onChange={(e) => setUsername(e.target.value)} spellCheck={false} autoComplete="off" maxLength={64} />
+          </label>
+        )}
+        <fieldset>
+          <legend>Requests the broker may forward with the credential</legend>
+          <p className="form-note">Deny by default: the broker forwards only requests that match a rule. A secret without rules cannot be used by any launch.</p>
+          {!wildcard &&
+            rules.map((r, i) => (
+              <div className="row-edit" key={i}>
+                <label>
+                  Methods
+                  <input value={r.methods} onChange={(e) => setRules(rules.map((x, n) => (n === i ? { ...x, methods: e.target.value } : x)))} placeholder="POST" spellCheck={false} />
+                </label>
+                <label>
+                  Path
+                  <input value={r.path} onChange={(e) => setRules(rules.map((x, n) => (n === i ? { ...x, path: e.target.value } : x)))} placeholder="/v1/messages" spellCheck={false} />
+                </label>
+                <label>
+                  Match
+                  <select value={r.match} onChange={(e) => setRules(rules.map((x, n) => (n === i ? { ...x, match: e.target.value as "exact" | "prefix" } : x)))}>
+                    <option value="exact">exact path</option>
+                    <option value="prefix">path prefix</option>
+                  </select>
+                </label>
+                <button type="button" className="icon-button" aria-label={`Remove rule ${i + 1}`} onClick={() => setRules(rules.filter((_, n) => n !== i))}>
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+          {!wildcard && (
+            <button type="button" className="secondary" disabled={rules.length >= 64} onClick={() => setRules([...rules, { methods: "GET", path: "/", match: "prefix" }])}>
+              <Plus size={15} aria-hidden="true" /> Add a rule
+            </button>
+          )}
+          <label className="check-row warn-row">
+            <input
+              type="checkbox"
+              checked={wildcard}
+              onChange={(e) => {
+                setWildcard(e.target.checked);
+                setWildcardConfirmed(false);
+              }}
+            />
+            <span>
+              Allow every method on every path (wildcard)
+              <small>Not recommended. Every plan that uses this secret warns and needs a second person's approval.</small>
+            </span>
+          </label>
+          {wildcard && (
+            <div className="evidence-warning" role="alert">
+              <strong>Warning:</strong> with the wildcard the broker forwards every method on every path of {ups.length ? ups.join(", ") : "the upstreams"} with the
+              credential, so an agent can use it as fully as the upstream permits.
+              <label className="check-row">
+                <input type="checkbox" checked={wildcardConfirmed} onChange={(e) => setWildcardConfirmed(e.target.checked)} />
+                <span>I understand, and I want the wildcard for this secret.</span>
+              </label>
+            </div>
+          )}
+        </fieldset>
+        <fieldset>
+          <legend>Extra headers (not secret)</legend>
+          <p className="form-note">Headers the broker sets on every forwarded request, for example an API version. Never put a credential here.</p>
+          {extra.map((h, i) => (
+            <div className="row-edit" key={i}>
+              <label>
+                Header name
+                <input value={h.name} onChange={(e) => setExtra(extra.map((x, n) => (n === i ? { ...x, name: e.target.value } : x)))} placeholder="anthropic-version" spellCheck={false} />
+              </label>
+              <label>
+                Header value
+                <input value={h.value} onChange={(e) => setExtra(extra.map((x, n) => (n === i ? { ...x, value: e.target.value } : x)))} placeholder="2023-06-01" spellCheck={false} />
+              </label>
+              <button type="button" className="icon-button" aria-label={`Remove extra header ${i + 1}`} onClick={() => setExtra(extra.filter((_, n) => n !== i))}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+          <button type="button" className="secondary" disabled={extra.length >= 8} onClick={() => setExtra([...extra, { name: "", value: "" }])}>
+            <Plus size={15} aria-hidden="true" /> Add an extra header
+          </button>
+        </fieldset>
         <fieldset>
           <legend>Profiles whose launches may use it</legend>
           {profiles.data?.items.map((x) => (
@@ -496,7 +630,16 @@ export function Secrets({ actor, epoch }: { actor: Actor; epoch: number }) {
                         {s.upstreams.join(", ")}
                         <small>
                           header <code>{s.header}</code>
+                          {s.scheme ? ` · ${s.scheme}` : ""}
+                          {s.username ? ` · user ${s.username}` : ""}
                         </small>
+                        {s.wildcard_rules ? (
+                          <small className="field-issue">Wildcard rules: every method on every path.</small>
+                        ) : s.rules?.length ? (
+                          <small>Rules: {s.rules.map((r) => `${r.methods.join(",")} ${r.path}${r.match ? ` (${r.match})` : ""}`).join("; ")}</small>
+                        ) : (
+                          <small className="field-issue">No broker rules: no launch can use it (secret_rules_missing).</small>
+                        )}
                       </td>
                       <td>
                         Profiles: {s.allowed_profiles.join(", ")}
@@ -504,6 +647,7 @@ export function Secrets({ actor, epoch }: { actor: Actor; epoch: number }) {
                       </td>
                       <td>
                         <Digest value={s.ciphertext_sha256} />
+                        {s.value_fingerprint && <small>value {s.value_fingerprint}</small>}
                       </td>
                       <td>
                         <StateBadge state={s.state} />
