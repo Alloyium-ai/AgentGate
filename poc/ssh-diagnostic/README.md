@@ -669,12 +669,55 @@ with a Docker daemon or on a BPF LSM kernel; see `docs/BROKER.md`.
 disposable BPF-LSM VM: preflight, per-program BPF object load (each verifier
 result reported verbatim), a validation-time check that a more-specific allow
 beneath a deny is rejected, and behaviour probes through one real guarded
-launch (`verify-probe.sh`, which runs the probe agent with a broker stand-in on
-`172.30.255.0/29` and a secret canary, and checks among others that the broker
-endpoint is reachable, its other ports, gateway and neighbours are refused,
-`mkfifo` and `AF_UNIX` binds are denied, and the canary never appears). It
-refuses to run without the disposable-VM marker,
+launch (`verify-probe.sh`). It refuses to run without the disposable-VM marker,
 cleans up, and writes a JSON report the service attaches to a target to decide
-`kernel_verified`. The kit never sets that flag itself. It cannot run in the
-build sandbox; its logic is unit-tested with fakes (`test_verify_kernel.py`),
-and `verify-probe.sh` is unexercised on a kernel.
+`kernel_verified`. The kit never sets that flag itself.
+
+**What the behaviour probe proves.** The probe launch mounts a writable host
+folder read-write and places the guard's `read_only`, `deny`, `execute` and
+`workspace` trees over subpaths of it, so the folder is physically writable and
+agent-owned throughout and only the guard can deny a write, read, exec, mknod,
+hard link or FIFO there. Each guard denial is a true A/B against a positive
+control that the SAME mechanism allows, and every negative must fail with
+EPERM/EACCES, not a generic error:
+
+- read a world-readable file inside a `deny` tree is denied, while a sibling in
+  a `read_only` tree is read;
+- a write into a `read_only` tree on the writable folder is denied, while a
+  write into the workspace succeeds (not EROFS from the read-only rootfs);
+- exec of a real ELF (`/bin/true`) copied into a non-execute tree is denied,
+  while exec of the same ELF from an `execute` tree succeeds (not ENOEXEC);
+- `mknod(2)` of a plain regular file in a writable tree is denied, while
+  `open(O_CREAT)` of the same file succeeds — the create A/B that exercises the
+  `path_mknod` open-vs-mknod decision, needing no capability so only the guard
+  denies it;
+- `mkfifo`, an `AF_UNIX` pathname bind and a hard link within one filesystem are
+  each denied in a writable tree (so EROFS/EXDEV cannot be the cause);
+- `PTRACE_ATTACH` of a sibling is denied, observed by the attaching process;
+- the broker's exact endpoint connects, while its other ports, the reachable
+  network gateway `.1`, a neighbour `.4` and a non-listed DNS resolver are all
+  refused with EPERM from the hooks (reachable addresses, not timeouts);
+- the broker's secret path and the host's secret store never open, and a random
+  canary written to that store never appears in the agent's output.
+
+The driver then cross-checks the launch receipt's host block: every operation
+the guard was meant to deny (read, write, execute, create, hardlink, ptrace)
+must have recorded at least one denial, and each rendered denial path must be
+container-absolute. A probe that reports EACCES while the host evidence shows no
+denial for that operation — the guard silently off, the error from elsewhere —
+fails the stage, as does a host-side overlay path.
+
+**What it cannot prove.** The probe exercises the main allow/deny selectors
+once each; it is not exhaustive over paths or operations. It does not cover the
+socket LSM guard (none is attached), syscall filtering (none), descriptor
+passing beyond the recorded stdio, or the window before the command joins the
+domain. It needs the `live-mounts` capability, so it runs only on a docker-host
+VM, not the appliance guest. It cannot run in the build sandbox; its logic is
+unit-tested with fakes (`test_verify_kernel.py`), including a regression that
+the suite reports FAIL when deny-tree enforcement is off (a fake that records no
+denial) and when only `path_mknod` denies. `verify-probe.sh` is unexercised on a
+kernel, and a PASS of the previous kit proved little: its negative probes all
+failed for reasons unrelated to the guard (a read-only rootfs, a dropped
+capability, a non-ELF file, an unroutable address), and `deny-ptrace` could
+never satisfy its own expectation, so a kernel with filesystem enforcement
+silently off passed.

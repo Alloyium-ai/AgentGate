@@ -182,12 +182,25 @@ class ProbeJudgementTest(unittest.TestCase):
         verdict = self.kit.judge(self.lines(self.good), 'canary-value')
         self.assertTrue(verdict['ok'], verdict)
         names = {p['name'] for p in verdict['probes']}
-        for required in ('allow-create', 'deny-mkfifo', 'deny-unix-bind', 'allow-broker-endpoint', 'deny-broker-other-port',
+        for required in ('allow-create', 'allow-exec-tree', 'allow-read-sibling', 'deny-read-tree', 'deny-write-readonly',
+                         'deny-exec-nontree', 'deny-mknod-regular', 'deny-mkfifo', 'deny-unix-bind', 'deny-hardlink',
+                         'deny-ptrace', 'deny-foreign-dns', 'allow-broker-endpoint', 'deny-broker-other-port',
                          'deny-broker-gateway', 'deny-broker-neighbour', 'deny-secret-mount', 'deny-secret-store', 'secret-canary-absent'):
             self.assertIn(required, names)
 
+    def test_a_guard_negative_requires_permission_not_a_generic_failure(self):
+        # A deny that fails for an unrelated reason (EROFS, ECONNREFUSED, a
+        # timeout, ENOEXEC, EXDEV) must not pass: only EPERM/EACCES does.
+        for name in ('deny-read-tree', 'deny-write-readonly', 'deny-exec-nontree', 'deny-mknod-regular',
+                     'deny-hardlink', 'deny-ptrace', 'deny-broker-gateway', 'deny-foreign-dns'):
+            for value in ('0', 'EROFS', 'EXDEV', 'ENOEXEC', 'ECONNREFUSED', 'ETIMEDOUT', 'None', 'missing'):
+                outcomes = dict(self.good, **{name: value})
+                with self.subTest(name=name, value=value):
+                    self.assertEqual(self.kit.judge(self.lines(outcomes), 'canary-value')['ok'], value in self.kit.PERMISSION)
+
     def test_wrong_outcomes_fail(self):
-        for name, value in (('allow-create', 'EACCES'), ('deny-mkfifo', '0'), ('deny-unix-bind', '0'),
+        for name, value in (('allow-create', 'EACCES'), ('allow-exec-tree', 'EACCES'), ('allow-read-sibling', 'EACCES'),
+                            ('deny-mkfifo', '0'), ('deny-unix-bind', '0'), ('deny-exec-nontree', '0'),
                             ('allow-broker-endpoint', 'EPERM'), ('deny-broker-other-port', 'ECONNREFUSED'),
                             ('deny-broker-gateway', 'None'), ('deny-broker-neighbour', '0'), ('deny-secret-store', '0')):
             outcomes = dict(self.good, **{name: value})
@@ -196,6 +209,22 @@ class ProbeJudgementTest(unittest.TestCase):
         missing = dict(self.good)
         del missing['deny-mkfifo']
         self.assertFalse(self.kit.judge(self.lines(missing), 'canary-value')['ok'])
+
+    def test_required_host_denials_follow_the_receipt_counts(self):
+        full = {'filesystem': {'operations': {op: {'allowed': 2, 'denied': 1} for op in ('read', 'write', 'execute', 'create', 'hardlink')}},
+                'process': {'operations': {'ptrace': {'allowed': 0, 'denied': 1}}}}
+        probes = self.kit.required_denials({}, full)
+        self.assertTrue(probes and all(p['ok'] for p in probes), probes)
+        # The create denial alone (only path_mknod working) leaves read, write,
+        # execute, hardlink and ptrace with no recorded denial: those must fail.
+        only_create = {'filesystem': {'operations': {'create': {'denied': 3}}}, 'process': {'operations': {}}}
+        failing = {p['name'] for p in self.kit.required_denials({}, only_create) if not p['ok']}
+        self.assertEqual(failing, {'host-denial-filesystem-read', 'host-denial-filesystem-write',
+                                   'host-denial-filesystem-execute', 'host-denial-filesystem-hardlink',
+                                   'host-denial-process-ptrace'})
+        # No operations at all (enforcement off): every required denial fails.
+        self.assertTrue(all(not p['ok'] for p in self.kit.required_denials({}, {})))
+        self.assertEqual(self.kit.host_denial_counts({'filesystem': {'operations': {'read': {'denied': 4}}}}), {('filesystem', 'read'): 4})
 
     def test_the_secret_canary_must_never_appear(self):
         text = self.lines(self.good) + 'canary-value\n'
@@ -231,8 +260,15 @@ class ProbeDriverTest(unittest.TestCase):
         guard.write_text('#!/bin/sh\nprintf \'{"digest":"%s","document":{}}\'\n' % ('ab' * 32))
         guard.chmod(0o755)
 
-    def write_launch(self, outcomes, joined=True, leak=False):
-        receipt = {'broker': {'target_joined': joined}, 'evidence': {'host': {'filesystem': {'denials': [{'path': '/etc/shadow'}]}}}}
+    # A host block whose recorded denials satisfy every required operation.
+    FULL_DENIALS = {op: {'allowed': 1, 'denied': 1} for op in ('read', 'write', 'execute', 'create', 'hardlink')}
+
+    def write_launch(self, outcomes, joined=True, leak=False, fs_operations=None, process_operations=None, fs_denials=None):
+        host = {'filesystem': {'operations': fs_operations if fs_operations is not None else dict(self.FULL_DENIALS),
+                               'denials': fs_denials if fs_denials is not None else [{'path': '/var/lib/agentgate/mounts/fixtures/blocked/secret'}]},
+                'process': {'operations': process_operations if process_operations is not None else {'ptrace': {'allowed': 0, 'denied': 1}},
+                            'denials': []}}
+        receipt = {'broker': {'target_joined': joined}, 'evidence': {'host': host}}
         lines = ''.join('%s %s\n' % item for item in outcomes.items())
         (self.root / 'launch.py').write_text(
             'import json, pathlib, sys\n'
@@ -278,6 +314,13 @@ class ProbeDriverTest(unittest.TestCase):
         import launch_job
         launch = launch_job.check_job(json.dumps(job).encode(), ['snapshots', 'live-mounts'])
         self.assertEqual(launch['env']['PROBE_BROKER_URL'], 'http://172.30.255.2:8443/probe')
+        # The launch mounts the fixtures folder read-write and asks for it in the spec.
+        self.assertEqual(len(launch['mounts']), 1)
+        mount = launch['mounts'][0]
+        self.assertEqual((mount['name'], mount['mode']), ('fixtures', 'read-write'))
+        self.assertTrue(mount['source'].endswith('/fixtures') and mount['source'].startswith('/'), mount['source'])
+        self.assertEqual(job['spec']['mounts'], job['mounts'])  # same_mounts holds
+        self.assertEqual(launch['workdir'], '/var/lib/agentgate/mounts/fixtures/work')
         self.assertFalse(self.store.exists(), 'the canary store outlived the probe')
 
     def test_a_leaked_canary_or_an_unjoined_target_fails(self):
@@ -289,6 +332,45 @@ class ProbeDriverTest(unittest.TestCase):
         done, result = self.run_probe()
         self.assertNotEqual(done.returncode, 0)
         self.assertFalse(next(p for p in result['probes'] if p['name'] == 'target-joined-broker-network')['ok'])
+
+    def test_the_suite_fails_when_the_deny_tree_enforcement_is_off(self):
+        # Every probe reports EACCES (looks denied), but the guard recorded no
+        # denial: enforcement is silently off and the error came from elsewhere.
+        probes_denied = {name: ('0' if expected == 'allowed' else 'EACCES' if expected == 'permission' else 'ENOENT')
+                         for name, expected, _ in self._checks()}
+        self.write_launch(probes_denied, fs_operations={}, process_operations={}, fs_denials=[])
+        done, result = self.run_probe()
+        self.assertNotEqual(done.returncode, 0, 'the suite passed with no recorded denial')
+        failing = {p['name'] for p in result['probes'] if not p['ok']}
+        self.assertIn('denials-container-absolute', failing)
+        for op in ('read', 'write', 'execute', 'create', 'hardlink'):
+            self.assertIn('host-denial-filesystem-' + op, failing)
+        self.assertIn('host-denial-process-ptrace', failing)
+
+    def test_the_suite_fails_when_only_path_mknod_denies(self):
+        # The create hook denies, but read/write/execute/hardlink and ptrace do
+        # not: their probes look EACCES yet no host denial was recorded.
+        looks_denied = {name: ('0' if expected == 'allowed' else 'EACCES' if expected == 'permission' else 'ENOENT')
+                        for name, expected, _ in self._checks()}
+        self.write_launch(looks_denied, fs_operations={'create': {'denied': 2}}, process_operations={},
+                          fs_denials=[{'path': '/var/lib/agentgate/mounts/fixtures/work/node'}])
+        done, result = self.run_probe()
+        self.assertNotEqual(done.returncode, 0, 'the suite passed with only path_mknod enforcing')
+        failing = {p['name'] for p in result['probes'] if not p['ok']}
+        self.assertEqual(failing, {'host-denial-filesystem-read', 'host-denial-filesystem-write',
+                                   'host-denial-filesystem-execute', 'host-denial-filesystem-hardlink',
+                                   'host-denial-process-ptrace'})
+        self.assertNotIn('host-denial-filesystem-create', [p['name'] for p in result['probes'] if not p['ok']])
+
+    def test_a_host_side_denial_path_fails_the_container_absolute_check(self):
+        self.write_launch(self.good(), fs_denials=[{'path': '/var/lib/docker/overlay2/abc/merged/etc/shadow'}])
+        done, result = self.run_probe()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertFalse(next(p for p in result['probes'] if p['name'] == 'denials-container-absolute')['ok'])
+
+    def _checks(self):
+        import verify_kernel
+        return verify_kernel.CHECKS
 
 
 if __name__ == '__main__':
