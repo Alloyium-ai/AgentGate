@@ -33,8 +33,11 @@ struct dentry {struct inode *d_inode;struct qstr d_name;} __attribute__((preserv
 struct path {struct vfsmount *mnt;struct dentry *dentry;} __attribute__((preserve_access_index));
 struct file {struct inode *f_inode;struct path f_path;unsigned int f_mode,f_flags;} __attribute__((preserve_access_index));
 struct linux_binprm {struct file *file;} __attribute__((preserve_access_index));
-struct nameidata;
+// fs/namei.c's private walk state; only fs_create reads it (see there).
+struct nameidata {struct path path;unsigned int flags;} __attribute__((preserve_access_index));
 struct task_struct {__u64 start_boottime;struct nameidata *nameidata;} __attribute__((preserve_access_index));
+// The x86-64 user register frame; orig_ax holds the number of the syscall in progress.
+struct pt_regs {unsigned long orig_ax;} __attribute__((preserve_access_index));
 struct vm_area_struct {struct file *vm_file;} __attribute__((preserve_access_index));
 struct action {__u32 effect,rule;};
 struct node {__u32 id;struct action sub_read,sub_write,exact_read,exact_write;};
@@ -300,16 +303,59 @@ static __always_inline int rename_check(struct path *old_dir,struct dentry *old_
 struct inode;struct mnt_idmap;struct iattr;
 // path_mknod is not in the kernel's sleepable LSM hook set, so the verifier
 // refuses bpf_d_path here, and with it the whole object. This hook therefore
-// never resolves a path. The kernel calls it from exactly three places:
-//   may_o_create()   open(O_CREAT) of a missing name. The mode is S_IFREG and
-//                    the open's path walk is live, so current->nameidata is set.
-//   do_mknodat()     mknod(2)/mknodat(2) of any kind, after the walk has ended.
-//   unix_bind_bsd()  AF_UNIX bind() to a pathname (S_IFSOCK), after the walk.
+// never resolves a path. On 6.8 the kernel calls it from exactly three places:
+//   may_o_create()   open(O_CREAT) of a missing name, from lookup_open(), as
+//                    security_path_mknod(&nd->path, dentry, S_IFREG|mode, 0)
+//                    while the open's walk is published in current->nameidata.
+//   do_mknodat()     mknod(2)/mknodat(2) of any kind, after filename_create()
+//                    has restored current->nameidata (NULL for a syscall).
+//   unix_bind_bsd()  AF_UNIX bind() to a pathname (S_IFSOCK), likewise after
+//                    the walk.
 // Only the first proceeds, and only as far as file_open, which decides CREATE on
 // the new file's path (FMODE_CREATED) and fails the open when it is denied. The
 // kernel has created the empty file by then; the denial is recorded with its
 // path. Every other node is denied: device nodes, FIFOs, socket nodes and
 // regular files made by mknod, because no hook with a path sees them first.
+//
+// The allow rests on kernel internals that are NOT a stable interface. Every
+// condition below must hold, and each one fails closed (the create is denied,
+// so open(O_CREAT) of a new file fails with EPERM) if a kernel changes it:
+//   1. mode is S_IFREG and dev is 0 (may_o_create passes op->mode|S_IFREG, 0);
+//   2. current->nameidata is non-NULL: the open's walk is published
+//      (set_nameidata in do_filp_open) and do_mknodat/unix_bind_bsd run after
+//      restore_nameidata;
+//   3. that walk carries the open intent LOOKUP_OPEN|LOOKUP_CREATE (0x100|0x200,
+//      include/linux/namei.h), which open_last_lookups() ORs in from
+//      build_open_flags() for O_CREAT and filename_create() never sets;
+//   4. dir is that walk's own parent path (&current->nameidata->path), the
+//      argument lookup_open() passes to may_o_create();
+//   5. the syscall in progress (task_pt_regs(current)->orig_ax) is x86-64
+//      open (2), creat (85), openat (257) or openat2 (437). mknod (133) and
+//      mknodat (259) never match, whatever nameidata holds; a 32-bit or x32
+//      task, io_uring and kernel-initiated opens (a core dump) do not match
+//      either and are denied.
+// Conditions 2 to 4 are internal; 5 is the syscall ABI and bounds a change to
+// them: a kernel that left nameidata published during mknod(2) still cannot
+// pass 5. Re-verify 1 to 5, FMODE_CREATED (0x100000) and the sleepable hook set
+// on every new kernel (docs/QUALIFICATION.md lists the checklist); the kit's
+// allow-create and deny-mknod-regular probes exercise both sides.
+#define LOOKUP_OPEN_ 0x0100
+#define LOOKUP_CREATE_ 0x0200
+#define NR_OPEN_ 2
+#define NR_CREAT_ 85
+#define NR_OPENAT_ 257
+#define NR_OPENAT2_ 437
+static __always_inline int open_creates(struct path *dir,struct task_struct *task)
+{
+    struct nameidata *nd=BPF_CORE_READ(task,nameidata);
+    if(!nd)return 0;
+    if((BPF_CORE_READ(nd,flags)&(LOOKUP_OPEN_|LOOKUP_CREATE_))!=(LOOKUP_OPEN_|LOOKUP_CREATE_))return 0;
+    if((__u64)dir!=(__u64)nd+bpf_core_field_offset(struct nameidata,path))return 0;
+    struct pt_regs *regs=(struct pt_regs *)bpf_task_pt_regs(task);
+    if(!regs)return 0;
+    unsigned long nr=BPF_CORE_READ(regs,orig_ax);
+    return nr==NR_OPEN_ || nr==NR_CREAT_ || nr==NR_OPENAT_ || nr==NR_OPENAT2_;
+}
 SEC("lsm/path_mknod") int BPF_PROG(fs_create,struct path *dir,struct dentry *dentry,unsigned short mode,unsigned int dev,int ret)
 {
     if(ret)return ret;
@@ -319,7 +365,7 @@ SEC("lsm/path_mknod") int BPF_PROG(fs_create,struct path *dir,struct dentry *den
     if(!p || !p->generation)return mutation_denied(domain,p,CREATE,1);
     if(bpf_ktime_get_ns()>=p->expires_ns)return mutation_denied(domain,p,CREATE,2);
     struct task_struct *task=(void *)bpf_get_current_task_btf();
-    if((mode&S_IFMT_)==S_IFREG_ && !dev && BPF_CORE_READ(task,nameidata))return 0;
+    if((mode&S_IFMT_)==S_IFREG_ && !dev && open_creates(dir,task))return 0;
     return mutation_denied(domain,p,CREATE,7);
 }
 SEC("lsm/path_mkdir") int BPF_PROG(fs_mkdir,struct path *dir,struct dentry *dentry,unsigned short mode,int ret){return ret?ret:child_check(dir,dentry,3);}

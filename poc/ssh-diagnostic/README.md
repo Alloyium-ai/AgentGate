@@ -470,6 +470,16 @@ validator; the Docker-host mount path and the appliance's snapshot transfer have
   fails to load and the guard fails closed.
 - A denied `create` through `open(O_CREAT)` fails the open with EPERM, but the kernel has already made the empty file wherever file
   permissions allow it (for example `/dev/shm`). The denial is recorded with its path. Every other node type is refused before it exists.
+- **`path_mknod` relies on kernel internals.** The hook cannot resolve a path, so it tells `open(O_CREAT)` from `mknod(2)` by
+  evidence the kernel does not promise to keep: it lets a creation through only when the mode is a regular file with device 0,
+  `current->nameidata` is published (6.8 publishes the open's walk during `may_o_create()` and has restored it before
+  `do_mknodat()` and `unix_bind_bsd()` call the hook), that walk carries `LOOKUP_OPEN|LOOKUP_CREATE` (`0x100|0x200`), the hook's
+  directory is that walk's own `nameidata->path`, and the syscall in progress (`orig_ax` of the task's user registers) is x86-64
+  `open`, `creat`, `openat` or `openat2`. The last condition is the syscall ABI, so `mknod(2)` and `mknodat(2)` can never pass
+  even if a kernel left `nameidata` published. Each condition fails closed: if a kernel changes one, creating a new file with
+  `open(O_CREAT)` fails with EPERM instead of `mknod(2)` succeeding. 32-bit and x32 tasks, io_uring opens and kernel-made files
+  such as core dumps never pass. Re-verify the checklist in [docs/QUALIFICATION.md](../../docs/QUALIFICATION.md) on every new
+  kernel; the verification kit's `allow-create` and `deny-mknod-regular` probes exercise both sides.
 - Open work: attaching the socket LSM guard. `bpf/network_sockets.bpf.c` and `bpf/network_custody.bpf.c` exist, but only the unused
   full-product path (`internal/enforcement`, through `fsrules.EnableSocketDelegation`) loads them. In this POC they would add policy
   decisions on `socket_create` and `socket_post_create` (family, type, protocol), `socket_bind`, `socket_listen`, `socket_accept`,

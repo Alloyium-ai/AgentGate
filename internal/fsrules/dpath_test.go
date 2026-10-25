@@ -303,3 +303,112 @@ func TestDPathInCompiledObject(t *testing.T) {
 		t.Fatal("no compiled program calls bpf_d_path; the check would be vacuous")
 	}
 }
+
+// functionBody returns the stripped body of the BPF program or function name.
+func functionBody(t *testing.T, src, name string) string {
+	t.Helper()
+	text := stripC(src)
+	start := -1
+	for _, head := range []string{"BPF_PROG(" + name + ",", " " + name + "("} {
+		if i := strings.Index(text, head); i >= 0 && (start < 0 || i < start) {
+			start = i
+		}
+	}
+	if start < 0 {
+		t.Fatalf("%s is absent", name)
+	}
+	open := strings.Index(text[start:], "{")
+	if open < 0 {
+		t.Fatalf("%s has no body", name)
+	}
+	depth, i := 0, start+open
+	for ; i < len(text); i++ {
+		if text[i] == '{' {
+			depth++
+		} else if text[i] == '}' {
+			depth--
+			if depth == 0 {
+				break
+			}
+		}
+	}
+	return strings.Join(strings.Fields(text[start+open+1:i]), "")
+}
+
+// statements splits a compacted body at semicolons, keeping each if with its
+// guarded return.
+func statements(body string) []string {
+	out := []string{}
+	for _, s := range strings.Split(body, ";") {
+		if s = strings.Trim(s, "{}"); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// TestCreateAllowsOnlyAnOpenThatCreates pins the conditions under which
+// path_mknod lets a creation through (see the comment on fs_create): a
+// regular file with no device number, created by the walk of an open(O_CREAT)
+// in progress, during an x86-64 open-family syscall. Every other path denies.
+// A kernel that changes one of these internals makes open(O_CREAT) of a new
+// file fail closed; this test only keeps the source from loosening them.
+func TestCreateAllowsOnlyAnOpenThatCreates(t *testing.T) {
+	raw, err := os.ReadFile(accessSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	parsed, err := parseBPF(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.reaches("fs_create", "bpf_d_path") {
+		t.Fatal("path_mknod reaches bpf_d_path")
+	}
+	for name, value := range map[string]string{"S_IFMT_": "0170000", "S_IFREG_": "0100000", "FMODE_CREATED_": "0x100000",
+		"LOOKUP_OPEN_": "0x0100", "LOOKUP_CREATE_": "0x0200", "NR_OPEN_": "2", "NR_CREAT_": "85", "NR_OPENAT_": "257", "NR_OPENAT2_": "437"} {
+		if !regexp.MustCompile(`(?m)^#define ` + name + ` ` + value + `$`).MatchString(src) {
+			t.Fatalf("%s is no longer %s", name, value)
+		}
+	}
+	allows := 0
+	for _, s := range statements(functionBody(t, src, "fs_create")) {
+		switch {
+		case !strings.Contains(s, "return"):
+		case strings.HasSuffix(s, "returnret"), strings.Contains(s, "returnmutation_denied("):
+		case s == "if(!bpf_map_lookup_elem(&owned,&domain))return0":
+			// A task outside every managed domain is not this guard's business.
+		case s == "if((mode&S_IFMT_)==S_IFREG_&&!dev&&open_creates(dir,task))return0":
+			allows++
+		default:
+			t.Fatalf("fs_create has an unreviewed return: %s", s)
+		}
+	}
+	if allows != 1 {
+		t.Fatalf("fs_create allows in %d places", allows)
+	}
+	want := []string{
+		"structnameidata*nd=BPF_CORE_READ(task,nameidata)",
+		"if(!nd)return0",
+		"if((BPF_CORE_READ(nd,flags)&(LOOKUP_OPEN_|LOOKUP_CREATE_))!=(LOOKUP_OPEN_|LOOKUP_CREATE_))return0",
+		"if((__u64)dir!=(__u64)nd+bpf_core_field_offset(structnameidata,path))return0",
+		"structpt_regs*regs=(structpt_regs*)bpf_task_pt_regs(task)",
+		"if(!regs)return0",
+		"unsignedlongnr=BPF_CORE_READ(regs,orig_ax)",
+		"returnnr==NR_OPEN_||nr==NR_CREAT_||nr==NR_OPENAT_||nr==NR_OPENAT2_",
+	}
+	if got := statements(functionBody(t, src, "open_creates")); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("open_creates differs from its reviewed form:\n%s", strings.Join(got, "\n"))
+	}
+	// The kernel field names are the ones CO-RE resolves (checked against BTF by hand).
+	for _, decl := range []string{
+		"struct nameidata {struct path path;unsigned int flags;} __attribute__((preserve_access_index));",
+		"struct task_struct {__u64 start_boottime;struct nameidata *nameidata;} __attribute__((preserve_access_index));",
+		"struct pt_regs {unsigned long orig_ax;} __attribute__((preserve_access_index));",
+	} {
+		if !strings.Contains(src, decl) {
+			t.Fatalf("CO-RE declaration changed: %s", decl)
+		}
+	}
+}
