@@ -73,7 +73,7 @@
       "path": "bpf/fs_access.bpf.c",
       "kind": "BPF",
       "license": "GPL-2.0-only",
-      "preserved_sha256": "ef4b887951ffa0b51d3d465bae7fffde372b9deffd4ff62ca94dc3b168c88385"
+      "preserved_sha256": "28042977db4c277cf6e6e2c2a9be18d1008cf4d340495a7a927b240685e024cb"
     },
     {
       "path": "bpf/network_abi.h",
@@ -4149,11 +4149,6 @@
       "license": "Apache-2.0"
     },
     {
-      "path": "internal/secretseal/testdata/vector-v1.json",
-      "kind": "metadata",
-      "license": "Apache-2.0"
-    },
-    {
       "path": "poc/ssh-diagnostic/domain_control.py",
       "kind": "code",
       "license": "Apache-2.0"
@@ -4364,11 +4359,6 @@
       "license": "Apache-2.0"
     },
     {
-      "path": "web/qa/fixtures/secretseal-vector-v1.json",
-      "kind": "metadata",
-      "license": "Apache-2.0"
-    },
-    {
       "path": "web/qa/hpke-node.mjs",
       "kind": "code",
       "license": "Apache-2.0"
@@ -4481,6 +4471,126 @@
     {
       "path": "web/src/tokens.tsx",
       "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "cmd/pilot-network-diagnostic/stdio.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/broker/normalization_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/cli/pin_trust_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/cli/policy.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/cli/policy_seal_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/denial_sampling.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/e2e_policy_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_approval.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_approval_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_broker_pool.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_broker_pool_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_mounts_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_ratelimit_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_rotation_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/control/prov_tokens_revoke_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/fsrules/stdio.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/fsrules/stdio_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostproto/policy.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostproto/policy_test.go",
+      "kind": "code",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/hostproto/testdata/secret-policy-vectors.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "internal/secretseal/testdata/vector-v2.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "web/qa/fixtures/api/target-mount-roots.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "web/qa/fixtures/secret-policy-vectors.json",
+      "kind": "metadata",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "web/qa/fixtures/secretseal-vector-v2.json",
+      "kind": "metadata",
       "license": "Apache-2.0"
     }
   ]
