@@ -122,12 +122,15 @@ override-style header an upstream invents is safe by default:
   `TestModelSDKHeadersPassTheRouteDefault` sends it through a route.
 - **`forward_headers`** (per route, default empty): up to 16 further exact names, for example `git-protocol` or
   `x-github-api-version`.
-- **Never forwarded**, even when a route lists it (the configuration is refused): hop-by-hop (`Connection` and every
-  header it lists, `Keep-Alive`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`,
-  `HTTP2-Settings`); credentials (`Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `X-Goog-Api-Key`,
-  `Private-Token`, `X-Auth-Token`, `Authentication`, `Cookie`, `Cookie2`, and any name containing `Authorization`,
-  `Token`, `Secret`, `Password`, `Cookie`, `Session`, `Credential`, `Api-Key`, `Apikey`, `Access-Key` or
-  `Signature`); method and URL overrides (`X-HTTP-Method-Override`, `X-HTTP-Method*`, `X-Method-Override`,
+- **Never forwarded**, even when a route lists it (the configuration is refused). Every rule below compares the name
+  in lower case with each `_` read as `-`, and the word rule searches the whole name, so `X-StAinless-0AuthoriZAtion`
+  and `Anthropic-Api_key` are caught like their plain spellings; a name holding `_` at all is never forwarded and is
+  refused in `forward_headers`. The rules: hop-by-hop (`Connection` and every header it lists, `Keep-Alive`,
+  `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `HTTP2-Settings`); credentials
+  (`Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `X-Goog-Api-Key`, `Private-Token`, `X-Auth-Token`,
+  `Authentication`, `Cookie`, `Cookie2`, and any name other than the four route defaults above that contains
+  `authorization`, `token`, `secret`, `password`, `cookie`, `session`, `credential`, `api-key`, `apikey`, `access-key`
+  or `signature` anywhere); method and URL overrides (`X-HTTP-Method-Override`, `X-HTTP-Method*`, `X-Method-Override`,
   `X-Original-*` such as `X-Original-URL`, `X-Rewrite-*` such as `X-Rewrite-URL`, `X-Override-*`,
   `X-Forwarded-Method`, `X-Forwarded-Uri`, `X-Forwarded-Path`): an upstream that honours one would act on a method or
   path the rules never matched; client identity and forwarding (`Forwarded`, `Via`, `X-Forwarded-*`, `X-Real-Ip`,

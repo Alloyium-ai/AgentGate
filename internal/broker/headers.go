@@ -13,7 +13,7 @@ import (
 // upstream only when it is in DefaultForwarded, in one of the
 // DefaultForwardedPrefixes families, or in the route's own forward_headers,
 // and never when it is in NeverForwarded (or one of its prefixes or
-// substrings). Everything else is dropped, so a header that changes how an
+// substrings, compared on headerKey). Everything else is dropped, so a header that changes how an
 // upstream reads the request (a method or URL override, a forwarding chain,
 // a cookie, a range) cannot widen what the route's method and path rules
 // allowed. The broker itself sets Host, Content-Length (from the buffered
@@ -50,28 +50,67 @@ var NeverForwarded = []string{
 }
 
 // NeverForwardedPrefixes and neverForwardedParts extend NeverForwarded to
-// whole families (canonical header name forms).
+// whole families. Every comparison is on headerKey, so neither letter case
+// nor an underscore standing for a hyphen escapes a rule, and the parts are
+// searched for anywhere in the name.
 var NeverForwardedPrefixes = []string{"X-Forwarded-", "Proxy-", "X-Override-", "X-Http-Method", "X-Original-", "X-Rewrite-", "Sec-"}
 
 var neverForwardedParts = []string{"Authorization", "Token", "Secret", "Password", "Cookie", "Session", "Credential", "Api-Key", "Apikey", "Access-Key", "Signature"}
 
 var (
 	defaultForwarded = canonicalSet(DefaultForwarded...)
-	neverForwarded   = canonicalSet(NeverForwarded...)
+	neverExact       = keySet(NeverForwarded...)
+	neverPrefixes    = keyList(NeverForwardedPrefixes...)
+	neverParts       = keyList(neverForwardedParts...)
+	defaultExact     = keySet(DefaultForwarded...)
 )
 
-// neverForward reports a header the broker never forwards. name is canonical.
+// headerKey is the form every never-forward rule compares: the name in lower
+// case with each underscore read as a hyphen. Many servers and proxies treat
+// X_Api_Key as X-Api-Key (CGI and WSGI environments, nginx with
+// underscores_in_headers), and a canonical name does not capitalize a word
+// that follows a digit (X-StAinless-0AuthoriZAtion canonicalizes to
+// X-Stainless-0authorization), so a case-sensitive match on canonical names
+// missed both that and Anthropic-Api_key.
+func headerKey(name string) string {
+	return strings.ReplaceAll(strings.ToLower(name), "_", "-")
+}
+
+func keySet(names ...string) map[string]bool {
+	out := make(map[string]bool, len(names))
+	for _, n := range names {
+		out[headerKey(n)] = true
+	}
+	return out
+}
+
+func keyList(names ...string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, headerKey(n))
+	}
+	return out
+}
+
+// neverForward reports a header the broker never forwards: one named with an
+// underscore at all, one in NeverForwarded, one starting with a
+// NeverForwardedPrefixes family, or one containing a neverForwardedParts word
+// anywhere (the route defaults excepted). Any spelling of the name is accepted.
 func neverForward(name string) bool {
-	if neverForwarded[name] {
+	if strings.IndexByte(name, '_') >= 0 {
 		return true
 	}
-	for _, p := range NeverForwardedPrefixes {
-		if strings.HasPrefix(name, p) {
+	key := headerKey(name)
+	if neverExact[key] {
+		return true
+	}
+	for _, p := range neverPrefixes {
+		if strings.HasPrefix(key, p) {
 			return true
 		}
 	}
-	for _, p := range neverForwardedParts {
-		if strings.Contains(name, p) && !defaultForwarded[name] {
+	for _, p := range neverParts {
+		if strings.Contains(key, p) && !defaultExact[key] {
 			return true
 		}
 	}
@@ -146,7 +185,9 @@ func outboundHeaders(in http.Header, strip, forward map[string]bool) http.Header
 	return out
 }
 
-// checkForwardHeader validates one configured forward_headers entry.
+// checkForwardHeader validates one configured forward_headers entry: a token
+// of at most 64 bytes without an underscore that no never-forward rule
+// matches in any spelling.
 func checkForwardHeader(name string) bool {
 	return token(name) && len(name) <= 64 && !neverForward(http.CanonicalHeaderKey(name))
 }

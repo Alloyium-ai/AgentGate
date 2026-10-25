@@ -104,6 +104,37 @@ func TestOutboundHeadersStripCredentialsAndHopByHop(t *testing.T) {
 	}
 }
 
+// Regression for the second review's FuzzOutboundHeaders finding: the never
+// rules compared canonical names case-sensitively, so a name whose word
+// follows a digit (X-StAinless-0AuthoriZAtion canonicalizes to
+// X-Stainless-0authorization) or that spells a hyphen as an underscore
+// (Anthropic-Api_key) passed in a default-forwarded family, and the
+// forward_headers validator accepted x_auth_token and x-0secret.
+func TestNeverForwardIgnoresCaseAndUnderscores(t *testing.T) {
+	in := http.Header{}
+	for _, k := range []string{"X-StAinless-0AuthoriZAtion", "Anthropic-Api_key", "X-Stainless-Foo_bar", "x_auth_token",
+		"X-0secret", "Openai-9Session", "anthropic-0cookie", "X-Stainless-0SIGNATURE"} {
+		in[k] = []string{"agent-supplied"}
+	}
+	in.Set("X-Stainless-Lang", "go")
+	in.Set("Anthropic-Beta", "tools")
+	out := outboundHeaders(in, nil, map[string]bool{"X-0secret": true, "X_auth_token": true})
+	if len(out) != 2 || out.Get("X-Stainless-Lang") != "go" || out.Get("Anthropic-Beta") != "tools" {
+		t.Fatalf("forwarded %v", out)
+	}
+	for _, name := range []string{"X-StAinless-0AuthoriZAtion", "Anthropic-Api_key", "x_auth_token", "x-0secret", "git_protocol",
+		"X-Api_Key", "X_FORWARDED_HOST", "proxy_x", "SEC-x", "x-0TOKEN", "X-My-Apikey", "Content_Length"} {
+		if checkForwardHeader(name) {
+			t.Errorf("forward_headers accepted %q", name)
+		}
+	}
+	for _, name := range []string{"git-protocol", "X-GitHub-Api-Version", "x-request-id", "Accept-Language"} {
+		if !checkForwardHeader(name) {
+			t.Errorf("forward_headers refused %q", name)
+		}
+	}
+}
+
 func TestRewriteLocation(t *testing.T) {
 	rt := &route{name: "gh", upstream: Upstream{Host: "api.example.test", Port: 443, BasePath: "/api"}}
 	cases := map[string]string{
