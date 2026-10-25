@@ -338,14 +338,21 @@ func (e *env) targetApprove(ctx context.Context, ref, keyID, reason string) erro
 		}
 		return err
 	}
-	previous, perr := e.pinTarget(approved, "approve-key", true)
+	// The pin is the fingerprint the operator compared with the host
+	// console, never the service's answer: a service that approves one key
+	// and reports another must not become the anchor that secret set trusts.
+	if approved.ID != t.ID || subtle.ConstantTimeCompare([]byte(keyID), []byte(approved.HostKeyID)) != 1 {
+		return trustError("host_key_mismatch", "The service accepted the approval of target "+t.Name+" but answered with host key "+approved.HostKeyID+" for target "+approved.ID+", not the "+keyID+" you typed. Nothing was pinned on this machine.",
+			"Do not store secrets on this target: find out why the service disagrees with the host console, then retire the target or issue a new token (agentgate target enroll "+t.Name+").")
+	}
+	previous, perr := e.pinTarget(approved, keyID, "approve-key", true)
 	if e.g.json {
 		if perr != nil {
 			return perr
 		}
 		return e.p.rawJSON(raw)
 	}
-	e.p.line("Approved host key %s for target %s; the target is %s.", approved.HostKeyID, approved.Name, approved.State)
+	e.p.line("Approved host key %s for target %s; the target is %s.", keyID, approved.Name, approved.State)
 	if perr != nil {
 		e.p.warn("the key was approved but not pinned on this machine")
 		return perr
@@ -357,13 +364,21 @@ func (e *env) targetApprove(ctx context.Context, ref, keyID, reason string) erro
 	return nil
 }
 
-// pinTarget pins the target's current host key for this service.
-func (e *env) pinTarget(t Target, source string, replace bool) (*KnownTarget, error) {
+// pinTarget pins keyID, the fingerprint the operator obtained out of band
+// (typed from the host console, or read from this machine's own host agent),
+// for target t of this service. The service's answer is never the source of
+// a pin: keyID must equal the host key the service reports (constant time),
+// or nothing is pinned and the caller gets a trust failure.
+func (e *env) pinTarget(t Target, keyID, source string, replace bool) (*KnownTarget, error) {
+	if keyID == "" || subtle.ConstantTimeCompare([]byte(keyID), []byte(t.HostKeyID)) != 1 {
+		return nil, trustError("host_key_mismatch", "The service reports host key "+t.HostKeyID+" for target "+t.Name+", not "+keyID+". Nothing was pinned.",
+			"Do not pin or store secrets: find out why the host and the service disagree (re-enroll the host if needed).")
+	}
 	st, err := e.store()
 	if err != nil {
 		return nil, err
 	}
-	return st.pin(KnownTarget{Server: e.server.String(), TargetID: t.ID, TargetName: t.Name, HostKeyID: t.HostKeyID, PinnedAt: e.app.Now().UTC().Format("2006-01-02T15:04:05Z"), Source: source}, replace)
+	return st.pin(KnownTarget{Server: e.server.String(), TargetID: t.ID, TargetName: t.Name, HostKeyID: keyID, PinnedAt: e.app.Now().UTC().Format("2006-01-02T15:04:05Z"), Source: source}, replace)
 }
 
 func (e *env) targetPin(ctx context.Context, ref, keyID string, replace bool) error {
@@ -384,17 +399,17 @@ func (e *env) targetPin(ctx context.Context, ref, keyID string, replace bool) er
 	if subtle.ConstantTimeCompare([]byte(keyID), []byte(t.HostKeyID)) != 1 {
 		return trustError("host_key_mismatch", "The service reports host key "+t.HostKeyID+" for target "+t.Name+", not "+keyID+".", "Do not pin or store secrets: find out why the host and the service disagree (re-enroll the host if needed).")
 	}
-	previous, err := e.pinTarget(t, "pin", replace)
+	previous, err := e.pinTarget(t, keyID, "pin", replace)
 	if err != nil {
 		return err
 	}
 	if e.g.json {
-		return e.p.value(map[string]any{"target_id": t.ID, "target": t.Name, "host_key_id": t.HostKeyID, "pinned": true})
+		return e.p.value(map[string]any{"target_id": t.ID, "target": t.Name, "host_key_id": keyID, "pinned": true})
 	}
 	if previous != nil {
 		e.p.line("Replaced pin %s.", previous.HostKeyID)
 	}
-	e.p.line("Pinned host key %s for target %s.", t.HostKeyID, t.Name)
+	e.p.line("Pinned host key %s for target %s.", keyID, t.Name)
 	return nil
 }
 

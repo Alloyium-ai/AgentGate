@@ -126,7 +126,10 @@ type upRun struct {
 	target   Target
 	token    string
 	hostd    string
-	localKey string
+	// localKey and localTarget are what this machine's own agentgate-hostd
+	// reports (agentgate-hostd status): the out-of-band anchor a pin needs.
+	localKey    string
+	localTarget string
 }
 
 type upStep struct {
@@ -634,7 +637,7 @@ func (u *upRun) hostAgent(ctx context.Context) error {
 			if s.TargetID != u.target.ID {
 				return &Error{Exit: ExitConflict, Code: "host_enrolled_elsewhere", Message: "This machine's host agent is enrolled as target " + s.TargetID + ", not " + u.target.Name + " (" + u.target.ID + ").", Hint: "Use --target with that target's name, or uninstall the host agent first."}
 			}
-			u.localKey = s.HostKeyID
+			u.localKey, u.localTarget = s.HostKeyID, s.TargetID
 			u.say("agentgate-hostd is installed and enrolled as target %s", u.target.Name)
 			return nil
 		}
@@ -684,7 +687,7 @@ func (u *upRun) hostAgent(ctx context.Context) error {
 	// The host key id comes from agentgate-hostd status, which derives it
 	// from the key file itself; the install output is shown, never parsed.
 	if s, err := u.readHostdStatus(ctx); err == nil && s.HostKeyID != "" {
-		u.localKey = s.HostKeyID
+		u.localKey, u.localTarget = s.HostKeyID, s.TargetID
 	}
 	if u.localKey != "" {
 		u.say("this machine's host key: %s", u.localKey)
@@ -699,23 +702,33 @@ func (u *upRun) refreshTarget(ctx context.Context) error {
 	return err
 }
 
-func (u *upRun) pinLocal() {
-	if u.localKey == "" || subtle.ConstantTimeCompare([]byte(u.localKey), []byte(u.target.HostKeyID)) != 1 {
-		return
+// pinLocal pins the key this machine's own host agent reported (the out-of-
+// band anchor), only when the service reports the same key for the same
+// target; a service answer alone never becomes a pin. A service that shows a
+// different key or target for this machine's own host agent is a trust
+// failure, and nothing is pinned.
+func (u *upRun) pinLocal() error {
+	if u.localKey == "" {
+		return nil
+	}
+	if subtle.ConstantTimeCompare([]byte(u.localKey), []byte(u.target.HostKeyID)) != 1 || (u.localTarget != "" && u.localTarget != u.target.ID) {
+		return trustError("host_key_mismatch", "This machine's host agent has key "+u.localKey+" for target "+u.localTarget+", but the service shows key "+u.target.HostKeyID+" for target "+u.target.Name+" ("+u.target.ID+"). Nothing was pinned.",
+			"Do not store secrets on this target until you know why: issue a new token (agentgate target enroll "+u.target.Name+") and install the host agent again.")
 	}
 	u.e.server = u.url
 	if st, err := u.e.store(); err == nil {
 		if k, err := st.loadTrust(); err == nil {
-			if pin := k.find(u.url.String(), u.target.ID); pin != nil && pin.HostKeyID == u.target.HostKeyID {
-				return
+			if pin := k.find(u.url.String(), u.target.ID); pin != nil && pin.HostKeyID == u.localKey {
+				return nil
 			}
 		}
 	}
-	if _, err := u.e.pinTarget(u.target, "up", false); err == nil {
-		u.say("pinned host key %s on this machine for secret set", u.target.HostKeyID)
+	if _, err := u.e.pinTarget(u.target, u.localKey, "up", false); err == nil {
+		u.say("pinned host key %s on this machine for secret set", u.localKey)
 	} else {
 		u.say("could not pin the host key: %s", asError(context.Background(), err).Message)
 	}
+	return nil
 }
 
 func (u *upRun) keyApproval(ctx context.Context) error {
@@ -730,8 +743,7 @@ func (u *upRun) keyApproval(ctx context.Context) error {
 	switch t.State {
 	case "active":
 		u.say("approved (host key %s)", t.HostKeyID)
-		u.pinLocal()
-		return nil
+		return u.pinLocal()
 	case "awaiting_key_approval":
 	case "pending":
 		if u.o.skipHost {
@@ -775,9 +787,8 @@ func (u *upRun) keyApproval(ctx context.Context) error {
 		if _, err = u.admin.mutate(ctx, "POST", apiPrefix+"/targets/"+pathEscape(t.ID)+"/approve-key", map[string]string{"host_key_id": u.localKey, "reason": "Approved with agentgate up after comparing this machine's host agent fingerprint"}, true, &u.target); err != nil {
 			return err
 		}
-		u.say("approved host key %s; target %s is %s", u.target.HostKeyID, u.target.Name, u.target.State)
-		u.pinLocal()
-		return nil
+		u.say("approved host key %s; target %s is %s", u.localKey, u.target.Name, u.target.State)
+		return u.pinLocal()
 	}
 	u.say("an administrator approves it after comparing it with the host console:")
 	u.say("  agentgate target approve-key %s --host-key-id <host's fingerprint>", t.Name)
@@ -796,8 +807,7 @@ func (u *upRun) keyApproval(ctx context.Context) error {
 		}
 		if u.target.State == "active" {
 			u.say("approved by an administrator (host key %s)", u.target.HostKeyID)
-			u.pinLocal()
-			return nil
+			return u.pinLocal()
 		}
 		if u.target.State != "awaiting_key_approval" {
 			return &Error{Exit: ExitConflict, Code: "target_state", Message: "Target " + t.Name + " moved to " + u.target.State + " while waiting for approval."}

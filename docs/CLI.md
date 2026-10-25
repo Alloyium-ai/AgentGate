@@ -256,8 +256,8 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `target add NAME [--token-file F]` | `POST /targets` | prints the one-time enrollment token once, or writes it to a new 0600 file |
 | `target enroll NAME [--token-file F]` | `POST /targets/{id}/enrollment` | a new one-time token (reinstall, job key rotation) |
 | `target status NAME` | `GET /targets/{id}` | state, host key, pin and the next step |
-| `target approve-key NAME [--host-key-id ID]` | `POST /targets/{id}/approve-key` | type the fingerprint the host printed; pins it on success |
-| `target pin NAME --host-key-id ID [--replace]` | `GET /targets/{id}` | pins an already approved key after you compared it |
+| `target approve-key NAME [--host-key-id ID]` | `POST /targets/{id}/approve-key` | type the fingerprint the host printed; pins exactly what you typed, and only when the service's answer names the same target and the same key (constant-time compare); an answer with another key or target is exit 13 `host_key_mismatch` and nothing is pinned |
+| `target pin NAME --host-key-id ID [--replace]` | `GET /targets/{id}` | pins the key you typed, only when the service reports that same key for the target (exit 13 otherwise) |
 | `target rename NAME NEW` | `PATCH /targets/{id}` | |
 | `target retire NAME [--yes] [--force]` | `DELETE /targets/{id}` | confirms; the host removes the target's secrets first (the target is `retiring` until it confirms), then the host key is revoked; `--force` finishes without the host (values may remain on it) |
 | `profile ls`, `profile show NAME [--version N]`, `profile versions NAME` | `GET /profiles...` | |
@@ -363,7 +363,9 @@ Before it reads the value, the CLI checks the target, and every failure is exit 
 1. The target is active and this machine holds a pin for it (`known-targets.json`), created when you approved its
    host key with `agentgate target approve-key` or `agentgate up`, or with `agentgate target pin` after comparing the
    fingerprint on the host console. No pin, or a service that now reports another `host_key_id`, is refused with
-   what to compare.
+   what to compare. A pin always holds the key you typed (`approve-key`, `pin`) or the key this machine's own
+   `agentgate-hostd status` reports (`up`); it is never copied from a service answer, and a service whose answer
+   names another key is a trust failure (exit 13, `host_key_mismatch`) with nothing pinned.
 2. It fetches the target's signed seal key, `GET /targets/{id}/seal-key` returning `{target_id, host_key_id,
    host_public_key, host_key_fingerprint, seal_key_id, not_after, record}` (`record` is the
    `secretseal.SignedKeyRecord` the host publishes and signs with its host key). It requires
