@@ -395,7 +395,7 @@ type env struct {
 
 func (e *env) store() (store, error) {
 	if e.st.dir == "" {
-		dir, note, err := configDir(e.app.Getenv, os.Geteuid(), e.app.HomeOf)
+		dir, note, err := configDir(e.app.Getenv, os.Geteuid(), e.app.HomeOf, pathOwner)
 		if err != nil {
 			return store{}, err
 		}

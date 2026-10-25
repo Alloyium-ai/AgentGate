@@ -38,7 +38,9 @@ Under `sudo`, `agentgate` keeps its configuration (the admin token, the CA, the 
 with `sudo -E` those still name the invoking user's home, a tree that user controls, and root writing token files there
 could be redirected by a link. `agentgate` says so when it sets `HOME` aside. To use the CLI as yourself afterwards, run
 `agentgate login` as yourself (copy the CA from `/root/.config/agentgate/ca-default.pem`) and `agentgate target pin`;
-or set `AGENTGATE_CONFIG_DIR` to a root-owned directory for the root run.
+or set `AGENTGATE_CONFIG_DIR` to a root-owned directory for the root run. Outside `sudo`, a `HOME` or `XDG_CONFIG_HOME`
+that exists but belongs to another user (root after `su` without a login shell) is refused (exit 13) for the same
+reason.
 
 `up` runs these steps, each of which reads the current state first and only does what is missing:
 

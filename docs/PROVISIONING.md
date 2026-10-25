@@ -659,6 +659,10 @@ sudo -E agentgate up --compose-file compose.yaml --admin-user ada --target local
   --broker-image registry.example/agentgate-broker@sha256:<digest> --mount-root /srv/repos
 ```
 
+`-E` passes `AGENTGATE_IMAGE` through; under `sudo` the CLI still keeps its token, CA and pins in root's own
+`/root/.config/agentgate` (from the account database), never in the invoking user's `HOME`, so it creates nothing
+root-owned in that user's home ([CLI.md](CLI.md#1-first-time-setup-bring-this-machine-online)).
+
 - To build the image from this checkout instead: `AGENTGATE_IMAGE=agentgate-local:dev docker compose -f
   compose.yaml -f deploy/compose.build.yaml build control`, then the same `agentgate up`.
 - Hosts on other machines need the TLS front published: `AGENTGATE_PUBLIC_HOST=agentgate.example.internal docker

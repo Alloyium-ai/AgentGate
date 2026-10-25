@@ -86,9 +86,12 @@ func underSudo(getenv func(string) string, euid int) bool {
 // tree the invoking user controls (a link there redirects root's writes).
 // It then uses root's own home from the account database (homeOf), which
 // root owns; AGENTGATE_CONFIG_DIR still wins, under the usual custody rules
-// (a directory owned by root, mode 0700). It returns a note to show when it
-// set HOME aside.
-func configDir(getenv func(string) string, euid int, homeOf func(uid int) (string, error)) (string, string, error) {
+// (a directory owned by root, mode 0700). Outside sudo, a HOME or
+// XDG_CONFIG_HOME that exists but belongs to another user (su without a
+// login shell, an inherited environment) is refused for the same reason
+// (ownerOf reports a path's owner). It returns a note to show when it set
+// HOME aside.
+func configDir(getenv func(string) string, euid int, homeOf func(uid int) (string, error), ownerOf func(path string) (int, bool)) (string, string, error) {
 	if dir := getenv("AGENTGATE_CONFIG_DIR"); dir != "" {
 		if !filepath.IsAbs(dir) {
 			return "", "", usageError("AGENTGATE_CONFIG_DIR must be an absolute path")
@@ -108,14 +111,34 @@ func configDir(getenv func(string) string, euid int, homeOf func(uid int) (strin
 		}
 		return dir, note, nil
 	}
+	base, name, dir := "", "", ""
 	if xdg := getenv("XDG_CONFIG_HOME"); xdg != "" && filepath.IsAbs(xdg) {
-		return filepath.Join(xdg, "agentgate"), "", nil
+		base, name, dir = filepath.Clean(xdg), "XDG_CONFIG_HOME", filepath.Join(xdg, "agentgate")
+	} else {
+		home := getenv("HOME")
+		if home == "" || !filepath.IsAbs(home) {
+			return "", "", failure("HOME is not set; set AGENTGATE_CONFIG_DIR to an absolute directory")
+		}
+		base, name, dir = filepath.Clean(home), "HOME", filepath.Join(home, ".config", "agentgate")
 	}
-	home := getenv("HOME")
-	if home == "" || !filepath.IsAbs(home) {
-		return "", "", failure("HOME is not set; set AGENTGATE_CONFIG_DIR to an absolute directory")
+	if owner, exists := ownerOf(base); exists && owner != euid {
+		return "", "", trustError("config_custody", fmt.Sprintf("%s (%s) belongs to uid %d, not to you (uid %d): agentgate would create its token files in another user's tree, and refuses.", name, base, owner, euid),
+			"Run agentgate as that user, or set AGENTGATE_CONFIG_DIR to a directory you own.")
 	}
-	return filepath.Join(home, ".config", "agentgate"), "", nil
+	return dir, "", nil
+}
+
+// pathOwner reports the owner of an existing path (following links).
+func pathOwner(path string) (int, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return int(st.Uid), true
 }
 
 // accountHome looks up a uid's home directory in the account database.

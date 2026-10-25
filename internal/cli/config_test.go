@@ -187,8 +187,9 @@ func TestConfigDirUnderSudoIgnoresTheCallersHome(t *testing.T) {
 		{"sudo to a non-root user", map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice", "SUDO_UID": "1000"}, 1001, "/home/alice/.config/agentgate", false},
 		{"explicit directory under sudo", map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice", "AGENTGATE_CONFIG_DIR": "/root/agentgate"}, 0, "/root/agentgate", false},
 	}
+	owned := func(string) (int, bool) { return 0, false } // nothing exists: no ownership to compare
 	for _, c := range cases {
-		dir, note, err := configDir(env(c.vars), c.euid, rootHome)
+		dir, note, err := configDir(env(c.vars), c.euid, rootHome, owned)
 		if err != nil || dir != c.dir || (note != "") != c.note {
 			t.Errorf("%s: %q %q %v", c.name, dir, note, err)
 		}
@@ -199,13 +200,35 @@ func TestConfigDirUnderSudoIgnoresTheCallersHome(t *testing.T) {
 		func(int) (string, error) { return "relative/home", nil },
 		func(int) (string, error) { return "/root/../home/alice", nil },
 	} {
-		_, _, err := configDir(env(map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice"}), 0, bad)
+		_, _, err := configDir(env(map[string]string{"HOME": "/home/alice", "SUDO_USER": "alice"}), 0, bad, owned)
 		if err == nil || !strings.Contains(err.Error(), "AGENTGATE_CONFIG_DIR") {
 			t.Errorf("an unusable account home: %v", err)
 		}
 	}
-	if _, _, err := configDir(env(map[string]string{"AGENTGATE_CONFIG_DIR": "relative"}), 0, rootHome); err == nil {
+	if _, _, err := configDir(env(map[string]string{"AGENTGATE_CONFIG_DIR": "relative"}), 0, rootHome, owned); err == nil {
 		t.Fatal("a relative AGENTGATE_CONFIG_DIR was accepted")
+	}
+	// Outside sudo, a HOME or XDG_CONFIG_HOME that belongs to someone else is refused
+	// (root after su without a login shell, review finding 12); one's own is used.
+	owners := map[string]int{"/home/alice": 1000, "/home/alice/.cfg": 1000, "/root": 0}
+	ownerOf := func(p string) (int, bool) { uid, ok := owners[p]; return uid, ok }
+	for _, c := range []struct {
+		vars map[string]string
+		euid int
+		ok   bool
+	}{
+		{map[string]string{"HOME": "/home/alice"}, 0, false},
+		{map[string]string{"HOME": "/root", "XDG_CONFIG_HOME": "/home/alice/.cfg"}, 0, false},
+		{map[string]string{"HOME": "/home/alice"}, 1000, true},
+		{map[string]string{"HOME": "/root"}, 0, true},
+		{map[string]string{"HOME": "/home/alice"}, 1001, false},
+		{map[string]string{"HOME": "/home/new-user"}, 1002, true},
+		{map[string]string{"HOME": "/home/alice", "AGENTGATE_CONFIG_DIR": "/srv/agentgate"}, 0, true},
+	} {
+		_, _, err := configDir(env(c.vars), c.euid, rootHome, ownerOf)
+		if (err == nil) != c.ok || err != nil && !strings.Contains(err.Error(), "belongs to uid") {
+			t.Errorf("%v as uid %d: %v", c.vars, c.euid, err)
+		}
 	}
 }
 
