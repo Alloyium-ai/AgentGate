@@ -150,8 +150,8 @@ class FakeHost:
     def stage_mounts(self, entries, launch_value):
         self.step('stage_mounts', entries)
 
-    def start_target(self, image_id, keepalive):
-        self.step('start_target', image_id, keepalive)
+    def start_target(self, image_id, keepalive, taskboard_bridge=False):
+        self.step('start_target', image_id, keepalive, taskboard_bridge)
 
     def start_guard(self):
         self.step('start_guard')
@@ -228,7 +228,8 @@ class LaunchRunTest(LaunchTestCase):
                                  'start_target', 'start_guard', 'bind', 'teardown', 'collect'])
         self.assertEqual(host.steps[1], ('stage_policy', 'oneshot', 30))
         # The target outlives the lifetime so its main process never ends a session early.
-        self.assertEqual(host.steps[5], ('start_target', 'sha256:' + 'f' * 64, 30 + launch.KEEPALIVE_MARGIN_S))
+        # The policy keeps the taskboard and grants reading its bridge: the launch asks for the bridge.
+        self.assertEqual(host.steps[5], ('start_target', 'sha256:' + 'f' * 64, 30 + launch.KEEPALIVE_MARGIN_S, True))
         self.assertEqual(host.steps[3][2], 'python3')
         self.assertEqual((receipt['state'], receipt['reason'], receipt['exit_code']), ('stopped', 'exited', 0))
         self.assertEqual(receipt['logs']['stdout']['bytes'], 3)
@@ -256,6 +257,8 @@ class LaunchRunTest(LaunchTestCase):
         self.assertEqual(names, ['precheck', 'stage_policy', 'resolve_image', 'check_image', 'stage_mounts',
                                  'start_target', 'start_guard', 'connect_broker', 'bind', 'teardown', 'collect'])
         self.assertEqual(host.steps[7], ('connect_broker', 'agentgate-launch-1-broker', '172.30.7.3'))
+        # A broker launch has no taskboard, so its target never gets the bridge volume.
+        self.assertEqual(host.steps[5][3], False)
         out = (self.launches / 'launch-1' / 'stdout.log').read_bytes().decode()
         self.assertTrue(out.startswith('http://172.30.7.2:8443/anthropic|'), out)
         self.assertNotIn('/run/agentgate/secrets', out)
@@ -701,6 +704,9 @@ class RealHostTest(unittest.TestCase):
         with self.assertRaises(launch.LaunchError):
             host.start_target('sha256:' + 'f' * 64, 400)
         self.assertEqual(calls[1], [str(host.root / 'restart-target.sh'), '--launch', 'sha256:' + 'f' * 64, '400'])
+        with self.assertRaises(launch.LaunchError):
+            host.start_target('sha256:' + 'f' * 64, 400, True)
+        self.assertEqual(calls[2], [str(host.root / 'restart-target.sh'), '--launch', 'sha256:' + 'f' * 64, '400', '--taskboard-bridge'])
 
     def test_snapshot_mounts_require_an_installed_matching_share(self):
         host, _ = self.host([])

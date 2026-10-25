@@ -121,9 +121,12 @@ def remove_pin_directory(path, link_count):
 
 
 def expected_mounts(config):
-    """Return every mount the target may hold: three fixed ones and approved host folders."""
-    expected = {WORKSPACE_PATH: ('volume', True, None), STREAMS_PATH: ('bind', True, None),
-                TASKBOARD_PATH: ('volume', False, None)}
+    """Return every mount the target must hold: the workspace and streams, the
+    read-only taskboard bridge when the binding says it was mounted, and the
+    approved host folders. Nothing else may be mounted."""
+    expected = {WORKSPACE_PATH: ('volume', True, None), STREAMS_PATH: ('bind', True, None)}
+    if config['taskboard_bridge']:
+        expected[TASKBOARD_PATH] = ('volume', False, None)
     for item in config['host_mounts']:
         expected[item['path']] = ('bind', not item['read_only'], item['source'])
     return expected
@@ -413,7 +416,8 @@ def execute_detailed(config, command, target, guard_ok, session_alive, output_fd
 BINDING_KEYS = {'container', 'container_id', 'image_id', 'network', 'domain',
                 'runner_path', 'runner_sha256', 'guard_pid', 'guard_start_ticks',
                 'guard_ready', 'guard_pins', 'deadline_ns', 'audit_path',
-                'source_revision', 'policy_digest', 'host_controls', 'host_pins', 'host_mounts'}
+                'source_revision', 'policy_digest', 'host_controls', 'host_pins', 'host_mounts',
+                'taskboard_bridge'}
 
 
 def load_binding(path):
@@ -427,6 +431,7 @@ def load_binding(path):
        not config['runner_path'].startswith('/var/lib/agentgate-poc-') or \
        not config['guard_pins'].startswith('/sys/fs/bpf/ag-mvp-net-') or \
        not isinstance(config['host_controls'], bool) or \
+       not isinstance(config['taskboard_bridge'], bool) or \
        config['host_controls'] != bool(config['host_pins']) or \
        (config['host_controls'] and not config['host_pins'].startswith('/sys/fs/bpf/ag-mvp-host-')) or \
        not valid_host_mounts(config['host_mounts']) or \

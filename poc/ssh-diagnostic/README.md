@@ -294,6 +294,10 @@ IPv6 stays denied. The independent kernel boundary denies other LAN, host, bridg
 A private DNS answer does not bypass that boundary. Documentation address ranges also stay denied.
 The taskboard exception grants one TCP endpoint. It does not grant other LAN addresses or UDP.
 The authenticated task bridge exposes only the configured task through its Unix socket.
+The SSH command target always gets the bridge volume, read-only. A launch target (`restart-target.sh --launch`) gets it
+only when the launch asks: its signed policy keeps the `taskboard` endpoint and grants reading `/run/agentgate/taskboard`
+(`launch_job.taskboard_bridge`). A launch with brokered secrets has no taskboard and never gets the volume; the guard
+binding records the choice and the gateway refuses a target whose mounts differ from it.
 
 This preset allows any public IPv4 web destination. It enforces protocol, address, and port, not domain or TLS names.
 An allowed public IP can serve several hostnames. A domain allowlist is outside this simple preset.

@@ -41,6 +41,10 @@ MAX_UPLOAD_BYTES = 4 << 20
 RESERVED_ENV = ('PATH', 'IFS', 'ENV', 'BASH_ENV', 'SHELLOPTS', 'PS4')
 RESERVED_PREFIXES = ('LD_', 'AGENTGATE_', 'DYLD_')
 MAX_SECRETS = 8
+# The taskboard's AF_UNIX bridge volume. A launch target gets it only when the
+# launch asks: its signed policy keeps the taskboard endpoint and its
+# filesystem grants reading this path. A launch with a broker never does.
+TASKBOARD_BRIDGE = '/run/agentgate/taskboard'
 BROKER_KEYS = {'network', 'subnet', 'address', 'port', 'target_address', 'env'}
 ROUTE = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
 
@@ -274,6 +278,19 @@ def check_broker(broker, launch_id, policy, refs, env):
     return {key: broker[key] for key in sorted(BROKER_KEYS - {'env'})} | {'port': port, 'env': dict(urls)}
 
 
+def taskboard_bridge(policy, broker):
+    """Whether the launch target gets the taskboard bridge volume (read-only).
+
+    Only a launch whose effective policy names the taskboard endpoint and
+    grants reading the bridge path asks for it; a launch with a broker (whose
+    policy has no taskboard) and a policy without the path never get it.
+    """
+    read_only = policy['filesystem'].get('read_only') or []
+    if not isinstance(read_only, list):
+        raise JobError('the policy filesystem read_only list is invalid')
+    return broker is None and isinstance(policy.get('taskboard'), dict) and TASKBOARD_BRIDGE in read_only
+
+
 def check_job(raw, capabilities):
     """Return the validated launch, or raise JobError. raw is the job's bytes.
 
@@ -314,6 +331,7 @@ def check_job(raw, capabilities):
         # The agent receives only the broker's base URLs, never a value.
         spec['env'] = dict(spec['env'], **broker['env'])
     spec['broker'] = broker
+    spec['taskboard_bridge'] = taskboard_bridge(policy, broker)
     return {'launch_id': job['launch_id'], 'job_id': job['job_id'], 'spec_digest': job['spec_digest'],
             'policy': policy, 'policy_digest': job['policy_digest'],
             'profile_policy_digest': job['profile_policy_digest'],

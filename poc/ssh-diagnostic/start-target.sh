@@ -45,6 +45,9 @@ docker run --pull never --rm --network none --cpus 1 --memory 128m --pids-limit 
 mount_lines=$(python3 "$poc/mounts.py" "$root")
 host_mounts=()
 if test -n "$mount_lines"; then mapfile -t host_mounts <<<"$mount_lines"; fi
+# The first SSH command target, with the taskboard bridge read-only. Launch
+# targets come from restart-target.sh --launch, which mounts the bridge only
+# when the launch asks for it.
 docker run --pull never -d --name "$name" --no-healthcheck --init --network "$network" --read-only --user 65534:65534 --cpus 1 --memory 512m --pids-limit 64 --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:mode=0700,size=64m \
   --mount "type=volume,source=$workspace,target=/var/lib/agentgate/workspace" \
   --mount "type=bind,source=$artifact,target=/run/agentgate/streams" \

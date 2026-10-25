@@ -190,6 +190,25 @@ class InputTest(unittest.TestCase):
         value['policy']['broker'] = {'address': BROKER_ADDRESS, 'protocol': 'tcp', 'port': 8443}
         self.refuse(value, 'no broker')
 
+    def test_the_taskboard_bridge_is_mounted_only_when_the_launch_asks(self):
+        # The policy keeps the taskboard endpoint and grants reading the bridge path.
+        self.assertIs(check_job(raw(job()), CAPS)['taskboard_bridge'], True)
+        # A broker launch has no taskboard: never the bridge, even if the path is readable.
+        broker = broker_job()
+        self.assertIn('/run/agentgate/taskboard', broker['policy']['filesystem']['read_only'])
+        self.assertIs(check_job(raw(broker), CAPS)['taskboard_bridge'], False)
+        # A policy that does not grant reading the bridge path does not get it.
+        value = job()
+        value['policy']['filesystem']['read_only'] = ['/etc', '/proc']
+        self.assertIs(check_job(raw(value), CAPS)['taskboard_bridge'], False)
+        # Nor does a policy without the taskboard endpoint.
+        value = job()
+        del value['policy']['taskboard']
+        self.assertIs(check_job(raw(value), CAPS)['taskboard_bridge'], False)
+        value = job()
+        value['policy']['filesystem']['read_only'] = '/run/agentgate/taskboard'
+        self.refuse(value, 'read_only')
+
     def test_mounts_need_the_matching_capability(self):
         live = {'name': 'repo', 'source': '/srv/repos/app', 'mode': 'read-only'}
         value = job(mounts=[live])

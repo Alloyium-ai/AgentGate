@@ -396,12 +396,15 @@ class Host:
         mounts.parse_document(raw)
         write_private(self.root / mounts.LAUNCH_MOUNTS, raw)
 
-    def start_target(self, image_id, keepalive):
+    def start_target(self, image_id, keepalive, taskboard_bridge=False):
         domain = Path(self.settings['domain'])
         if not domain.exists():
             # A guest reboot clears cgroups; the protected settings name only this owned domain.
             domain.mkdir()
-        self._script(['restart-target.sh', '--launch', image_id, str(keepalive)], 180)
+        # The taskboard bridge volume is mounted only when the launch asks
+        # (launch_job.taskboard_bridge); otherwise the target has no path to it.
+        self._script(['restart-target.sh', '--launch', image_id, str(keepalive)] +
+                     (['--taskboard-bridge'] if taskboard_bridge else []), 180)
 
     def start_guard(self):
         self._script(['start-guard.sh'], 60)
@@ -682,7 +685,7 @@ def run_launch(raw, host, launches, emitter, supervisor_alive, signalled=lambda:
         host.check_image(launch['image_id'], launch['command'][0])
         checkpoint()
         host.stage_mounts(launch_job.mount_entries(launch), launch)
-        host.start_target(launch['image_id'], launch['lifetime_seconds'] + KEEPALIVE_MARGIN_S)
+        host.start_target(launch['image_id'], launch['lifetime_seconds'] + KEEPALIVE_MARGIN_S, launch['taskboard_bridge'])
         checkpoint()
         host.start_guard()
         pid = host.guard_pid()

@@ -42,7 +42,10 @@ sys.path.insert(0,str(root))
 from gateway import HOST_LINKS,NETWORK_LINKS,command_deadline,pins_live,valid_host_mounts
 assert pins_live(sys.argv[12],NETWORK_LINKS),'network guard pins incomplete'
 assert not host_controls or pins_live(host_pins,HOST_LINKS),'host control pins incomplete'
-host_mounts=json.loads((root/'target.json').read_text()).get('host_mounts',[])
+target_record=json.loads((root/'target.json').read_text())
+host_mounts=target_record.get('host_mounts',[])
+# The bridge fields are all present or all absent (restart-target.sh).
+taskboard_bridge='bridge_path' in target_record
 assert valid_host_mounts(host_mounts) and (host_controls or not host_mounts),'host folder mounts require host controls'
 document=json.loads(policy_path.read_text())
 # No mode: the SSH command window (1..60, capped at 25 s). A launch policy names
@@ -63,7 +66,8 @@ config={'container':name,'container_id':target['Id'],'image_id':target['Image'],
         'deadline_ns':deadline_ns,
         'audit_path':str(root/'audit.jsonl'),
         'source_revision':source,'policy_digest':policy,
-        'host_controls':host_controls,'host_pins':host_pins,'host_mounts':host_mounts}
+        'host_controls':host_controls,'host_pins':host_pins,'host_mounts':host_mounts,
+        'taskboard_bridge':taskboard_bridge}
 path=root/'config.json'
 fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
 with os.fdopen(fd,'w') as file:

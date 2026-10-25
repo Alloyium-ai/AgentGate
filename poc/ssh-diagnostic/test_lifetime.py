@@ -131,6 +131,13 @@ class RestartTargetArgumentTest(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertEqual(self.run_script(*args), (2, False))
 
+    def test_invalid_bridge_arguments_exit_2_before_docker(self):
+        good = 'sha256:' + 'a' * 64
+        for args in (('--launch', good, '600', '--bridge'), ('--launch', good, '600', '--taskboard-bridge', 'x'),
+                     ('--launch', good, '600', ''), ('--taskboard-bridge',)):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_script(*args), (2, False))
+
     def test_valid_arguments_reach_the_domain_check(self):
         # The fake domain is absent, so the script stops at its first custody check.
         code, docker = self.run_script('--launch', 'sha256:' + 'a' * 64, '86700')
@@ -138,6 +145,71 @@ class RestartTargetArgumentTest(unittest.TestCase):
         self.assertFalse(docker)
         code, docker = self.run_script()
         self.assertNotEqual(code, 2)
+
+
+class RestartTargetBridgeTest(unittest.TestCase):
+    """The taskboard bridge volume reaches a launch target only when the launch asks.
+
+    restart-target.sh runs for real against a Docker stand-in that records
+    every call; nothing here touches Docker.
+    """
+
+    def run_script(self, *args):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        (root / 'restart-target.sh').write_text((HERE / 'restart-target.sh').read_text())
+        (root / 'restart-target.sh').chmod(0o700)
+        domain = root / 'domain'
+        domain.mkdir()
+        (domain / 'cgroup.events').write_text('populated 0\nfrozen 0\n')
+        (root / 'mounts-active.json').write_text('[]')
+        settings = {'domain': domain, 'root': root, 'target_image': 'sha256:' + 'e' * 64, 'name': 'ag-mvp-test-target',
+                    'network': 'ag-mvp-test-net', 'workspace': 'ag-mvp-test-work', 'artifact': root / 'streams',
+                    'bridge': 'ag-mvp-test-bridge-volume', 'bridge_image': 'sha256:' + 'b' * 64,
+                    'bridge_container': 'ag-mvp-test-bridge', 'bridge_network': 'ag-mvp-test-bridge-net',
+                    'task_id': '7', 'taskboard_url': 'http://10.10.10.10:8080'}
+        (root / 'settings.py').write_text('import shlex\n' + ''.join(
+            'print(%r + "=" + shlex.quote(%r))\n' % (k, str(v)) for k, v in settings.items()))
+        (root / 'mounts.py').write_text('')
+        (root / 'prepare-resolver.py').write_text('')
+        fake = root / 'bin'
+        fake.mkdir()
+        calls = root / 'docker.calls'
+        (fake / 'docker').write_text(
+            '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\n'
+            'case "$1 $2" in\n'
+            '  "container inspect") exit 1 ;;\n'
+            '  "image inspect") echo "$3" ;;\n'
+            '  "volume inspect") echo "/var/lib/docker/volumes/$3/_data" ;;\n'
+            '  *) case "$1" in inspect) echo "id-$2" ;; run) echo started ;; *) exit 1 ;; esac ;;\n'
+            'esac\n' % calls)
+        (fake / 'install').write_text('#!/bin/sh\nfor last; do :; done\nmkdir -p "$last"\n')
+        for item in fake.iterdir():
+            item.chmod(0o700)
+        done = subprocess.run(['/bin/bash', str(root / 'restart-target.sh')] + list(args),
+                              env={'PATH': str(fake) + ':/usr/bin:/bin'}, capture_output=True, timeout=20)
+        self.assertEqual(done.returncode, 0, done.stderr.decode())
+        runs = [line for line in calls.read_text().splitlines() if line.startswith('run ')]
+        self.assertEqual(len(runs), 1)
+        return runs[0], json.loads((root / 'target.json').read_text()), calls.read_text()
+
+    def test_a_launch_without_the_bridge_has_no_path_to_it(self):
+        run, target, calls = self.run_script('--launch', 'sha256:' + 'a' * 64, '700')
+        self.assertNotIn('/run/agentgate/taskboard', run)
+        self.assertNotIn('bridge', run)
+        self.assertFalse([key for key in target if key.startswith('bridge_')], target)
+        self.assertNotIn('ag-mvp-test-bridge', calls, 'the bridge container is not even inspected')
+        self.assertIn('--entrypoint /bin/sh sha256:' + 'a' * 64, run)
+
+    def test_a_launch_that_asks_and_the_ssh_command_get_it_read_only(self):
+        for args in (('--launch', 'sha256:' + 'a' * 64, '700', '--taskboard-bridge'), ()):
+            with self.subTest(args=args):
+                run, target, _ = self.run_script(*args)
+                self.assertIn('--mount type=volume,source=ag-mvp-test-bridge-volume,target=/run/agentgate/taskboard,readonly', run)
+                self.assertEqual((target['bridge_path'], target['bridge_volume'], target['bridge_task_id'], target['bridge_container_id']),
+                                 ('/run/agentgate/taskboard', 'ag-mvp-test-bridge-volume', 7, 'id-ag-mvp-test-bridge'))
+                self.assertEqual(sum(key.startswith('bridge_') for key in target), 8)
 
 
 class LaunchMountsTest(unittest.TestCase):

@@ -349,7 +349,8 @@ class TargetMountTest(unittest.TestCase):
              {'Type': 'volume', 'Source': '/v/bridge', 'Destination': '/run/agentgate/taskboard', 'RW': False}]
 
     def test_only_the_approved_mount_set_passes(self):
-        config = {'host_mounts': [{'path': '/var/lib/agentgate/mounts/repo', 'source': '/srv/repo', 'read_only': True}]}
+        config = {'host_mounts': [{'path': '/var/lib/agentgate/mounts/repo', 'source': '/srv/repo', 'read_only': True}],
+                  'taskboard_bridge': True}
         repo = {'Type': 'bind', 'Source': '/srv/repo', 'Destination': '/var/lib/agentgate/mounts/repo', 'RW': False}
         GATEWAY.check_mounts(self.FIXED + [repo], config)
         for name, mounts in {
@@ -364,7 +365,15 @@ class TargetMountTest(unittest.TestCase):
         }.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
                 GATEWAY.check_mounts(mounts, config)
-        GATEWAY.check_mounts(self.FIXED, {'host_mounts': []})
+        GATEWAY.check_mounts(self.FIXED, {'host_mounts': [], 'taskboard_bridge': True})
+
+    def test_a_target_without_the_bridge_must_not_hold_it(self):
+        config = {'host_mounts': [], 'taskboard_bridge': False}
+        GATEWAY.check_mounts(self.FIXED[:2], config)
+        with self.assertRaisesRegex(ValueError, 'differs from the approved set: /run/agentgate/taskboard'):
+            GATEWAY.check_mounts(self.FIXED, config)
+        with self.assertRaisesRegex(ValueError, 'absent'):
+            GATEWAY.check_mounts(self.FIXED[:2], dict(config, taskboard_bridge=True))
 
     def test_binding_accepts_only_exact_host_mount_records(self):
         good = [{'path': '/var/lib/agentgate/mounts/repo', 'source': '/srv/repo', 'read_only': True}]

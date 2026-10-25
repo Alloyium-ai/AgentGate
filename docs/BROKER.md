@@ -504,8 +504,9 @@ output. The kit is unit-tested with fakes and has not run on a kernel.
   endpoint). Run `verify-kernel.sh` on a disposable VM before relying on either.
 - **Taskboard and broker together** needs the BPF change from the original request: up to four pilot endpoints in
   `struct net_policy` and an exact match in `pilot_endpoint()`. Until then a launch with secrets has no taskboard TCP
-  endpoint. The taskboard's `AF_UNIX` bridge volume is still mounted into launch targets by the shared
-  `start-target.sh`.
+  endpoint. A launch target no longer gets the taskboard's `AF_UNIX` bridge volume unless its policy keeps the
+  taskboard endpoint and grants reading the bridge path, which a launch with secrets never does
+  (`restart-target.sh --launch ... [--taskboard-bridge]`, `launch_job.taskboard_bridge`); the SSH command target keeps it.
 - **Pool overlap.** Docker's default address pools can hand out `172.30.0.0/16` subnets. The host refuses a broker
   network that overlaps an existing network or host address, which fails that launch closed; reserve the pool in
   `daemon.json` (`default-address-pools`) or set `--broker-pool` on hosts that run brokers.
