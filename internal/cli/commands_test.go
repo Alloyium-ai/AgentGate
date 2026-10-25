@@ -609,3 +609,35 @@ func TestSecretListForLaunchers(t *testing.T) {
 		t.Fatal("--profile was not sent")
 	}
 }
+
+func TestTargetRetireWaitsForTheHostOrForces(t *testing.T) {
+	h := newHarness(t)
+	h.login("local:ada", "admin")
+	h.api.reply("GET /api/v1/targets/{id}", 200, sampleTarget("active"))
+	retiring := sampleTarget("retiring")
+	retiring.RetiringSince = "2026-10-24T12:00:00Z"
+	h.api.reply("DELETE /api/v1/targets/{id}", 200, retiring)
+	if r := h.run("", "target", "retire", "local", "--yes"); r.code != 0 || !strings.Contains(r.stdout, "is retiring: its host removes each secret") {
+		t.Fatalf("%v", r)
+	}
+	var in control.TargetRetireInput
+	mustDecode(t, h.api.requestsTo("DELETE /api/v1/targets/{id}")[0].Body, &in)
+	if in.Force {
+		t.Fatal("force was sent without --force")
+	}
+	h.api.handle("DELETE /api/v1/targets/{id}", func(w http.ResponseWriter, r *http.Request, body []byte, p []string) {
+		var in control.TargetRetireInput
+		json.Unmarshal(body, &in)
+		if !in.Force {
+			apiError(w, 409, "secrets_on_host", "The host may still hold 1 secret values but cannot collect removal jobs in state awaiting_key_approval.")
+			return
+		}
+		writeJSON(w, 200, sampleTarget("retired"))
+	})
+	if r := h.run("", "target", "retire", "local", "--yes"); r.code != ExitConflict || !strings.Contains(r.stderr, "--force and wipe the host") {
+		t.Fatalf("%v", r)
+	}
+	if r := h.run("", "target", "retire", "local", "--yes", "--force"); r.code != 0 || !strings.Contains(r.stdout, "is retired") {
+		t.Fatalf("%v", r)
+	}
+}

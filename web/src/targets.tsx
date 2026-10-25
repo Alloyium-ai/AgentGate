@@ -32,6 +32,8 @@ export function health(t: Target) {
       return "The job key rotated; enroll the host again";
     case "retired":
       return "Retired";
+    case "retiring":
+      return `Retiring since ${ago(t.retiring_since)}: waiting for the host to confirm the removal of its secrets`;
   }
   if (t.state !== "active") return t.state;
   return t.online ? `Online · heartbeat ${ago(t.last_seen_at)}` : `Offline · last heartbeat ${ago(t.last_seen_at)}`;
@@ -273,9 +275,10 @@ function Rename({ target, onClose, onDone }: { target: Target; onClose: () => vo
 
 function TargetActions({ target, actor, onChanged }: { target: Target; actor: Actor; onChanged: () => void }) {
   const p = permissions(actor);
-  const [dialog, setDialog] = useState<"approve" | "enroll" | "rename" | "retire">();
+  const [dialog, setDialog] = useState<"approve" | "enroll" | "rename" | "retire" | "force">();
   const notAdmin = `Only an administrator manages targets. Your roles: ${roleText(actor)}.`;
   const retired = target.state === "retired";
+  const retiring = target.state === "retiring";
   const done = () => {
     setDialog(undefined);
     onChanged();
@@ -287,15 +290,21 @@ function TargetActions({ target, actor, onChanged }: { target: Target; actor: Ac
           <KeyRound size={15} aria-hidden="true" /> Approve host key
         </Gate>
       )}
-      <Gate className="secondary" allowed={p.targetsAdmin && !retired} reason={retired ? "A retired target cannot enroll." : notAdmin} onClick={() => setDialog("enroll")}>
+      <Gate className="secondary" allowed={p.targetsAdmin && !retired && !retiring} reason={retired || retiring ? "A retired or retiring target cannot enroll." : notAdmin} onClick={() => setDialog("enroll")}>
         <RefreshCw size={15} aria-hidden="true" /> New enrollment token
       </Gate>
-      <Gate className="secondary" allowed={p.targetsAdmin && !retired} reason={retired ? "A retired target cannot change." : notAdmin} onClick={() => setDialog("rename")}>
+      <Gate className="secondary" allowed={p.targetsAdmin && !retired && !retiring} reason={retired || retiring ? "A retired or retiring target cannot change." : notAdmin} onClick={() => setDialog("rename")}>
         Rename
       </Gate>
-      <Gate className="secondary danger" allowed={p.targetsAdmin && !retired} reason={retired ? "Already retired." : notAdmin} onClick={() => setDialog("retire")}>
-        Retire
-      </Gate>
+      {retiring ? (
+        <Gate className="secondary danger" allowed={p.targetsAdmin} reason={notAdmin} onClick={() => setDialog("force")}>
+          Retire without the host's confirmation…
+        </Gate>
+      ) : (
+        <Gate className="secondary danger" allowed={p.targetsAdmin && !retired} reason={retired ? "Already retired." : notAdmin} onClick={() => setDialog("retire")}>
+          Retire
+        </Gate>
+      )}
       {dialog === "approve" && <ApproveKey target={target} onClose={() => setDialog(undefined)} onDone={done} />}
       {dialog === "enroll" && <Reenroll target={target} onClose={() => setDialog(undefined)} onDone={done} />}
       {dialog === "rename" && <Rename target={target} onClose={() => setDialog(undefined)} onDone={done} />}
@@ -312,9 +321,29 @@ function TargetActions({ target, actor, onChanged }: { target: Target; actor: Ac
           }}
         >
           <p>
-            Retiring revokes the host key (later polls are refused), cancels queued jobs, voids unused enrollment tokens and marks this target's secrets
-            deleted. The service refuses while any launch on the target has not ended. It does not send a removal job to a retired host, so remove the host
-            agent's state on the host yourself.
+            The service refuses while any launch on the target has not ended. When the host may still hold secrets, retiring queues one removal job per
+            secret and the target is <strong>retiring</strong>: the host collects only those jobs, overwrites and removes each value, and its last
+            confirmation retires the target and revokes its host key. Without secrets the target is retired at once. Queued jobs are cancelled and unused
+            enrollment tokens voided.
+          </p>
+          <p className="form-note">A host whose key is not approved cannot collect removals; approve it first, or finish the retirement without it.</p>
+        </ConfirmDialog>
+      )}
+      {dialog === "force" && (
+        <ConfirmDialog
+          title={`Retire ${target.name} without the host's confirmation`}
+          confirmLabel="Retire and leave the values on the host"
+          danger
+          typeToConfirm={target.name}
+          onClose={() => setDialog(undefined)}
+          onConfirm={async (reason) => {
+            await api(`targets/${target.id}`, "DELETE", { reason, force: true });
+            done();
+          }}
+        >
+          <p>
+            Use this only when the host is gone or will never poll again. The secrets its host has not confirmed removing are recorded as deleted with{" "}
+            <strong>removal unconfirmed</strong>: their values may remain on that host. Wipe the host (its secret store and agent state) yourself.
           </p>
         </ConfirmDialog>
       )}

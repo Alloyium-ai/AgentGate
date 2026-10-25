@@ -264,6 +264,14 @@ function api(method, path, query, input, headers) {
     }
     if (method === "DELETE") {
       need("admin");
+      if (launches.some((l) => l.target_id === t.id && !["stopped", "expired", "failed", "rejected", "cancelled"].includes(l.state))) throw new Fail(409, "launches_active", "Stop every launch on this target before retiring it.");
+      const held = secrets.filter((x) => x.target_id === t.id && x.state !== "deleted");
+      if (held.length && !input.force) {
+        for (const x of held) x.state = "deleting";
+        Object.assign(t, { state: "retiring", retiring_since: now() });
+        return t;
+      }
+      for (const x of held) Object.assign(x, { state: "deleted", removal: "unconfirmed" });
       t.state = "retired";
       return t;
     }
@@ -1039,6 +1047,34 @@ try {
     await pick("State").selectOption("running", { timeout: 2000 }).catch(() => {});
     await page.getByRole("heading", { name: "Sign in to policy control" }).waitFor({ timeout: 10000 });
     expireSessionOnNextRead = false;
+  });
+
+  await step("retiring a target waits for its host to remove the secrets, or is forced", async () => {
+    const spare = { ...structuredClone(findTarget("build-host")), id: newID(), name: "spare-host" };
+    targets.push(spare);
+    secrets.push({ ...structuredClone(secrets[0]), id: newID(), name: "spare-key", target_id: spare.id, state: "stored" });
+    await go(`targets/${spare.id}`, "alice");
+    await page.getByRole("button", { name: "Retire", exact: true }).click();
+    const d = page.locator("dialog");
+    await d.getByText("the target is retiring").waitFor();
+    await d.getByRole("textbox", { name: "Reason", exact: true }).fill("Decommission the spare host");
+    await d.getByLabel(/Type spare-host/).fill("spare-host");
+    await d.getByRole("button", { name: "Retire target" }).click();
+    await page.locator("dialog").waitFor({ state: "detached" });
+    await page.locator(".section-title .badge", { hasText: "Retiring: removing secrets" }).waitFor();
+    await text("waiting for the host to confirm the removal of its secrets").waitFor();
+    assert.equal(JSON.parse(requests.filter((r) => r.method === "DELETE").at(-1).body).force, undefined);
+    await page.getByRole("button", { name: "Retire without the host's confirmation…" }).click();
+    await d.getByText("removal unconfirmed").waitFor();
+    await d.getByRole("textbox", { name: "Reason", exact: true }).fill("The spare host is gone");
+    await d.getByLabel(/Type spare-host/).fill("spare-host");
+    await d.getByRole("button", { name: "Retire and leave the values on the host" }).click();
+    await page.locator("dialog").waitFor({ state: "detached" });
+    await page.locator(".section-title .badge", { hasText: "retired" }).waitFor();
+    assert.equal(JSON.parse(requests.filter((r) => r.method === "DELETE").at(-1).body).force, true);
+    await go("secrets", "alice");
+    await page.getByLabel("Show deleted").check();
+    await text("Removal unconfirmed: the value may remain on the retired host.").waitFor();
   });
 
   await step("every write carried the CSRF token and an idempotency key", async () => {

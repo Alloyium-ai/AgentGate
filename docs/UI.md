@@ -35,9 +35,12 @@ what was requested; it never presents a permission as proven behavior.
    console and type or paste it; the page says *Match* or *No match. Do not approve* as you type. Approval also needs
    a confirmation that you read it on the host itself, and a reason. The service compares the value again in constant
    time. Approving also pins that fingerprint in this browser for sealing secrets later.
-3. **New enrollment token** re-enrolls a host (reinstall, job key rotation); **Rename**; **Retire** asks you to type the
-   target name. Retiring revokes the host key, cancels queued jobs and marks the target's secrets deleted, and is
-   refused while a launch on the target has not ended. It sends no removal job to the retired host.
+3. **New enrollment token** re-enrolls a host (reinstall, job key rotation); when the host enrolls again, the target's
+   secrets are removed from it and must be stored again. **Rename**; **Retire** asks you to type the target name and is
+   refused while a launch on the target has not ended. When the host may hold secrets, the target becomes **Retiring**:
+   the service queues one removal per secret, the host collects only those, and its last confirmation retires the
+   target and revokes its host key. **Retire without the host's confirmation…** (for a host that is gone) finishes it
+   at once and marks those secrets *removal unconfirmed* on the Secrets page.
 
 ### Define access (editor)
 

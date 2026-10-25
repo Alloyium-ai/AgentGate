@@ -3,7 +3,7 @@
 package control
 
 // SchemaVersion is the database user_version this build writes.
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 // provisioningSchema adds targets, profiles, launches, jobs, secrets metadata
 // and API tokens. Every statement is idempotent. Bindings that the contract
@@ -98,3 +98,14 @@ CREATE TRIGGER secret_binding_immutable BEFORE UPDATE OF id,name,target_id,upstr
 CREATE TRIGGER IF NOT EXISTS secret_receipt_once BEFORE UPDATE OF receipt ON secrets WHEN OLD.receipt<>'' AND NEW.receipt<>OLD.receipt BEGIN SELECT RAISE(ABORT,'immutable secret receipt'); END;
 CREATE TRIGGER IF NOT EXISTS target_seal_key_json BEFORE UPDATE OF seal_key ON targets WHEN NEW.seal_key<>'' AND json_valid(NEW.seal_key)=0 BEGIN SELECT RAISE(ABORT,'invalid seal key record'); END;
 `
+
+// retirementColumns are the version 7 additions. targets.retiring is the time
+// an administrator started retiring a target whose host still holds secrets:
+// the target stays able to poll (state active) only to collect secret-delete
+// jobs and is shown as "retiring". secrets.removal is "unconfirmed" for a
+// secret whose host never confirmed the removal before the target was
+// retired with force; the value may remain on that host.
+var retirementColumns = []struct{ table, column, decl string }{
+	{"targets", "retiring", "TEXT NOT NULL DEFAULT ''"},
+	{"secrets", "removal", "TEXT NOT NULL DEFAULT ''"},
+}

@@ -503,7 +503,11 @@ func (e *env) secretList(ctx context.Context, target, profile string, forLaunch 
 			default:
 				rules = "none (unusable: secret_rules_missing)"
 			}
-			rows = append(rows, []string{s.Name, target, e.p.state(s.State), strings.Join(s.Upstreams, ","), strings.TrimSpace(s.Header + " " + s.Scheme), rules, strings.Join(s.AllowedProfiles, ","), strings.Join(s.AllowedLaunchers, ","), s.ValueFingerprint, short(s.ID)})
+			state := e.p.state(s.State)
+			if s.Removal == "unconfirmed" {
+				state += " (removal unconfirmed: the value may remain on the host)"
+			}
+			rows = append(rows, []string{s.Name, target, state, strings.Join(s.Upstreams, ","), strings.TrimSpace(s.Header + " " + s.Scheme), rules, strings.Join(s.AllowedProfiles, ","), strings.Join(s.AllowedLaunchers, ","), s.ValueFingerprint, short(s.ID)})
 		}
 		e.p.table([]string{"NAME", "TARGET", "STATE", "UPSTREAMS", "HEADER", "RULES", "PROFILES", "LAUNCHERS", "VALUE FINGERPRINT", "ID"}, rows)
 		return nil

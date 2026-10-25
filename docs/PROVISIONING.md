@@ -167,7 +167,8 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
   and approves it with `POST /targets/{id}/approve-key` (`{"host_key_id","reason"}`, constant-time compared). A token
   intercepted in transit therefore cannot activate a foreign key without the administrator noticing a mismatch.
   Enrolling again (a new token from `POST /targets/{id}/enrollment`) retires the old key, cancels the target's queued
-  jobs, and is refused while the target has a launch that is not terminal.
+  jobs, moves the target's secrets to `deleting` with a `secret-delete` each (delivered once the new key is approved;
+  the secrets must be stored again), and is refused while the target has a launch that is not terminal.
 - **Signed request header** (poll and events): `host_id`, `nonce` (16 to 48 random bytes, base64url), `timestamp_ms`
   and `sequence`. The service rejects a timestamp more than 60 seconds from its clock, a nonce it saw in the last
   2 minutes (`replayed_request`), and a sequence not greater than the last accepted one (`sequence_replayed`, with
@@ -263,7 +264,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | Endpoint | Method | Role | Purpose |
 | --- | --- | --- | --- |
 | `/targets` | GET, POST | viewer, admin | list targets; create a target and its one-time enrollment token |
-| `/targets/{id}` | GET, PATCH, DELETE | viewer, admin | status, capabilities, key fingerprint, encryption key; rename; retire (refused while a launch is live) |
+| `/targets/{id}` | GET, PATCH, DELETE | viewer, admin | status, capabilities, key fingerprint, encryption key; rename; retire (refused while a launch is live; with secrets on the host it queues one `secret-delete` per secret and the target is `retiring` until the host confirms them, then retired; `{"force": true}` finishes without the host and records those secrets `removal: unconfirmed`) |
 | `/targets/{id}/enrollment` | POST | admin | a new one-time token (reinstall, job key rotation) |
 | `/targets/{id}/approve-key` | POST | admin | approve the presented host key fingerprint; activates the target |
 | `/profiles` | GET, POST | viewer, editor | list; create from a preset, a document or the full example |
@@ -451,7 +452,10 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
    the container, the network and the configuration, proves they are gone, and returns the receipt with
    `broker_counts` and `broker_evidence`. A restarted host agent does the same for a broker a crash left behind.
 7. **Delete.** `DELETE /secrets/{id}` (refused while a launch uses it) queues `secret-delete`; the host overwrites and
-   removes the value and keeps a tombstone of its version, so the old envelope cannot set it again.
+   removes the value and keeps a tombstone of its version, so the old envelope cannot set it again. Retiring or
+   re-enrolling a target queues the same removal for each of its secrets (audited `secret.deletion.requested`); a
+   retiring target polls only for those jobs, a refused removal is queued again up to 5 times, and the host's last
+   confirmation (`secret.deleted`) retires the target and revokes its key.
 
 **Integration status.** Connected and tested in process (real service, host agent, host protocol and broker; a TLS
 fake upstream; Docker and the guard faked). Not exercised: Docker, the BPF LSM guard with a broker endpoint, real DNS

@@ -27,6 +27,7 @@ export type Target = {
   updated_at: string;
   revision: number;
   kernel_verified: boolean;
+  retiring_since?: string;
 };
 export type Enrollment = {
   token: string;
@@ -238,6 +239,7 @@ export type Secret = {
   allowed_profiles: string[];
   allowed_launchers: string[];
   state: string;
+  removal?: string;
   created_at: string;
   created_by: string;
   updated_at: string;

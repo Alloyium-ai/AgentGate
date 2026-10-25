@@ -37,6 +37,7 @@ const stateText: Record<string, string> = {
   approval_pending: "Waiting for approval",
   awaiting_key_approval: "Awaiting host key approval",
   rekey_required: "Re-enrollment required",
+  retiring: "Retiring: removing secrets",
 };
 const stateTone: Record<string, string> = {
   active: "allowed",
@@ -51,6 +52,7 @@ const stateTone: Record<string, string> = {
   pending: "pending",
   stopping: "pending",
   deleting: "pending",
+  retiring: "pending",
   stored: "allowed",
   rekey_required: "denied",
   failed: "denied",

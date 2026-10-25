@@ -86,15 +86,21 @@ type or paste the one from the host's own console.`,
 				return e.targetRename(ctx, args[0], args[1], *reason)
 			}
 		}})
-	register(&command{name: "target retire", args: "NAME", summary: "Retire a target: revoke its host key and delete its secrets (admin; confirms).",
-		help: "  --reason TEXT\n  --yes            confirm without a prompt",
+	register(&command{name: "target retire", args: "NAME", summary: "Retire a target: remove its secrets from the host, then revoke its host key (admin; confirms).",
+		help: `  --reason TEXT
+  --yes            confirm without a prompt
+  --force          finish without the host's confirmation that it removed its secrets
+                   (the values may remain on the host; wipe it)
+A target whose host may hold secrets is "retiring" until the host collects one secret-delete
+per secret and confirms it; the last confirmation retires it. Live launches refuse retirement.`,
 		setup: func(fs *flag.FlagSet) runner {
 			reason := fs.String("reason", "", "")
+			force := fs.Bool("force", false, "")
 			return func(ctx context.Context, e *env, args, _ []string) error {
 				if len(args) != 1 {
 					return usageError("target retire takes one target name")
 				}
-				return e.targetRetire(ctx, args[0], *reason)
+				return e.targetRetire(ctx, args[0], *reason, *force)
 			}
 		}})
 }
@@ -278,6 +284,8 @@ func targetNext(t Target, pin string) string {
 		return "compare " + t.HostKeyID + " with the fingerprint the host printed, then: agentgate target approve-key " + t.Name + " --host-key-id <host's fingerprint>"
 	case "rekey_required":
 		return "the service job key rotated: agentgate target enroll " + t.Name + " and install the host agent again"
+	case "retiring":
+		return "the host removes its secrets when it next polls; the last confirmation retires the target (a host that is gone: agentgate target retire " + t.Name + " --force)"
 	case "active":
 		if strings.HasPrefix(pin, "not pinned") {
 			return "pin the key for secret set after comparing it with the host: agentgate target pin " + t.Name + " --host-key-id <host's fingerprint>"
@@ -409,7 +417,7 @@ func (e *env) targetRename(ctx context.Context, ref, name, reason string) error 
 	})
 }
 
-func (e *env) targetRetire(ctx context.Context, ref, reason string) error {
+func (e *env) targetRetire(ctx context.Context, ref, reason string, force bool) error {
 	c, err := e.authed()
 	if err != nil {
 		return err
@@ -422,17 +430,35 @@ func (e *env) targetRetire(ctx context.Context, ref, reason string) error {
 		return err
 	}
 	if t.State != "retired" {
-		if err = e.confirm(ctx, "Retire target "+t.Name+"? This revokes its host key and deletes every secret stored on it", "--yes"); err != nil {
+		question := "Retire target " + t.Name + "? Its host removes every secret stored on it, then its host key is revoked"
+		if force {
+			question = "Retire target " + t.Name + " WITHOUT the host confirming that it removed its secrets? The values may remain on the host"
+		}
+		if err = e.confirm(ctx, question, "--yes"); err != nil {
 			return err
 		}
 	}
+	body := map[string]any{"reason": reason}
+	if force {
+		body["force"] = true
+	}
 	var out Target
-	raw, err := c.mutate(ctx, "DELETE", apiPrefix+"/targets/"+pathEscape(t.ID), map[string]string{"reason": reason}, true, &out)
+	raw, err := c.mutate(ctx, "DELETE", apiPrefix+"/targets/"+pathEscape(t.ID), body, true, &out)
+	var ce *Error
+	if errors.As(err, &ce) && ce.Code == "secrets_on_host" {
+		ce.Hint = "Approve the host key so the host can remove them (agentgate target approve-key " + t.Name + "), or retire with --force and wipe the host."
+	}
 	if err != nil {
 		return err
 	}
 	return e.emit(raw, func() error {
-		e.p.line("Target %s is %s.", out.Name, out.State)
+		switch out.State {
+		case "retiring":
+			e.p.line("Target %s is retiring: its host removes each secret when it next polls, and the last confirmation retires it.", out.Name)
+			e.p.note("Follow it with agentgate target status %s; agentgate secret ls shows each secret's state.", out.Name)
+		default:
+			e.p.line("Target %s is %s.", out.Name, out.State)
+		}
 		return nil
 	})
 }

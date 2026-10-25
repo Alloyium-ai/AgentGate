@@ -507,6 +507,7 @@ export function Secrets({ actor, epoch }: { actor: Actor; epoch: number }) {
                       </td>
                       <td>
                         <StateBadge state={s.state} />
+                        {s.removal === "unconfirmed" && <small className="field-issue">Removal unconfirmed: the value may remain on the retired host.</small>}
                       </td>
                       <td>
                         {s.state !== "deleted" && s.state !== "deleting" && (

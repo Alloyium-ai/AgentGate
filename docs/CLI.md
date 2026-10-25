@@ -251,7 +251,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `target approve-key NAME [--host-key-id ID]` | `POST /targets/{id}/approve-key` | type the fingerprint the host printed; pins it on success |
 | `target pin NAME --host-key-id ID [--replace]` | `GET /targets/{id}` | pins an already approved key after you compared it |
 | `target rename NAME NEW` | `PATCH /targets/{id}` | |
-| `target retire NAME [--yes]` | `DELETE /targets/{id}` | confirms; revokes the host key and deletes the target's secrets |
+| `target retire NAME [--yes] [--force]` | `DELETE /targets/{id}` | confirms; the host removes the target's secrets first (the target is `retiring` until it confirms), then the host key is revoked; `--force` finishes without the host (values may remain on it) |
 | `profile ls`, `profile show NAME [--version N]`, `profile versions NAME` | `GET /profiles...` | |
 | `profile new NAME [--preset P \| --file F] [--description D] [--no-approval]` | `POST /profiles` | `--no-approval` is for administrators |
 | `profile approval NAME required\|auto` | `PATCH /profiles/{id}` | administrators |

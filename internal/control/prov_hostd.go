@@ -115,6 +115,14 @@ func (s *Store) enrollHost(raw []byte, op *Operation) (hostproto.EnrollResponse,
 	if _, err = tx.Exec("DELETE FROM host_nonces WHERE target_id=?", targetID); err != nil {
 		return resp, err
 	}
+	if target.HostKeyID != "" {
+		// Enrolling again replaces the host key: the old secrets were sealed
+		// to the old host and are removed from the host (the jobs reach it
+		// once its new key is approved) and must be stored again.
+		if _, err = s.queueTargetSecretRemoval(tx, target, hostActor(targetID), op, "Re-enrollment replaces the host key; remove the secrets the previous key held", true); err != nil {
+			return resp, err
+		}
+	}
 	// The binding waits for an administrator to compare and approve the key
 	// fingerprint: a token intercepted in transit cannot activate a foreign key.
 	// A new host key invalidates the seal key record the old key signed.
@@ -149,7 +157,7 @@ func (s *Store) verifiedHost(tx *sql.Tx, env hostproto.Envelope, domain string, 
 		return t, fail(401, "unknown_host", "The host is not enrolled.")
 	}
 	switch t.State {
-	case "active":
+	case "active", TargetRetiring:
 	case "rekey_required":
 		return t, fail(403, "rekey_required", "The service job key changed. Enroll this host again with a new token.")
 	case "awaiting_key_approval":
@@ -296,7 +304,7 @@ func (s *Store) resync(env hostproto.Envelope, hostID, requestID string) (hostpr
 	}
 	defer tx.Rollback()
 	t, err := s.scanTarget(tx.QueryRow("SELECT "+targetColumns+" FROM targets WHERE id=?", hostID))
-	if err != nil || t.State != "active" {
+	if err != nil || (t.State != "active" && t.State != TargetRetiring) {
 		return hostproto.ResyncResponse{}, fail(401, "unknown_host", "The host is not enrolled and active.")
 	}
 	key, err := hostproto.DecodeKey(t.hostKey)
@@ -655,16 +663,71 @@ func (s *Store) applyResult(tx *sql.Tx, t Target, job *JobRecord, l *launchRow, 
 	case hostproto.JobSecretPut:
 		return s.finishSecretPut(tx, t, job, r, actor)
 	case hostproto.JobSecretDelete:
-		next := "stored"
-		if r.Status == hostproto.ResultSucceeded {
-			next = "deleted"
-		}
-		_, err := tx.Exec("UPDATE secrets SET state=?,updated=?,revision=revision+1 WHERE id=? AND state='deleting'", next, stamp(), job.SecretID)
-		return err
+		return s.finishSecretDelete(tx, t, job, r, actor)
 	case hostproto.JobLaunch, hostproto.JobStop, hostproto.JobCollect:
 		return s.finishLaunch(tx, l, job, r, receipt, actor)
 	}
 	return nil
+}
+
+// finishSecretDelete records the host's answer to a secret-delete. A removal
+// the host confirms deletes the secret, and the last one a retiring target
+// confirms retires it. A refused removal on a retiring target is queued
+// again (a bounded number of times); otherwise the secret is stored again.
+func (s *Store) finishSecretDelete(tx *sql.Tx, t Target, job *JobRecord, r hostproto.JobResult, actor Actor) error {
+	sec, err := scanSecret(tx.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE id=?", job.SecretID))
+	if err != nil {
+		return err
+	}
+	if sec.State != "deleting" {
+		return nil
+	}
+	if r.Status == hostproto.ResultSucceeded {
+		if _, err = tx.Exec("UPDATE secrets SET state='deleted',updated=?,revision=revision+1 WHERE id=? AND state='deleting'", stamp(), sec.ID); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: actor, Action: "secret.deleted", Resource: "secret:" + sec.ID, Reason: "The host confirmed the removal of the secret value", RequestID: "hostd-" + newID(),
+			Before: map[string]string{"state": "deleting"}, After: map[string]string{"state": "deleted", "reason": reasonCodeText(r.Reason), "job_id": job.ID}}, "committed"); err != nil {
+			return err
+		}
+		if t.State != TargetRetiring {
+			return nil
+		}
+		var left int
+		if err = tx.QueryRow("SELECT count(*) FROM secrets WHERE target_id=? AND state<>'deleted'", t.ID).Scan(&left); err != nil || left > 0 {
+			return err
+		}
+		if err = s.finishRetirement(tx, t.ID); err != nil {
+			return err
+		}
+		_, err = appendAudit(tx, Operation{Actor: actor, Action: "target.retired", Resource: "target:" + t.ID, Reason: "The host confirmed the removal of every secret; the target is retired and its host key revoked", RequestID: "hostd-" + newID(),
+			Before: map[string]string{"state": TargetRetiring}, After: map[string]string{"state": "retired"}}, "committed")
+		return err
+	}
+	after := map[string]string{"status": r.Status, "reason": reasonCodeText(r.Reason), "job_id": job.ID}
+	if t.State == TargetRetiring {
+		var attempts int
+		if err = tx.QueryRow("SELECT count(*) FROM jobs WHERE secret_id=? AND type='secret-delete'", sec.ID).Scan(&attempts); err != nil {
+			return err
+		}
+		after["state"] = "deleting"
+		if attempts < maxSecretDeleteAttempts {
+			if err = s.queueSecretDelete(tx, sec, Actor{Subject: "agentgate-scheduler", Kind: "system"}, nil, "Retry removing a secret of a retiring target"); err != nil {
+				return err
+			}
+			after["retry"] = "queued"
+		} else {
+			after["retry"] = "exhausted: retire the target with force"
+		}
+	} else {
+		if _, err = tx.Exec("UPDATE secrets SET state='stored',updated=?,revision=revision+1 WHERE id=? AND state='deleting'", stamp(), sec.ID); err != nil {
+			return err
+		}
+		after["state"] = "stored"
+	}
+	_, err = appendAudit(tx, Operation{Actor: actor, Action: "secret.deletion.failed", Resource: "secret:" + sec.ID, Reason: "The host did not remove the secret value", RequestID: "hostd-" + newID(),
+		Before: map[string]string{"state": "deleting"}, After: after}, "denied")
+	return err
 }
 
 // receiptMatchesPlan checks the broker evidence against the launch it

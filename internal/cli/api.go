@@ -40,6 +40,7 @@ type Target struct {
 	Updated          string          `json:"updated_at"`
 	Revision         int             `json:"revision"`
 	KernelVerified   bool            `json:"kernel_verified"`
+	RetiringSince    string          `json:"retiring_since,omitempty"`
 }
 
 // Enrollment is a one-time host enrollment token.
@@ -311,6 +312,7 @@ type Secret struct {
 	AllowedProfiles  []string          `json:"allowed_profiles"`
 	AllowedLaunchers []string          `json:"allowed_launchers"`
 	State            string            `json:"state"`
+	Removal          string            `json:"removal,omitempty"`
 	Created          string            `json:"created_at"`
 	CreatedBy        string            `json:"created_by"`
 	Updated          string            `json:"updated_at"`

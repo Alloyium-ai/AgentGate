@@ -171,15 +171,28 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	for _, c := range brokerColumns {
+	if version < 6 {
+		for _, c := range brokerColumns {
+			if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(brokerTriggers + ` PRAGMA user_version=6;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 6", RequestID: "migration-6"}, "committed"); err != nil {
+			return err
+		}
+	}
+	for _, c := range retirementColumns {
 		if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
 			return err
 		}
 	}
-	if _, err = tx.Exec(brokerTriggers + ` PRAGMA user_version=6;`); err != nil {
+	if _, err = tx.Exec(`PRAGMA user_version=7;`); err != nil {
 		return err
 	}
-	if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 6", RequestID: "migration-6"}, "committed"); err != nil {
+	if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 7", RequestID: "migration-7"}, "committed"); err != nil {
 		return err
 	}
 	return tx.Commit()

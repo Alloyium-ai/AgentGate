@@ -220,7 +220,7 @@ func (s *Server) provisioningWrite(r *http.Request, c call, tail []string) (any,
 		}
 		return s.Store.RenameTarget(op, tail[1], in)
 	case area == "targets" && n == 2 && method == "DELETE":
-		var in ReasonInput
+		var in TargetRetireInput
 		if err := decode(&in); err != nil {
 			return deny(err)
 		}

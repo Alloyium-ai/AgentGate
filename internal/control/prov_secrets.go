@@ -50,10 +50,14 @@ type Secret struct {
 	AllowedProfiles  []string `json:"allowed_profiles"`
 	AllowedLaunchers []string `json:"allowed_launchers"`
 	State            string   `json:"state"`
-	Created          string   `json:"created_at"`
-	CreatedBy        string   `json:"created_by"`
-	Updated          string   `json:"updated_at"`
-	Revision         int      `json:"revision"`
+	// Removal is "unconfirmed" for a secret deleted when its target was
+	// retired with force before the host confirmed the removal: the value
+	// may remain on that host.
+	Removal   string `json:"removal,omitempty"`
+	Created   string `json:"created_at"`
+	CreatedBy string `json:"created_by"`
+	Updated   string `json:"updated_at"`
+	Revision  int    `json:"revision"`
 }
 
 // SecretEnvelope is the public context of a relayed secretseal envelope.
@@ -104,13 +108,13 @@ type injection struct {
 	Wildcard     bool                   `json:"wildcard"`
 }
 
-const secretColumns = "id,name,target_id,upstreams,header,fingerprint,allowed_profiles,allowed_launchers,state,created,created_by,updated,revision,injection,envelope,receipt"
+const secretColumns = "id,name,target_id,upstreams,header,fingerprint,allowed_profiles,allowed_launchers,state,created,created_by,updated,revision,injection,envelope,receipt,removal"
 const secretJobLifetime = time.Hour
 
 func scanSecret(row rowScanner) (Secret, error) {
 	var sec Secret
 	var upstreams, profiles, launchers, inject, envelope, receipt string
-	err := row.Scan(&sec.ID, &sec.Name, &sec.TargetID, &upstreams, &sec.Header, &sec.Fingerprint, &profiles, &launchers, &sec.State, &sec.Created, &sec.CreatedBy, &sec.Updated, &sec.Revision, &inject, &envelope, &receipt)
+	err := row.Scan(&sec.ID, &sec.Name, &sec.TargetID, &upstreams, &sec.Header, &sec.Fingerprint, &profiles, &launchers, &sec.State, &sec.Created, &sec.CreatedBy, &sec.Updated, &sec.Revision, &inject, &envelope, &receipt, &sec.Removal)
 	if err != nil {
 		return sec, err
 	}
@@ -396,7 +400,7 @@ func (s *Store) CreateSecret(op Operation, in SecretInput) (any, error) {
 			Envelope:        &SecretEnvelope{Format: env.Format, KeyID: env.KeyID, Version: env.Version, Nonce: env.Nonce},
 			AllowedProfiles: in.AllowedProfiles, AllowedLaunchers: in.AllowedLaunchers, State: "pending", Created: stamp(), CreatedBy: operation.Actor.Subject, Revision: 1}
 		sec.Updated = sec.Created
-		if _, err = tx.Exec("INSERT INTO secrets VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,1,?,?,'')", sec.ID, sec.Name, sec.TargetID, jsonText(sec.Upstreams), sec.Header, sec.Fingerprint,
+		if _, err = tx.Exec("INSERT INTO secrets VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?,1,?,?,'','')", sec.ID, sec.Name, sec.TargetID, jsonText(sec.Upstreams), sec.Header, sec.Fingerprint,
 			jsonText(sec.AllowedProfiles), jsonText(sec.AllowedLaunchers), sec.Created, sec.CreatedBy, sec.Updated, jsonText(inject), jsonText(sec.Envelope)); err != nil {
 			return nil, fail(409, "secret_exists", "The target already holds a secret with this name; delete it first.")
 		}
@@ -451,6 +455,95 @@ func (s *Store) DeleteSecret(op Operation, id string, in ReasonInput) (any, erro
 		}
 		return scanSecret(tx.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE id=?", id))
 	})
+}
+
+// maxSecretDeleteAttempts bounds the secret-delete jobs queued for one secret
+// of a retiring target whose host refuses or fails the removal.
+const maxSecretDeleteAttempts = 5
+
+// queueSecretDelete moves a secret to deleting and queues one secret-delete
+// job for it unless one is already waiting for its host.
+func (s *Store) queueSecretDelete(tx *sql.Tx, sec Secret, actor Actor, op *Operation, reason string) error {
+	var waiting int
+	if err := tx.QueryRow("SELECT count(*) FROM jobs WHERE secret_id=? AND type='secret-delete' AND state IN ('queued','delivered')", sec.ID).Scan(&waiting); err != nil {
+		return err
+	}
+	if waiting > 0 && sec.State == "deleting" {
+		return nil
+	}
+	if _, err := tx.Exec("UPDATE jobs SET state='cancelled',envelope='',completed=?,revision=revision+1 WHERE secret_id=? AND type='secret-put' AND state='queued'", stamp(), sec.ID); err != nil {
+		return err
+	}
+	if sec.State != "deleting" {
+		if _, err := tx.Exec("UPDATE secrets SET state='deleting',updated=?,revision=revision+1 WHERE id=?", stamp(), sec.ID); err != nil {
+			return err
+		}
+	}
+	if waiting > 0 {
+		return nil
+	}
+	_, err := s.enqueueJob(tx, jobSpec{Type: hostproto.JobSecretDelete, TargetID: sec.TargetID, SecretID: sec.ID, Payload: hostproto.SecretDeletePayload{SecretID: sec.ID, Name: sec.Name}, Deadline: s.now().Add(stopJobLifetime), Reason: reason, Actor: actor}, op)
+	return err
+}
+
+// queueTargetSecretRemoval finds the secrets whose value may be on a
+// target's host and, when queue is set, queues their removal (idempotent: a
+// secret already waiting for its removal is not queued again). A secret
+// whose secret-put never reached the host is marked deleted at once. It
+// returns the secrets that wait for the host's confirmation.
+func (s *Store) queueTargetSecretRemoval(tx *sql.Tx, t Target, actor Actor, op *Operation, reason string, queue bool) ([]Secret, error) {
+	rows, err := tx.Query("SELECT "+secretColumns+" FROM secrets WHERE target_id=? AND state<>'deleted' ORDER BY created", t.ID)
+	if err != nil {
+		return nil, err
+	}
+	list := []Secret{}
+	for rows.Next() {
+		sec, err := scanSecret(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		list = append(list, sec)
+	}
+	rows.Close()
+	outstanding := []Secret{}
+	for _, sec := range list {
+		var delivered int
+		if err = tx.QueryRow("SELECT count(*) FROM jobs WHERE secret_id=? AND type IN ('secret-put','secret-delete') AND delivered>0", sec.ID).Scan(&delivered); err != nil {
+			return nil, err
+		}
+		if delivered == 0 && sec.State != "stored" {
+			// The value never reached the host: nothing to remove there.
+			if _, err = tx.Exec("UPDATE jobs SET state='cancelled',envelope='',completed=?,revision=revision+1 WHERE secret_id=? AND state='queued'", stamp(), sec.ID); err != nil {
+				return nil, err
+			}
+			if _, err = tx.Exec("UPDATE secrets SET state='deleted',updated=?,revision=revision+1 WHERE id=?", stamp(), sec.ID); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if queue {
+			before := sec.State
+			if err = s.queueSecretDelete(tx, sec, actor, op, reason); err != nil {
+				return nil, err
+			}
+			if before != "deleting" {
+				audit := Operation{Actor: actor, Action: "secret.deletion.requested", Resource: "secret:" + sec.ID, Reason: reason, Before: map[string]string{"state": before}, After: map[string]string{"state": "deleting", "target_id": t.ID}}
+				if op != nil {
+					audit.RequestID, audit.CorrelationID = op.RequestID, op.CorrelationID
+				}
+				if audit.RequestID == "" {
+					audit.RequestID = "hostd-" + newID()
+				}
+				if _, err = appendAudit(tx, audit, "committed"); err != nil {
+					return nil, err
+				}
+			}
+			sec.State = "deleting"
+		}
+		outstanding = append(outstanding, sec)
+	}
+	return outstanding, nil
 }
 
 func checkScope(values []string, max int, valid func(string) bool) error {
