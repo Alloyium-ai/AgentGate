@@ -216,8 +216,14 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
   receipt | evidence_missing}`). Re-sending an event the service holds is accepted if byte-identical and refused with
   `event_conflict` otherwise; a gap is refused with `event_gap`. The reply `{accepted_through, completed, job_state}`
   acknowledges the events; the host retries until acknowledged and keeps the receipt on disk until `completed`.
-- **Idempotence:** every job id runs at most once on the host. A repeated job returns its recorded result. A job
-  result is recorded once (trigger-enforced).
+- **Idempotence:** every job id runs at most once on the host. A repeated job whose result is not yet queued gets
+  its recorded result queued again; once the service has acknowledged a job as `completed`, the host answers a
+  repeat with nothing (no ledger entry and no event), even after it pruned the job's ledger entry, so re-delivered
+  jobs never reopen the outbox. A job result is recorded once (trigger-enforced).
+- **Spec binding on the host:** `agentgate-hostd` and `launch_job.py` refuse a launch whose resolved `secrets` differ
+  from `spec.secrets` (refs and variables, in order: `secret_binding_differs`) or whose resolved `mounts` differ from
+  `spec.mounts` in count or, in order, in name or mode (`mount_binding_differs`). A mount's `source` is the service's
+  resolution of the request and is validated on the host separately.
 - **Fail closed:** an unverifiable, expired or unknown job is dropped and reported with a `rejected` result. It is
   never run on a guess. A `rejected` or `failed` launch result without a receipt ends the launch `failed` with its
   `evidence_missing` reason.
