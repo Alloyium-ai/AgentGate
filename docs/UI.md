@@ -170,6 +170,10 @@ after a plan and sends exactly the planned document; editing the form afterwards
 
 ### Approve, follow and stop (approver, launcher)
 
+"A different person" in this section means a different account: the service compares the approver's subject
+(`local:alice`, `oidc:...`) with the requester's and cannot tell that two accounts belong to one person, so each person
+should hold only one account with the launcher or approver role ([PROVISIONING.md](PROVISIONING.md)).
+
 **Launches** lists launches newest first with state, target, requester, lifetime and remaining time. The service applies
 every filter (state, or not ended / ended; target; name contains; only mine) and pages the result 25 at a time with its
 cursor; Previous returns to exactly the page seen before.

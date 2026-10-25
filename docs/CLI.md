@@ -133,7 +133,9 @@ agentgate reject <launch id> --reason "Too broad"
 ```
 
 Nobody can decide a launch they requested, with any credential; the CLI reports the service's `self_approval` refusal
-with exit code 4.
+with exit code 4. "A different human" is a different account: the service compares subjects (`local:alice`,
+`oidc:...`; a token acts as its creator), so one person with two accounts that hold the launcher and approver roles
+could approve their own launch. Give each person one such account ([PROVISIONING.md](PROVISIONING.md)).
 
 ### 7. Watch
 

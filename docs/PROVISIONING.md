@@ -107,6 +107,14 @@ Rules every implementation enforces (`internal/control/prov_launchspec.go`; JSON
   Requiring approval again clears the approved version; a profile migrated from schema 7 without one launches
   nothing alone until an administrator approves a version. A launch that needs approval waits in `approval_pending` for a different human with the
   `approver` (or `admin`) role. The requester can never decide their own launch, with any credential.
+- **"A different human" means a different account (subject).** The service compares the approver's subject with the
+  requester's (`local:alice`, `oidc:<issuer subject>`); an API token acts as the subject that created it. It has no way
+  to know that two accounts belong to one person: `local:alice` and an OIDC identity of the same person are two
+  subjects, and either could approve a launch the other requested. Two-person control therefore holds only if each
+  person has one account with launch or approval rights. Administrators keep it that way: do not give one person both
+  a local account and an OIDC identity (or two OIDC identities) that carry the `launcher` and `approver` roles between
+  them, disable a local account once its owner signs in with OIDC, and compare the actor of each `launch.approved`
+  audit entry with the launch's `requested_by` when reviewing approvals.
 - Brokered secrets need a stored profile. Each secret is scoped to the profiles (`allowed_profiles`) and human
   subjects (`allowed_launchers`) that may reference it; the scope is checked when the launch is planned and again when
   it is queued. The plan names the exact secret refs and secret ids, and the approval covers that plan. A secret
@@ -312,7 +320,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/launches/summary` | GET | viewer | counts by state of every launch, and up to 8 launches waiting for this actor's decision and 8 expiring within 30 minutes, with their totals |
 | `/launch-plans` | POST | launcher | the plan for a spec, creating nothing (`agentgate launch --dry-run`) |
 | `/launches/{id}` | GET | viewer | state, spec, plan, policy, receipt, jobs |
-| `/launches/{id}/approve`, `/reject` | POST | approver | a different human than the requester |
+| `/launches/{id}/approve`, `/reject` | POST | approver | a different subject (account) than the requester |
 | `/launches/{id}/stop` | POST | launcher | request a stop; idempotent |
 | `/launches/{id}/events` | GET | viewer | ordered events (`?after=`); `Accept: text/event-stream` streams them, resuming from `Last-Event-ID` |
 | `/launches/{id}/logs` | GET | viewer | bounded agent output (`?after=`); `Accept: text/event-stream` streams it: `event: log` per line (`id` = line sequence, data = the line as JSON), resume with `Last-Event-ID`, keepalives every 15 s, `event: end` once the launch is terminal; at most 64 lines are read ahead of a client, and a write blocked for 20 s ends the stream |
