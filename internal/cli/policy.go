@@ -13,9 +13,15 @@ import (
 // value: secret set computes it from the operator's flags, shows it before
 // the value is read, seals its digest into the envelope and refuses an answer
 // whose settings make another digest. approve recomputes it from the plan's
-// readable settings and refuses a plan whose digest differs: what the
-// approver reads is then exactly what the host will enforce, because the host
-// refuses a launch under any policy other than the one stored with the value.
+// readable settings and refuses a plan whose settings do not make the digest
+// the plan names. That detects only a plan that contradicts itself. It does
+// not show which digest the host holds: a service that lies can show settings
+// X together with their own digest D(X) while the host holds policy Y, and the
+// approver cannot tell. The host still builds the broker only from the policy
+// stored with the value (Y), so such a lie misleads the approver but does not
+// change where or how the credential is used. Confirming the host's digest
+// would need a fresh statement signed by the host key (open work, see
+// docs/PROVISIONING.md, Trusted computing base).
 
 // policyRules converts rules as the CLI and the service write them. The
 // wildcard is the single rule {"methods":["*"],"path":"/"} on input and the
@@ -47,13 +53,13 @@ func planPolicyOf(s PlanSecret) (hostproto.SecretPolicy, error) {
 }
 
 // checkPlanPolicies refuses a plan whose readable broker settings do not make
-// the policy digest it names for each secret.
+// the policy digest it names for each secret: a plan that contradicts itself.
 func checkPlanPolicies(plan LaunchPlan) error {
 	for _, s := range plan.Secrets {
 		p, err := planPolicyOf(s)
 		if err != nil || s.PolicyDigest == "" || p.Digest() != s.PolicyDigest {
-			return trustError("policy_digest_mismatch", "The plan shows broker settings for secret "+s.Ref+" that do not make the policy digest it names ("+orNone(s.PolicyDigest)+"): what you would approve is not what the host enforces. Nothing was decided.",
-				"Do not approve this launch: the service altered the plan display. Reject it and report it to the service operator.")
+			return trustError("policy_digest_mismatch", "The plan shows broker settings for secret "+s.Ref+" that do not make the policy digest it names ("+orNone(s.PolicyDigest)+"): the plan contradicts itself, so what it shows is not a policy the host could hold under that digest. Nothing was decided.",
+				"Do not approve this launch: the service sent an inconsistent plan. Reject it and report it to the service operator.")
 		}
 	}
 	return nil

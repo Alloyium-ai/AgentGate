@@ -22,9 +22,11 @@ type PlanResponse = { dry_run: boolean; plan: LaunchPlan; spec: unknown; policy:
 
 // usePlanPolicyCheck recomputes, in this browser, the injection policy each
 // planned secret's readable settings make and compares it with the
-// policy_digest the plan names (the one sealed with the value, which the host
-// enforces). A mismatch means the plan shows something other than what would
-// run: the launch must not be approved.
+// policy_digest the plan names. A mismatch means the plan contradicts itself:
+// the launch must not be approved. A match proves only that consistency, not
+// that the host holds that digest: a dishonest service can send settings with
+// their own digest while the host holds another policy. The host enforces
+// only the policy it stored with the value.
 export function usePlanPolicyCheck(plan?: LaunchPlan | null): { checked: boolean; bad: string[] } {
   const [state, setState] = useState<{ key: string; bad: string[] }>({ key: "", bad: [] });
   const secrets = plan?.secrets ?? [];
@@ -241,10 +243,10 @@ export function PlanView({ plan, policy }: { plan: LaunchPlan; policy?: PolicyDo
                       {policyCheck.checked &&
                         (policyCheck.bad.includes(s.ref) ? (
                           <small className="match bad" role="alert">
-                            These settings do not make the sealed policy digest: do not approve.
+                            These settings do not make the policy digest the plan names: do not approve.
                           </small>
                         ) : (
-                          <small className="match ok">These settings are the policy sealed with the value.</small>
+                          <small className="match ok">These settings make the policy digest the plan names. The host enforces the policy it sealed with the value.</small>
                         ))}
                     </td>
                     <td>

@@ -1187,7 +1187,8 @@ func (e *env) decide(ctx context.Context, id string, approve bool, reason string
 		e.p.line("")
 	}
 	// Each secret's readable settings must make the policy digest the plan
-	// names (the one sealed with the value, which the host enforces).
+	// names. This detects an inconsistent plan only; it does not prove the
+	// host holds that digest (policy.go).
 	if approve {
 		if err = checkPlanPolicies(plan); err != nil {
 			return err

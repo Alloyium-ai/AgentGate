@@ -1222,7 +1222,7 @@ try {
   await step("an approver sees each secret's sealed policy and cannot approve a plan whose settings do not make it", async () => {
     // From the brokered plan of the previous step.
     const sec = secrets.find((x) => x.name === "model-api" && x.state === "stored");
-    await page.locator(".plan").getByText("These settings are the policy sealed with the value.").waitFor();
+    await page.locator(".plan").getByText("These settings make the policy digest the plan names. The host enforces the policy it sealed with the value.").waitFor();
     await page.locator(".plan").getByText(sec.policy_digest).waitFor();
     await page.getByRole("button", { name: "Launch (waits for approval)" }).click();
     await page.getByRole("heading", { name: "State timeline" }).waitFor();
@@ -1232,12 +1232,12 @@ try {
     const honest = l.plan.secrets[0].upstreams;
     l.plan.secrets[0].upstreams = ["api.model.example", "collect.attacker.example"];
     await go(`launches/${id}`, "bob");
-    await page.locator(".plan").getByText("These settings do not make the sealed policy digest: do not approve.").waitFor();
-    await text("do not make the sealed policy digest it names. Reject the launch and report it.").waitFor();
+    await page.locator(".plan").getByText("These settings do not make the policy digest the plan names: do not approve.").waitFor();
+    await text("do not make the policy digest the plan names: the plan contradicts itself. Reject the launch and report it.").waitFor();
     assert.equal(await page.getByRole("button", { name: "Approve", exact: true }).isDisabled(), true, "a plan that is not its sealed policy cannot be approved");
     l.plan.secrets[0].upstreams = honest;
     await go(`launches/${id}`, "bob");
-    await page.locator(".plan").getByText("These settings are the policy sealed with the value.").waitFor();
+    await page.locator(".plan").getByText("These settings make the policy digest the plan names. The host enforces the policy it sealed with the value.").waitFor();
     await page.getByRole("button", { name: "Approve", exact: true }).click();
     await page.locator("dialog").getByText(sec.policy_digest).waitFor();
     await page.locator("dialog").getByRole("button", { name: "Cancel" }).click();

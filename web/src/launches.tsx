@@ -541,12 +541,13 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
       : mine
         ? "You requested this launch. A different person must decide it."
         : undefined;
-  // A plan whose broker settings do not make the sealed policy digest it names
-  // shows something other than what the host would run: never approve it.
+  // A plan whose broker settings do not make the policy digest it names
+  // contradicts itself: never approve it. (A consistent plan is not proof of
+  // what the host holds; the host enforces only its sealed policy.)
   const policyRefusal = !policyCheck.checked
     ? "Checking the plan's sealed broker policies…"
     : policyCheck.bad.length
-      ? `The plan's broker settings for ${policyCheck.bad.join(", ")} do not make the sealed policy digest it names. Reject the launch and report it.`
+      ? `The plan's broker settings for ${policyCheck.bad.join(", ")} do not make the policy digest the plan names: the plan contradicts itself. Reject the launch and report it.`
       : undefined;
   const approveBlocked = approveReason ?? policyRefusal;
   const stopReason = !p.launch
@@ -731,7 +732,7 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
             {dialog === "approve" &&
               (l.plan?.secrets ?? []).map((s) => (
                 <div key={s.ref}>
-                  <span>Secret {s.ref}: sealed broker policy (checked against the settings shown in the plan)</span>
+                  <span>Secret {s.ref}: policy digest the plan names (the settings shown make it; whether the host holds it is not checked here)</span>
                   <code>{s.policy_digest}</code>
                 </div>
               ))}

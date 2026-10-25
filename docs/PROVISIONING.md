@@ -614,9 +614,13 @@ binding together and is outside this guarantee. Such a party can still:
   and it can queue a launch nobody approved), and so have the host run any profile with a credential under its sealed
   policy;
 - deny service: drop jobs, secret-puts or results, or refuse every request;
-- show a client a plan whose readable broker settings differ from the sealed policy. The CLI (`agentgate approve`) and
-  the web UI recompute the digest from the settings shown and refuse to approve on a mismatch; a client that does
-  not compare them can be misled about what it approves, though the host still enforces only the sealed policy.
+- show an approver a plan whose broker settings and digest are not the policy the host sealed. The CLI (`agentgate
+  approve`) and the web UI recompute the digest from the settings shown and refuse to approve when it differs from
+  the digest the plan names, but that detects only a plan that contradicts itself: a service can show settings X with
+  their own digest D(X) while the host holds policy Y, and no client can tell. Such an approver is misled about what
+  it approves; the host still builds the broker only from Y, the policy sealed with the value. Letting a client
+  confirm which digest the host holds (a fresh statement of its stored policy signed by the host key, checked
+  against the pinned host key) is open work.
 
 **`agentgate-hostd` is fully trusted for its target**: it holds the host key, the secret values for that target and Docker, BPF and cgroup control. A
 compromised `agentgate-hostd` (or root on its host) can:

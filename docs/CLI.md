@@ -427,7 +427,9 @@ records a different ciphertext SHA-256 than the one sent, the CLI reports it wit
 `show`, `launch --dry-run` and `approve` print each planned secret's sealed policy digest next to its settings, and
 mark it `DOES NOT MATCH these settings: do not approve` when the settings shown do not make it. `approve` recomputes
 the digest of every planned secret and refuses (exit 13, `policy_digest_mismatch`, nothing sent) when one differs or
-is missing: what you approve is then what the host enforces. `reject` always works.
+is missing. That catches a plan that contradicts itself, nothing more: a dishonest service can show settings together
+with their own digest while the host holds another policy, and the CLI cannot tell. The host still enforces only the
+policy it sealed with the value. `reject` always works.
 
 ## What the CLI does not do
 

@@ -190,10 +190,12 @@ The launch page shows:
 - **Approve** and **Reject** for an approver who did not request the launch, with the plan's digests, each brokered
   secret's sealed policy digest and the approval reasons in the confirmation. A disabled button says why: no approver
   role, not waiting for approval, "You requested this launch. A different person must decide it.", or that the plan's
-  broker settings for a secret do not make the sealed policy digest it names (the browser recomputes each digest from
-  the settings the plan shows; such a plan shows something other than what the host would run, and only **Reject**
-  is offered). The plan marks each secret "These settings are the policy sealed with the value." or "These settings do
-  not make the sealed policy digest: do not approve.";
+  broker settings for a secret do not make the policy digest the plan names (the browser recomputes each digest from
+  the settings the plan shows; such a plan contradicts itself, and only **Reject** is offered). A plan that passes is
+  only consistent: a dishonest service can show settings with their own digest while the host holds another policy,
+  which the browser cannot detect; the host enforces only the policy it sealed with the value. The plan marks each
+  secret "These settings make the policy digest the plan names. The host enforces the policy it sealed with the
+  value." or "These settings do not make the policy digest the plan names: do not approve.";
 - **Stop** with confirmation; it is idempotent. While stopping, the page says the launch ends stopped or expired only
   when the host confirms an empty domain and released enforcement;
 - the **state timeline**: every event with its sequence, from → to, actor, reason and data (digests, expiry), live
