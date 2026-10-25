@@ -32,7 +32,9 @@ what was requested; it never presents a permission as proven behavior.
    Closing the dialog drops the token from the page.
 2. The target moves to **Awaiting host key approval** when the host enrolls. Open it and choose **Approve host key**.
    The page shows the fingerprint the service received (`host_key_id`, `ed25519:…`). Read the fingerprint on the host
-   console and type or paste it; the page says *Match* or *No match. Do not approve* as you type. Approval also needs
+   console (`agentgate-hostd install` prints `host key id (compare and approve this): ed25519:…` and the SHA-256
+   fingerprint; `sudo agentgate-hostd status` shows both again as `host_key_id` and `host_key_fingerprint`) and type
+   or paste it; the page says *Match* or *No match. Do not approve* as you type. Approval also needs
    a confirmation that you read it on the host itself, and a reason. The service compares the value again in constant
    time. Approving also pins that fingerprint in this browser for sealing secrets later.
 3. **New enrollment token** re-enrolls a host (reinstall, job key rotation); when the host enrolls again, the target's

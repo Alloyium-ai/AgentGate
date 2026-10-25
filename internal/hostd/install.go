@@ -177,6 +177,7 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 			return errors.New("hostd: the host is enrolled with another service")
 		}
 		in.say("already enrolled as target %s; the token was not used", id.TargetID)
+		in.sayKey(stateDir, id)
 	} else {
 		if o.Token == "" {
 			return errors.New("hostd: enrollment needs --token or --token-file")
@@ -190,6 +191,7 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 			return err
 		}
 		in.say("enrolled as target %s (%s)", id.TargetID, id.TargetName)
+		in.sayKey(stateDir, id)
 	}
 	if o.Executable != "" {
 		if err = in.copyBinary(o.Executable, in.path(o.BinaryPath)); err != nil {
@@ -216,6 +218,22 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 	}
 	in.say("agentgate-hostd is running")
 	return nil
+}
+
+// sayKey prints the host key id and fingerprint the administrator compares.
+func (in *Installer) sayKey(stateDir string, id Identity) {
+	key, err := readHostKey(stateDir)
+	if err != nil {
+		in.say("the host key cannot be read: %v", err)
+		return
+	}
+	if key.ID != id.HostKeyID {
+		in.say("WARNING: the service enrolled host key %s, but this host holds %s; do not approve either, enroll again", id.HostKeyID, key.ID)
+		return
+	}
+	for _, line := range ApprovalLines(id, key) {
+		in.say("%s", line)
+	}
 }
 
 func (in *Installer) copyBinary(source, target string) error {

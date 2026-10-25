@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"alloyium.local/kernel-poc/internal/hostproto"
+	"alloyium.local/kernel-poc/internal/secretseal"
 )
 
 const (
@@ -107,6 +108,42 @@ func loadIdentity(stateDir string) (Identity, error) {
 		return id, err
 	}
 	return id, nil
+}
+
+// HostKey is what an administrator compares on the host console: the key id
+// the service shows and approves (ed25519:...), and the SHA-256 fingerprint
+// of the whole key that sealing clients pin (SHA256:...).
+type HostKey struct {
+	ID          string `json:"host_key_id"`
+	Fingerprint string `json:"host_key_fingerprint"`
+}
+
+// readHostKey reads the enrolled signing key without creating one.
+func readHostKey(stateDir string) (HostKey, error) {
+	raw, err := readPrivateFile(filepath.Join(stateDir, signingKeyName), 256)
+	if err != nil {
+		return HostKey{}, err
+	}
+	seed, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(seed) != 32 {
+		return HostKey{}, errors.New("hostd: the host key file is damaged")
+	}
+	public := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	return HostKey{ID: hostproto.KeyID(public), Fingerprint: secretseal.HostKeyFingerprint(public)}, nil
+}
+
+// ApprovalLines are the lines install and status print for the operator.
+func ApprovalLines(id Identity, key HostKey) []string {
+	name := id.TargetName
+	if name == "" {
+		name = id.TargetID
+	}
+	return []string{
+		"host key id (compare and approve this): " + key.ID,
+		"host key fingerprint (SHA-256 of the key; sealing clients pin it): " + key.Fingerprint,
+		"An administrator compares the id with the one the service shows for target " + name + ", then approves it:",
+		"  agentgate target approve-key " + name + " --host-key-id " + key.ID,
+	}
 }
 
 func saveIdentity(stateDir string, id Identity) error {

@@ -37,7 +37,7 @@ sudo -E agentgate up --compose-file /opt/agentgate/deployment/compose.yaml --adm
 | 2 administrator credentials | the saved context's token is accepted and has `admin` | password sign-in, mints an `admin` API token (default 7 days), saves it as the context | no |
 | 3 target | `GET /targets/NAME` | creates the target or issues a fresh one-time enrollment token, kept only in memory | no |
 | 4 host agent | `agentgate-hostd status` | writes the token to a mode 0600 file in a private temporary directory, runs `agentgate-hostd install --service-url URL --token-file F [--ca-file CA]`, deletes the file | yes |
-| 5 host key approval | the target state and the fingerprint this machine's agent reported | with `--approve`: you type the last 8 characters of the fingerprint, then `POST /targets/ID/approve-key`; without it: prints the approval command and waits (`--wait-timeout`, default 10 minutes) for an administrator; pins the key in `known-targets.json` | no |
+| 5 host key approval | the target state, and the `host_key_id` this machine's agent prints (`agentgate-hostd status`, derived from its key file) | with `--approve`: once the service shows the same id, you type its last 8 characters (or the whole id), then `POST /targets/ID/approve-key`; without it: prints the approval command and waits (`--wait-timeout`, default 10 minutes) for an administrator; pins the key in `known-targets.json` | no |
 | 6 provision | the runtime | `agentgate-hostd provision --state-dir DIR` for the appliance runtime; nothing for docker-host; waits for the target to poll | appliance only |
 | 7 ready | | prints the UI address and next steps | |
 
@@ -45,8 +45,8 @@ If a step fails, `up` names the step, the service's error code and message, and 
 command again. A step that needs root refuses without it, before minting any one-time token, and prints both the
 `sudo agentgate up ...` line and the manual `agentgate-hostd install` command. `--skip-host` stops after the target
 step and needs no root. `--approve` is honoured only on an interactive terminal, only when the signed-in token is an
-administrator's, only after this machine's agent reported the same fingerprint the service shows, and never with
-`--yes`. A fingerprint that differs between the host agent and the service stops `up` with exit code 13.
+administrator's, only after this machine's agent printed a host key id and the service shows the same one, only when
+you confirm that printed id at the prompt, and never with `--yes`. A fingerprint that differs between the host agent and the service stops `up` with exit code 13.
 
 For an existing service, skip the compose part: `agentgate up --service-url https://agentgate.example:9443`.
 

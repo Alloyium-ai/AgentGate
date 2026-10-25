@@ -681,9 +681,8 @@ func (u *upRun) hostAgent(ctx context.Context) error {
 	if res.Exit != 0 {
 		return &Error{Exit: ExitFailure, Code: "hostd_install_failed", Message: "agentgate-hostd install failed: " + tail(append(res.Stdout, res.Stderr...)), Hint: "Fix what it names; the enrollment token may be spent, and re-running issues a new one."}
 	}
-	if m := fingerprintText.Find(append(res.Stdout, res.Stderr...)); m != nil {
-		u.localKey = string(m)
-	}
+	// The host key id comes from agentgate-hostd status, which derives it
+	// from the key file itself; the install output is shown, never parsed.
 	if s, err := u.readHostdStatus(ctx); err == nil && s.HostKeyID != "" {
 		u.localKey = s.HostKeyID
 	}
@@ -763,11 +762,14 @@ func (u *upRun) keyApproval(ctx context.Context) error {
 				"Read the fingerprint on the host console, then approve with agentgate target approve-key "+t.Name+" --host-key-id <host's fingerprint>.")
 		}
 		last := u.localKey[len(u.localKey)-8:]
-		answer, err := u.e.readLine(ctx, "      To approve host key "+u.localKey+" for target "+t.Name+", type its last 8 characters: ")
+		u.say("agentgate-hostd on this machine printed host key id %s", u.localKey)
+		u.say("the service shows the same id for target %s; approving activates this key for it", t.Name)
+		answer, err := u.e.readLine(ctx, "      To approve it, type the last 8 characters of that id (or the whole id): ")
 		if err != nil {
 			return err
 		}
-		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(answer)), []byte(last)) != 1 {
+		answer = strings.TrimSpace(answer)
+		if subtle.ConstantTimeCompare([]byte(answer), []byte(last)) != 1 && subtle.ConstantTimeCompare([]byte(answer), []byte(u.localKey)) != 1 {
 			return &Error{Exit: ExitUsage, Code: "not_confirmed", Message: "The characters do not match; the key was not approved."}
 		}
 		if _, err = u.admin.mutate(ctx, "POST", apiPrefix+"/targets/"+pathEscape(t.ID)+"/approve-key", map[string]string{"host_key_id": u.localKey, "reason": "Approved with agentgate up after comparing this machine's host agent fingerprint"}, true, &u.target); err != nil {

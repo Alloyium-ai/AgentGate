@@ -59,6 +59,23 @@ func TestInstallIsIdempotentAndEnrollsOnce(t *testing.T) {
 	if cfg.Launcher[2] != "/var/lib/agentgate-poc-demo/launch.py" {
 		t.Fatalf("launcher %v", cfg.Launcher)
 	}
+	// The operator sees the id to approve and the fingerprint to pin.
+	out := in.Out.(*bytes.Buffer).String()
+	key, err := readHostKey(state)
+	if err != nil || key.ID != id.HostKeyID || !strings.HasPrefix(key.Fingerprint, "SHA256:") {
+		t.Fatalf("host key %+v %v", key, err)
+	}
+	for _, want := range []string{"host key id (compare and approve this): " + id.HostKeyID, "host key fingerprint (SHA-256 of the key; sealing clients pin it): " + key.Fingerprint,
+		"agentgate target approve-key " + id.TargetName + " --host-key-id " + id.HostKeyID} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("install output lacks %q:\n%s", want, out)
+		}
+	}
+	report, err := Status(state)
+	if err != nil || report.HostKeyID != id.HostKeyID || report.HostKeyFingerprint != key.Fingerprint || report.TargetName != id.TargetName || len(report.Approve) != 4 {
+		t.Fatalf("status %+v %v", report, err)
+	}
+	in.Out.(*bytes.Buffer).Reset()
 	// Again, with an already used token: nothing changes, no enrollment.
 	o.Token = ""
 	if err = in.Install(context.Background(), o); err != nil {
@@ -67,6 +84,9 @@ func TestInstallIsIdempotentAndEnrollsOnce(t *testing.T) {
 	again, _ := loadIdentity(state)
 	if again != id {
 		t.Fatal("a second install changed the identity")
+	}
+	if !strings.Contains(in.Out.(*bytes.Buffer).String(), "host key id (compare and approve this): "+id.HostKeyID) {
+		t.Fatal("a repeated install does not show the host key id")
 	}
 	if len(*calls) != 4 || (*calls)[0] != "systemctl daemon-reload" || (*calls)[1] != "systemctl enable --now agentgate-hostd.service" {
 		t.Fatalf("calls %v", *calls)

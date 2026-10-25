@@ -326,3 +326,40 @@ func TestUpWaitsForApprovalThenTimesOut(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 }
+
+func TestUpApprovesOnlyTheIDTheHostAgentPrinted(t *testing.T) {
+	w := newUpWorld(t)
+	w.approveAt = 1 << 30
+	if r := w.up(upPassword+"\n", "--wait-timeout", "50ms"); r.code != ExitApprovalPending {
+		t.Fatalf("first run: %v", r)
+	}
+	w.h.term.tty = [3]bool{true, true, true}
+	if r := w.up(hostKey+"\n", "--approve"); r.code != 0 || !strings.Contains(r.stdout, "agentgate-hostd on this machine printed host key id "+hostKey) || !strings.Contains(r.stdout, "approved host key "+hostKey) {
+		t.Fatalf("the whole id: %v", r)
+	}
+	var in control.KeyApprovalInput
+	mustDecode(t, w.h.api.requestsTo("POST /api/v1/targets/{id}/approve-key")[0].Body, &in)
+	if in.HostKeyID != hostKey {
+		t.Fatalf("approved %q", in.HostKeyID)
+	}
+	// A host agent that prints no host key id gives nothing to confirm.
+	w = newUpWorld(t)
+	w.approveAt = 1 << 30
+	respond := w.runner.respond
+	w.runner.respond = func(c Cmd) Result {
+		if strings.HasPrefix(strings.Join(c.Args, " "), "status") && w.installed {
+			return Result{Stdout: []byte(`{"enrolled":true,"target_id":"` + w.target.ID + `","unfinished_jobs":[]}`)}
+		}
+		return respond(c)
+	}
+	if r := w.up(upPassword+"\n", "--wait-timeout", "50ms"); r.code != ExitApprovalPending {
+		t.Fatalf("first run: %v", r)
+	}
+	w.h.term.tty = [3]bool{true, true, true}
+	if r := w.up(hostKey[len(hostKey)-8:]+"\n", "--approve"); r.code != ExitTrust || !strings.Contains(r.stderr, "did not report its fingerprint") {
+		t.Fatalf("no printed id: %v", r)
+	}
+	if len(w.h.api.requestsTo("POST /api/v1/targets/{id}/approve-key")) != 0 {
+		t.Fatal("approved a key the host agent never printed")
+	}
+}

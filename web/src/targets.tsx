@@ -164,8 +164,8 @@ function ApproveKey({ target, onClose, onDone }: { target: Target; onClose: () =
         </div>
         <ol className="steps">
           <li>
-            On the host console, read the fingerprint <code>agentgate-hostd install</code> reported when it enrolled. If your build does not print it, run{" "}
-            <code>sudo grep host_key_id /var/lib/agentgate-hostd/identity.json</code>.
+            On the host console, read the line <code>host key id (compare and approve this): ed25519:…</code> that <code>agentgate-hostd install</code> printed
+            when it enrolled; <code>sudo agentgate-hostd status</code> shows it again as <code>host_key_id</code>.
           </li>
           <li>Paste or type that fingerprint below. Do not copy it from this page.</li>
           <li>Approve only if they match. A token intercepted in transit cannot activate another key without this step.</li>

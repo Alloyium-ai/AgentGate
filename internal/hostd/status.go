@@ -43,14 +43,20 @@ func ReportsReady(output string) bool {
 
 // StatusReport is the local, secret-free view of the host agent.
 type StatusReport struct {
-	Enrolled    bool     `json:"enrolled"`
-	ServiceURL  string   `json:"service_url,omitempty"`
-	TargetID    string   `json:"target_id,omitempty"`
-	Runtime     string   `json:"runtime,omitempty"`
-	Sequence    uint64   `json:"sequence"`
-	Unfinished  []string `json:"unfinished_jobs"`
-	OutboxBytes int64    `json:"outbox_bytes"`
-	OutboxJobs  []string `json:"outbox_pending_jobs"`
+	Enrolled   bool   `json:"enrolled"`
+	ServiceURL string `json:"service_url,omitempty"`
+	TargetID   string `json:"target_id,omitempty"`
+	TargetName string `json:"target_name,omitempty"`
+	// HostKeyID is the id an administrator approves; HostKeyFingerprint the
+	// SHA-256 fingerprint sealing clients pin. Approve says how.
+	HostKeyID          string   `json:"host_key_id,omitempty"`
+	HostKeyFingerprint string   `json:"host_key_fingerprint,omitempty"`
+	Approve            []string `json:"approve,omitempty"`
+	Runtime            string   `json:"runtime,omitempty"`
+	Sequence           uint64   `json:"sequence"`
+	Unfinished         []string `json:"unfinished_jobs"`
+	OutboxBytes        int64    `json:"outbox_bytes"`
+	OutboxJobs         []string `json:"outbox_pending_jobs"`
 }
 
 // Status reads the state directory without changing it.
@@ -62,7 +68,10 @@ func Status(stateDir string) (StatusReport, error) {
 	}
 	report.Runtime, report.ServiceURL = cfg.Runtime, cfg.ServiceURL
 	if id, idErr := loadIdentity(stateDir); idErr == nil {
-		report.Enrolled, report.TargetID = true, id.TargetID
+		report.Enrolled, report.TargetID, report.TargetName = true, id.TargetID, id.TargetName
+		if key, keyErr := readHostKey(stateDir); keyErr == nil && key.ID == id.HostKeyID {
+			report.HostKeyID, report.HostKeyFingerprint, report.Approve = key.ID, key.Fingerprint, ApprovalLines(id, key)
+		}
 	}
 	report.Sequence, _ = newSequence(stateDir).current()
 	if ledger, ledgerErr := openLedger(stateDir, nil); ledgerErr == nil {
