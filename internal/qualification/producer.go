@@ -55,6 +55,26 @@ type EvidenceRecord struct {
 	FinishedMonoNS uint64     `json:"finished_mono_ns,string"`
 	Raw            []byte     `json:"raw"` // Base64 preserves the exact bytes hashed by Coverage.
 	Coverage       []Coverage `json:"coverage"`
+	Failure        string     `json:"failure,omitempty"` // A failed adapter grants no case credit.
+}
+
+// CaseEvidence points into the exact raw bundle. It is an observation reference,
+// not an independent grant or a substitute for a complete signed report.
+type CaseEvidence struct {
+	RecordIndex int    `json:"record_index"`
+	AdapterID   string `json:"adapter_id"`
+	RawSHA256   string `json:"raw_sha256"`
+}
+type CaseStatus struct {
+	Name     string         `json:"name"`
+	Status   string         `json:"status"`
+	Evidence []CaseEvidence `json:"evidence"`
+}
+type CapabilityCases struct {
+	PolicyDigest    string       `json:"policy_digest"`
+	CapabilityID    string       `json:"capability_id"`
+	CapabilityState string       `json:"capability_state"`
+	Cases           []CaseStatus `json:"cases"`
 }
 type Bundle struct {
 	Protocol           string           `json:"protocol"`
@@ -73,6 +93,7 @@ func (b Bundle) Digest() string { return digestValue("AGENTGATE_QUALIFICATION_EV
 type Output struct {
 	Report              policy.CapabilityReport `json:"report"`
 	Evidence            Bundle                  `json:"evidence"`
+	CaseMatrix          []CapabilityCases       `json:"case_matrix"`
 	Gaps                []Gap                   `json:"gaps"`
 	AdapterErrors       []string                `json:"adapter_errors"`
 	Envelope            []byte                  `json:"envelope,omitempty"`
@@ -257,6 +278,7 @@ func (p *Producer) collect(ctx context.Context, request Request, adapter Adapter
 	}
 	if runErr != nil {
 		state.out.AdapterErrors = append(state.out.AdapterErrors, adapter.ID()+": "+runErr.Error())
+		retainFailedResult(request, result, adapter.ID(), runErr, state, now)
 		return nil
 	}
 	if err = checkResult(request, result, state.start, now, state.total); err != nil {
@@ -266,14 +288,30 @@ func (p *Producer) collect(ctx context.Context, request Request, adapter Adapter
 	coverage, err := verifyAdapter(adapter, owned(request), copyResult(result))
 	if err != nil {
 		state.out.AdapterErrors = append(state.out.AdapterErrors, adapter.ID()+": "+err.Error())
+		retainFailedResult(request, result, adapter.ID(), err, state, now)
 		return nil
 	}
 	if err = recordCoverage(request, coverage, digestBytes(result.Raw), state.covered, state.receipts); err != nil {
 		return err
 	}
 	state.total += len(result.Raw)
-	state.out.Evidence.Records = append(state.out.Evidence.Records, EvidenceRecord{adapter.ID(), owned(request), owned(result.Binding), result.StartedMonoNS, result.FinishedMonoNS, append([]byte{}, result.Raw...), owned(coverage)})
+	state.out.Evidence.Records = append(state.out.Evidence.Records, EvidenceRecord{AdapterID: adapter.ID(), Request: owned(request), Binding: owned(result.Binding), StartedMonoNS: result.StartedMonoNS, FinishedMonoNS: result.FinishedMonoNS, Raw: append([]byte{}, result.Raw...), Coverage: owned(coverage)})
 	return nil
+}
+
+// Retain a well-bound failed actor result for diagnosis. A failed result has
+// empty coverage and cannot satisfy a contract, even when its raw bytes exist.
+func retainFailedResult(request Request, result Result, adapterID string, cause error, state *runState, now uint64) {
+	if len(result.Raw) == 0 || checkResult(request, result, state.start, now, state.total) != nil {
+		return
+	}
+	result = copyResult(result)
+	state.total += len(result.Raw)
+	state.out.Evidence.Records = append(state.out.Evidence.Records, EvidenceRecord{
+		AdapterID: adapterID, Request: owned(request), Binding: owned(result.Binding),
+		StartedMonoNS: result.StartedMonoNS, FinishedMonoNS: result.FinishedMonoNS,
+		Raw: append([]byte{}, result.Raw...), Coverage: []Coverage{}, Failure: cause.Error(),
+	})
 }
 
 func checkResult(request Request, result Result, start, now uint64, total int) error {
@@ -300,6 +338,7 @@ func (p *Producer) finish(ctx context.Context, state *runState, key ed25519.Priv
 	out.Gaps = missing(p.requests, state.covered)
 	complete := len(out.Gaps) == 0 && len(out.AdapterErrors) == 0
 	out.Report = p.report(wall, state.startWall, out.Evidence, state.receipts, complete)
+	out.CaseMatrix = buildCaseMatrix(p.requests, out.Evidence.Records, out.Report)
 	if out.Report.ValidUntil <= wall.Unix() {
 		return out, errors.New("qualification evidence has no remaining validity")
 	}

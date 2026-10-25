@@ -1,0 +1,17 @@
+{
+  "version": "agentgate.hostd.job.v1",
+  "id": "00000000000000000000000000000008",
+  "type": "snapshot-mount",
+  "target_id": "0123456789abcdef0123456789abcdef",
+  "launch_id": "",
+  "spec_digest": "",
+  "policy_digest": "",
+  "issued_at_ms": 1790000000000,
+  "deadline_ms": 1790007200000,
+  "payload": {
+    "name": "repo",
+    "source": "/srv/repos/app",
+    "max_bytes": 268435456,
+    "max_entries": 20000
+  }
+}

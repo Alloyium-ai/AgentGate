@@ -4,5 +4,6 @@
   "listen": "0.0.0.0:8930",
   "session_seconds": 1800,
   "auth_mode": "local",
-  "group_roles": {}
+  "group_roles": {},
+  "trusted_proxies": ["10.231.207.2/32"]
 }

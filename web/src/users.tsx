@@ -28,7 +28,7 @@ export function Users({ epoch, refresh }: { epoch: number; refresh: () => void }
   }
   return <section>
     <h1>Local users</h1>
-    <p>Local user records supply the account roles. A second administrator changes your password or status.</p>
+    <p>Local user records supply the account roles. A second administrator changes your password or status. A new password or disabling an account signs that user out everywhere and revokes every API token they hold; enabling the account again does not restore them.</p>
     {Boolean(error) && <ErrorBox error={error} />}
     {!data && !error && <Loading />}
     {data && <div className="table-wrap"><table><thead><tr><th>User</th><th>Roles</th><th>Status</th><th>Action</th></tr></thead><tbody>

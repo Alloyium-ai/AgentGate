@@ -5,6 +5,7 @@ package localconfig
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,6 +20,15 @@ type Settings struct {
 	Issuer         string              `json:"oidc_issuer,omitempty"`
 	ClientID       string              `json:"oidc_client_id,omitempty"`
 	GroupRoles     map[string][]string `json:"group_roles"`
+	// TrustedProxies are the CIDR networks of the reverse proxies in front
+	// of the service (at most 16). A request from one of them is limited by
+	// the client address it forwarded in X-Forwarded-For. Empty (the
+	// default) trusts no proxy; behind the shipped TLS front it is exactly
+	// that container's fixed address, 10.231.207.2/32 (compose.yaml). Never
+	// list a range other clients reach the service from, such as a Docker
+	// bridge with its gateway: the service refuses to start with a network
+	// that contains a gateway of its own networks (control.CheckProxyTrust).
+	TrustedProxies []string `json:"trusted_proxies,omitempty"`
 }
 
 func (s Settings) LocalEnabled() bool { return s.AuthMode == "local" || s.AuthMode == "both" }
@@ -49,18 +59,26 @@ func (s Settings) Validate() error {
 	if !s.OIDCEnabled() && (s.Issuer != "" || s.ClientID != "") {
 		return errors.New("OIDC settings require explicit OIDC authentication")
 	}
-	valid := map[string]bool{"viewer": true, "editor": true, "approver": true, "auditor": true, "admin": true}
+	valid := map[string]bool{"viewer": true, "editor": true, "launcher": true, "approver": true, "auditor": true, "admin": true}
 	if len(s.GroupRoles) > 64 {
 		return errors.New("too many group mappings")
 	}
 	for name, roles := range s.GroupRoles {
-		if len(name) < 1 || len(name) > 128 || len(roles) < 1 || len(roles) > 5 {
+		if len(name) < 1 || len(name) > 128 || len(roles) < 1 || len(roles) > len(valid) {
 			return errors.New("invalid basic group mapping")
 		}
 		for _, role := range roles {
 			if !valid[role] {
 				return errors.New("unknown basic role")
 			}
+		}
+	}
+	if len(s.TrustedProxies) > 16 {
+		return errors.New("trusted_proxies holds at most 16 networks")
+	}
+	for _, v := range s.TrustedProxies {
+		if p, err := netip.ParsePrefix(v); err != nil || p.Masked() != p || p.String() != v {
+			return errors.New("trusted_proxies entries are canonical CIDR networks")
 		}
 	}
 	return nil

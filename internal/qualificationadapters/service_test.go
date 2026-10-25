@@ -62,7 +62,7 @@ func TestServiceActorUsesActualPrivateSocketAndDurableJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"agentgate.service-identity-adapter.v1", "agentgate.fixed-lifecycle-stop-adapter.v1", "agentgate.fixed-lifecycle-expiry-adapter.v1", "agentgate.fixed-lifecycle-revoke-adapter.v1"}
+	wantIDs := []string{"agentgate.service-identity-adapter.v1", "agentgate.fixed-lifecycle-stop-adapter.v1", "agentgate.fixed-lifecycle-expiry-adapter.v1", "agentgate.fixed-lifecycle-revoke-adapter.v1", "agentgate.fixed-lifecycle-watchdog-loss-adapter.v1", "agentgate.fixed-lifecycle-node-loss-adapter.v1", "agentgate.fixed-lifecycle-prepare-reply-loss-adapter.v1"}
 	gotIDs := []string{}
 	for _, adapter := range adapters {
 		gotIDs = append(gotIDs, adapter.ID())

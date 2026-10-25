@@ -4,6 +4,7 @@
 package noderuntime
 
 import (
+	"alloyium.local/kernel-poc/internal/dockerplacement"
 	"alloyium.local/kernel-poc/internal/enforcement"
 	"alloyium.local/kernel-poc/internal/lifecycle"
 	"alloyium.local/kernel-poc/internal/nodeapi"
@@ -76,6 +77,7 @@ type Config struct {
 	Authority               AuthorityConfig               `json:"authority"`
 	Resolver                *ResolverConfig               `json:"resolver,omitempty"`
 	Credentials             *nodebackend.CredentialConfig `json:"credentials,omitempty"`
+	PilotTarget             *dockerplacement.Target       `json:"pilot_target,omitempty"`
 }
 
 func ReadConfig(path string) (Config, error) {
@@ -93,6 +95,11 @@ func ReadConfig(path string) (Config, error) {
 	for _, path := range []string{c.SocketPath, c.WatchdogSocket, c.DomainState, c.Journal, c.AuditRoot, c.ArtifactRoot, c.WatchdogStore} {
 		if !canonical(path) {
 			return c, errors.New("the node configuration has an invalid protected path")
+		}
+	}
+	if c.PilotTarget != nil {
+		if err := c.PilotTarget.Validate(); err != nil {
+			return c, err
 		}
 	}
 	return c, nil

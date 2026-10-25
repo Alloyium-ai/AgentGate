@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -105,6 +106,55 @@ func TestImmutableVersionsAndAudit(t *testing.T) {
 		if _, err = s.DB.Exec(sql); err == nil {
 			t.Fatalf("history mutation succeeded: %s", sql)
 		}
+	}
+}
+func TestVersionRequestHistoryRetainsAgentScope(t *testing.T) {
+	s := storeFixture(t)
+	first := publish(t, s, createVersion(t, s))
+	second := publish(t, s, createVersion(t, s))
+	agentOne, _ := enroll(t, s, "synthetic-history-agent-one", "agent", []string{"request:create", "policy:read"})
+	agentTwo, _ := enroll(t, s, "synthetic-history-agent-two", "agent", []string{"request:create", "policy:read"})
+	for _, item := range []struct {
+		actor   Actor
+		version string
+	}{{agentOne, first.ID}, {agentOne, second.ID}, {agentTwo, first.ID}} {
+		if _, err := s.RequestPolicy(Operation{Actor: item.actor, RequestID: newID()}, RequestPolicy{VersionID: item.version, Reason: "Test exact version request history"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filter := Filter{Limit: 50, Values: url.Values{"version": {first.ID}}}
+	human, err := s.Requests(filter, humanOp().Actor)
+	if err != nil || len(human.Items) != 2 {
+		t.Fatalf("human version history differs: %v, %d", err, len(human.Items))
+	}
+	for _, item := range human.Items {
+		if item.RequestedVersion != first.ID {
+			t.Fatal("another version entered the selected history")
+		}
+	}
+	own, err := s.Requests(filter, agentOne)
+	if err != nil || len(own.Items) != 1 || own.Items[0].AgentID != agentOne.Subject {
+		t.Fatalf("agent version history escaped its own scope: %v, %+v", err, own.Items)
+	}
+	if _, err := s.DecideRequest(humanOp(), own.Items[0].ID, etag(1), Decision{State: "rejected", Reason: "Reject this exact fixture request"}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := s.Audit(Filter{Limit: 100, Values: url.Values{"version": {first.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenRejected := false
+	for _, entry := range history.Items {
+		if entry.Action == "request.rejected" && entry.Resource == own.Items[0].ID && entry.Version == first.ID {
+			seenRejected = true
+		}
+	}
+	if !seenRejected {
+		t.Fatal("the selected version lost its rejected request audit record")
+	}
+	filter.Values.Set("version", strings.Repeat("x", 201))
+	if _, err := s.Requests(filter, humanOp().Actor); err == nil {
+		t.Fatal("oversized version filter was accepted")
 	}
 }
 func TestConcurrentDecisionRequiresExactRevision(t *testing.T) {

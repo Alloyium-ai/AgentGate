@@ -30,7 +30,13 @@ func Compile(network policy.Network, generation, nowNS, expiresNS uint64, leases
 	rules := append([]policy.NetworkRule(nil), network.Rules...)
 	sort.Slice(rules, func(i, j int) bool { return rules[i].ID < rules[j].ID })
 	out.Policy = Policy{Generation: generation, ExpiresNS: expiresNS}
+	if network.Pilot != nil {
+		if err := configurePilot(&out.Policy, *network.Pilot); err != nil {
+			return Compiled{}, err
+		}
+	}
 	usedLeases := make([]bool, len(leases))
+	var taskboardRule bool
 	for _, source := range rules {
 		if !ruleID(source.ID) || (len(out.RuleIDs) > 0 && source.ID == out.RuleIDs[len(out.RuleIDs)-1]) {
 			return Compiled{}, fmt.Errorf("network rule IDs must be canonical and unique")
@@ -38,6 +44,13 @@ func Compile(network policy.Network, generation, nowNS, expiresNS uint64, leases
 		rule, err := compileRule(source, expiresNS)
 		if err != nil {
 			return Compiled{}, fmt.Errorf("network rule %s: %w", source.ID, err)
+		}
+		if out.Policy.PilotMode == 1 && source.Effect == "allow" && source.Destination.Kind != "hostname" {
+			if pilotTaskboardRule(source, out.Policy) {
+				taskboardRule = true
+			} else if !pilotPublicRule(source) {
+				return Compiled{}, fmt.Errorf("pilot rule %s grants a private or broad destination", source.ID)
+			}
 		}
 		out.RuleIDs = append(out.RuleIDs, source.ID)
 		rule.Index = uint32(len(out.RuleIDs))
@@ -57,6 +70,9 @@ func Compile(network policy.Network, generation, nowNS, expiresNS uint64, leases
 			if err != nil {
 				return Compiled{}, fmt.Errorf("network lease %s: %w", source.ID, err)
 			}
+			if out.Policy.PilotMode == 1 && source.Effect == "allow" && pilotPrivate(lease.Address) {
+				return Compiled{}, fmt.Errorf("pilot hostname %s resolved to a private destination", source.ID)
+			}
 			if err := out.append(resolved); err != nil {
 				return Compiled{}, err
 			}
@@ -65,6 +81,9 @@ func Compile(network policy.Network, generation, nowNS, expiresNS uint64, leases
 		if count == 0 {
 			return Compiled{}, fmt.Errorf("hostname rule %s requires a live trusted lease", source.ID)
 		}
+	}
+	if out.Policy.PilotMode == 1 && !taskboardRule {
+		return Compiled{}, fmt.Errorf("pilot policy requires the exact taskboard endpoint rule")
 	}
 	for i, used := range usedLeases {
 		if !used {

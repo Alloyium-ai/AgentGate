@@ -6,8 +6,8 @@
     "component": {
       "type": "application",
       "name": "AgentGate experimental source preview",
-      "bom-ref": "agentgate-community-sha256:09cc90e3cfd9817708338321e5559b0fe025d480bda30aaca7bc2654a6ec2d43",
-      "version": "09cc90e3cfd9817708338321e5559b0fe025d480bda30aaca7bc2654a6ec2d43",
+      "bom-ref": "agentgate-community-sha256:c8f641d11234c8c25569f39dc264e4209d07cff8510d5af93835ec774a6fb10f",
+      "version": "c8f641d11234c8c25569f39dc264e4209d07cff8510d5af93835ec774a6fb10f",
       "licenses": [
         {
           "expression": "Apache-2.0 AND GPL-2.0-only AND CC-BY-4.0"
@@ -2665,7 +2665,7 @@
   ],
   "dependencies": [
     {
-      "ref": "agentgate-community-sha256:09cc90e3cfd9817708338321e5559b0fe025d480bda30aaca7bc2654a6ec2d43",
+      "ref": "agentgate-community-sha256:c8f641d11234c8c25569f39dc264e4209d07cff8510d5af93835ec774a6fb10f",
       "dependsOn": [
         "go:2541d82ddb2b8ba3d27a97c402bcea4adf292fb7400a4d232e88124a36614f8d",
         "go:7cd0fd73658571a4ab2334be1ac87f9ed461507df19e51be2096b612ae6f1b0d",

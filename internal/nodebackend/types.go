@@ -5,6 +5,7 @@ package nodebackend
 import (
 	"alloyium.local/kernel-poc/internal/credentialstage"
 	"alloyium.local/kernel-poc/internal/dnslease"
+	"alloyium.local/kernel-poc/internal/dockerplacement"
 	"alloyium.local/kernel-poc/internal/domainstore"
 	"alloyium.local/kernel-poc/internal/enforcement"
 	"alloyium.local/kernel-poc/internal/execbroker"
@@ -52,6 +53,7 @@ type Config struct {
 	Registry                jobaudit.Registry
 	Runtimes                RuntimeVerifier
 	Credentials             *CredentialConfig
+	PilotTarget             *dockerplacement.Target
 }
 
 type run struct {
@@ -89,6 +91,7 @@ type run struct {
 	controlCount                  uint64
 	controlMu                     sync.Mutex
 	credentials                   *credentialstage.Stage
+	pilotTarget                   *dockerplacement.Measurement
 }
 type Backend struct {
 	fixture   *lifecycle.QualificationFixturePermit

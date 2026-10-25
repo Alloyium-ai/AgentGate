@@ -10,6 +10,7 @@
 #define OPERATIONS 14
 #define READ 0
 #define WRITE 1
+#define CREATE 2
 #define MMAP 9
 #define RECEIVE 10
 #define EXECUTE 11
@@ -18,14 +19,28 @@
 #define ALLOW 1
 #define DENY 2
 #define ANONYMOUS_DELEGATION (1ULL<<63)
+// The launcher's stdio: a pipe made outside every owned domain may be used only
+// when the launcher recorded its pipefs inode in the stdio map for this domain
+// before the command joined (fsrules.RecordStdio), only in the recorded
+// direction, and only with the explicit pipe read/write rights. No recorded
+// inode means no inherited pipe. A pipe made by another owned domain is never
+// usable, and descriptor passing stays denied by file_receive.
+#define INHERITED_STDIO (1ULL<<62)
 #define ANONYMOUS_FS_MAGIC 0x09041934UL
-struct dentry;struct vfsmount;
+#define PIPEFS_MAGIC 0x50495045UL
+struct vfsmount;
 struct super_block {unsigned long s_magic;} __attribute__((preserve_access_index));
 struct inode {__u64 i_ino;unsigned short i_mode;struct super_block *i_sb;} __attribute__((preserve_access_index));
+struct qstr {__u32 len;const unsigned char *name;} __attribute__((preserve_access_index));
+struct dentry {struct inode *d_inode;struct qstr d_name;} __attribute__((preserve_access_index));
 struct path {struct vfsmount *mnt;struct dentry *dentry;} __attribute__((preserve_access_index));
 struct file {struct inode *f_inode;struct path f_path;unsigned int f_mode,f_flags;} __attribute__((preserve_access_index));
 struct linux_binprm {struct file *file;} __attribute__((preserve_access_index));
-struct task_struct {__u64 start_boottime;} __attribute__((preserve_access_index));
+// fs/namei.c's private walk state; only fs_create reads it (see there).
+struct nameidata {struct path path;unsigned int flags;} __attribute__((preserve_access_index));
+struct task_struct {__u64 start_boottime;struct nameidata *nameidata;} __attribute__((preserve_access_index));
+// The x86-64 user register frame; orig_ax holds the number of the syscall in progress.
+struct pt_regs {unsigned long orig_ax;} __attribute__((preserve_access_index));
 struct vm_area_struct {struct file *vm_file;} __attribute__((preserve_access_index));
 struct action {__u32 effect,rule;};
 struct node {__u32 id;struct action sub_read,sub_write,exact_read,exact_write;};
@@ -38,6 +53,7 @@ struct bootstrap_key {__u64 domain;__u32 pid,padding;};
 struct bootstrap_binding {__u64 generation,expires_ns,start_ticks,pipe_ino;};
 struct file_cookie {__u64 sequence,creator;};
 struct file_grant {__u64 cookie,generation;char path[PATH_BYTES];};
+struct stdio_key {__u64 domain,inode;};
 struct counters {__u64 decisions,lost;};
 struct event {__u64 sequence,generation,domain,mono_ns;__u32 pid,uid,operation,allowed,rule,reason;char path[160];};
 _Static_assert(sizeof(struct state)==544,"file policy ABI");
@@ -53,6 +69,8 @@ struct {__uint(type,BPF_MAP_TYPE_ARRAY);__uint(max_entries,1);__type(key,__u32);
 struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(map_flags,BPF_F_NO_PREALLOC);__uint(max_entries,16384);__type(key,struct file_key);__type(value,struct file_grant);} file_grants SEC(".maps");
 struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(max_entries,16384);__type(key,__u64);__type(value,struct file_key);} file_grant_keys SEC(".maps");
 struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(max_entries,1024);__type(key,struct bootstrap_key);__type(value,struct bootstrap_binding);} bootstrap SEC(".maps");
+// Recorded launcher pipes: value is the allowed file_permission mask (MAY_READ 4, MAY_WRITE 2).
+struct {__uint(type,BPF_MAP_TYPE_HASH);__uint(max_entries,8);__type(key,struct stdio_key);__type(value,__u32);} stdio SEC(".maps");
 const struct file_grant empty_grant={};
 
 static __always_inline struct action direct(struct node *node)
@@ -146,10 +164,15 @@ SEC("lsm/file_alloc_security") int BPF_PROG(fs_alloc,struct file *file,int ret)
 {if(ret)return ret;__u64 domain=bpf_get_current_ancestor_cgroup_id(1);if(cookie(file,1))return 0;return bpf_map_lookup_elem(&owned,&domain)?-1:0;}
 SEC("lsm/file_free_security") int BPF_PROG(fs_free,struct file *file)
 {struct bootstrap_key held={bpf_get_current_ancestor_cgroup_id(1),bpf_get_current_pid_tgid()>>32,0};struct bootstrap_binding *role=bpf_map_lookup_elem(&bootstrap,&held);if(role && BPF_CORE_READ(file,f_inode,i_sb,s_magic)==0x50495045UL && BPF_CORE_READ(file,f_inode,i_ino)==role->pipe_ino)bpf_map_delete_elem(&bootstrap,&held);__u64 key=(__u64)file;struct file_key *grant=bpf_map_lookup_elem(&file_grant_keys,&key);if(grant)bpf_map_delete_elem(&file_grants,grant);bpf_map_delete_elem(&file_grant_keys,&key);bpf_map_delete_elem(&file_cookies,&key);return 0;}
+// FMODE_CREATED (include/linux/fs.h, 6.8): this open(O_CREAT) made the file.
+// lookup_open() sets it after ->create() and before security_file_open().
+#define FMODE_CREATED_ 0x100000
 SEC("lsm/file_open") int BPF_PROG(fs_open,struct file *file,int ret)
 {
     if(ret)return ret;__u32 mode=BPF_CORE_READ(file,f_mode),flags=BPF_CORE_READ(file,f_flags);
     if(!(mode&(1|2|32))){__u64 domain=bpf_get_current_ancestor_cgroup_id(1);return bpf_map_lookup_elem(&owned,&domain)?emit(domain,0,READ,0,0,8,0):0;}
+    // CREATE for open(O_CREAT) is decided here, on the new file's path; see fs_create.
+    if((mode&FMODE_CREATED_) && check_path(&file->f_path,CREATE))return -1;
     if((mode&1) && check_path(&file->f_path,READ))return -1;
     if(((mode&2)||(flags&512)) && check_path(&file->f_path,WRITE))return -1;
     if((mode&32) && check_path(&file->f_path,EXECUTE))return -1;
@@ -177,7 +200,16 @@ static __always_inline int special_file(struct file *file,int mask)
     if(BPF_CORE_READ(file,f_inode,i_sb,s_magic)!=0x50495045UL)return 1;
     __u64 ptr=(__u64)file;struct file_cookie *identity=bpf_map_lookup_elem(&file_cookies,&ptr);
     __u64 required=1|((mask&4)?2:0)|((mask&2)?4:0);
-    int valid=identity && identity->creator==domain && !(mask&~6) && (mask&6) && (p->pipes&required)==required;
+    int mine=identity && identity->creator==domain,inherited=0;
+    if(!mine && (p->pipes&INHERITED_STDIO)){
+        // Only a pipe the launcher recorded for this domain, in its recorded direction.
+        struct stdio_key key={domain,BPF_CORE_READ(file,f_inode,i_ino)};
+        __u32 *rights=bpf_map_lookup_elem(&stdio,&key);
+        inherited=rights && !(mask&6&~*rights);
+        // A recorded inode never admits a pipe a job domain made.
+        if(identity){__u64 creator=identity->creator;if(bpf_map_lookup_elem(&owned,&creator))inherited=0;}
+    }
+    int valid=(mine||inherited) && !(mask&~6) && (mask&6) && (p->pipes&required)==required;
     return emit(domain,p->generation,(mask&4)?16:17,valid,0,valid?0:13,0);
 }
 SEC("lsm/file_permission") int BPF_PROG(fs_use,struct file *file,int mask,int ret)
@@ -187,7 +219,21 @@ SEC("lsm/file_receive") int BPF_PROG(fs_receive,struct file *file,int ret)
 SEC("lsm/bprm_check_security") int BPF_PROG(fs_exec,struct linux_binprm *bprm,int ret)
 {if(ret)return ret;struct bootstrap_key key={bpf_get_current_ancestor_cgroup_id(1),bpf_get_current_pid_tgid()>>32,0};bpf_map_delete_elem(&bootstrap,&key);struct file *file=bprm->file;return file?check_path(&file->f_path,EXECUTE):-1;}
 SEC("lsm/inode_getattr") int BPF_PROG(fs_getattr,struct path *path,int ret)
-{return ret?ret:check_path(path,READ);}
+{
+    if(ret)return ret;
+    __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
+    if(bpf_map_lookup_elem(&owned,&domain) &&
+       BPF_CORE_READ(path,dentry,d_inode,i_sb,s_magic)==PIPEFS_MAGIC &&
+       (BPF_CORE_READ(path,dentry,d_inode,i_mode)&0170000)==0010000){
+        struct state *p=bpf_map_lookup_elem(&policies,&domain);
+        int live=p && p->generation && bpf_ktime_get_ns()<p->expires_ns;
+        int allow=live && (p->pipes&1);
+        // Pipe metadata follows the explicit pipe creation grant. It does
+        // not authorize content I/O; file_permission still checks custody.
+        return emit(domain,p?p->generation:0,READ,allow,0,allow?0:13,0);
+    }
+    return check_path(path,READ);
+}
 static __always_inline int anonymous_memory(unsigned long prot,int protect)
 {
     __u64 domain=bpf_get_current_ancestor_cgroup_id(1);if(!bpf_map_lookup_elem(&owned,&domain))return 0;
@@ -205,21 +251,157 @@ SEC("lsm/mmap_file") int BPF_PROG(fs_mmap,struct file *file,unsigned long reqpro
 SEC("lsm/file_mprotect") int BPF_PROG(fs_mprotect,struct vm_area_struct *vma,unsigned long reqprot,unsigned long prot,int ret)
 {if(ret)return ret;struct file *file=BPF_CORE_READ(vma,vm_file);if(!file)return anonymous_memory(prot,1);if(cached(file,MPROTECT))return -1;if((prot&1)&&cached(file,READ))return -1;if((prot&2)&&cached(file,WRITE))return -1;if((prot&4)&&cached(file,MAP_EXECUTE))return -1;return 0;}
 
-// Namespace mutations stay denied until the trusted anchor implementation qualifies.
-// This preserves the approved cached path during the access component witness.
-static __always_inline int mutation(__u32 operation)
-{__u64 domain=bpf_get_current_ancestor_cgroup_id(1);if(!bpf_map_lookup_elem(&owned,&domain))return 0;return emit(domain,0,operation,0,0,7,0);}
+// Namespace mutations are decided by policy on the resulting or affected path.
+// Hooks that only expose a parent directory and a dentry name build the child
+// path in the shared scratch buffer, then use the same walker as file opens.
+// Anything that cannot be resolved to one bounded absolute path is denied.
+// bpf_d_path is used only from hooks in the kernel's sleepable LSM hook set;
+// fsrules' TestDPathOnlyFromSleepableHooks enforces that for this file.
+#define S_IFMT_ 0170000
+#define S_IFREG_ 0100000
+#define PATH_TAIL (PATH_BYTES-NAME_BYTES-2)
+static __always_inline int mutation_denied(__u64 domain,struct state *p,__u32 operation,__u32 reason)
+{return emit(domain,p?p->generation:0,operation,0,0,reason,0);}
+// Evaluate DIR/NAME for OPERATION. The caller owns the busy flag.
+static __always_inline int child_decision(struct scratch *s,__u64 domain,struct state *p,
+    struct path *dir,struct dentry *dentry,__u32 operation)
+{
+    long length=bpf_d_path(dir,s->path,PATH_BYTES);
+    if(length<=0 || length>PATH_BYTES || s->path[0]!='/')return mutation_denied(domain,p,operation,3);
+    __u32 off=length-1;               // index of the terminating NUL
+    if(off>PATH_TAIL)return mutation_denied(domain,p,operation,3);
+    if(off>1){s->path[off&(PATH_BYTES-1)]='/';off++;}
+    else off=1;                       // dir is "/": the name follows directly
+    const unsigned char *name=BPF_CORE_READ(dentry,d_name.name);
+    if(!name)return mutation_denied(domain,p,operation,3);
+    off&=PATH_BYTES-1;
+    if(off>PATH_TAIL+1)return mutation_denied(domain,p,operation,3);
+    long copied=bpf_probe_read_kernel_str(&s->path[off],NAME_BYTES,name);
+    if(copied<=1)return mutation_denied(domain,p,operation,3);
+    return evaluate(s,domain,p,operation);
+}
+// Decide a single child path. A second path (rename target) can reuse the
+// same scratch because evaluate() finishes before the next call starts.
+static __always_inline int child_check(struct path *dir,struct dentry *dentry,__u32 operation)
+{
+    __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
+    if(!bpf_map_lookup_elem(&owned,&domain))return 0;
+    struct state *p=bpf_map_lookup_elem(&policies,&domain);
+    if(!p || !p->generation)return mutation_denied(domain,p,operation,1);
+    if(bpf_ktime_get_ns()>=p->expires_ns)return mutation_denied(domain,p,operation,2);
+    __u32 zero=0;struct scratch *s=bpf_map_lookup_elem(&scratch,&zero);if(!s)return -1;
+    if(__sync_val_compare_and_swap(&s->busy,0,1))return mutation_denied(domain,p,operation,10);
+    int result=child_decision(s,domain,p,dir,dentry,operation);
+    __sync_lock_test_and_set(&s->busy,0);return result;
+}
+static __always_inline int rename_check(struct path *old_dir,struct dentry *old_dentry,
+    struct path *new_dir,struct dentry *new_dentry)
+{
+    __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
+    if(!bpf_map_lookup_elem(&owned,&domain))return 0;
+    struct state *p=bpf_map_lookup_elem(&policies,&domain);
+    if(!p || !p->generation)return mutation_denied(domain,p,5,1);
+    if(bpf_ktime_get_ns()>=p->expires_ns)return mutation_denied(domain,p,5,2);
+    __u32 zero=0;struct scratch *s=bpf_map_lookup_elem(&scratch,&zero);if(!s)return -1;
+    if(__sync_val_compare_and_swap(&s->busy,0,1))return mutation_denied(domain,p,5,10);
+    // Both the source and the destination name must be renameable.
+    int result=child_decision(s,domain,p,old_dir,old_dentry,5);
+    if(!result)result=child_decision(s,domain,p,new_dir,new_dentry,5);
+    __sync_lock_test_and_set(&s->busy,0);return result;
+}
 struct inode;struct mnt_idmap;struct iattr;
-SEC("lsm/inode_create") int BPF_PROG(fs_create,struct inode *dir,struct dentry *dentry,unsigned short mode,int ret){return ret?ret:mutation(2);}
-SEC("lsm/inode_mkdir") int BPF_PROG(fs_mkdir,struct inode *dir,struct dentry *dentry,unsigned short mode,int ret){return ret?ret:mutation(3);}
-SEC("lsm/inode_mknod") int BPF_PROG(fs_mknod,struct inode *dir,struct dentry *dentry,unsigned short mode,unsigned int dev,int ret){return ret?ret:mutation(2);}
-SEC("lsm/path_unlink") int BPF_PROG(fs_unlink,struct path *dir,struct dentry *dentry,int ret){return ret?ret:mutation(4);}
-SEC("lsm/path_rmdir") int BPF_PROG(fs_rmdir,struct path *dir,struct dentry *dentry,int ret){return ret?ret:mutation(4);}
-SEC("lsm/path_rename") int BPF_PROG(fs_rename,struct path *old_dir,struct dentry *old_dentry,struct path *new_dir,struct dentry *new_dentry,unsigned int flags,int ret){return ret?ret:mutation(5);}
-SEC("lsm/path_link") int BPF_PROG(fs_link,struct dentry *old_dentry,struct path *new_dir,struct dentry *new_dentry,int ret){return ret?ret:mutation(6);}
-SEC("lsm/path_symlink") int BPF_PROG(fs_symlink,struct path *dir,struct dentry *dentry,const char *target,int ret){return ret?ret:mutation(7);}
-SEC("lsm/path_chmod") int BPF_PROG(fs_chmod,struct path *path,unsigned short mode,int ret){return ret?ret:mutation(8);}
-SEC("lsm/path_chown") int BPF_PROG(fs_chown,struct path *path,unsigned int uid,unsigned int gid,int ret){return ret?ret:mutation(8);}
+// path_mknod is not in the kernel's sleepable LSM hook set, so the verifier
+// refuses bpf_d_path here, and with it the whole object. This hook therefore
+// never resolves a path. On 6.8 the kernel calls it from exactly three places:
+//   may_o_create()   open(O_CREAT) of a missing name, from lookup_open(), as
+//                    security_path_mknod(&nd->path, dentry, S_IFREG|mode, 0)
+//                    while the open's walk is published in current->nameidata.
+//   do_mknodat()     mknod(2)/mknodat(2) of any kind, after filename_create()
+//                    has restored current->nameidata (NULL for a syscall).
+//   unix_bind_bsd()  AF_UNIX bind() to a pathname (S_IFSOCK), likewise after
+//                    the walk.
+// Only the first proceeds, and only as far as file_open, which decides CREATE on
+// the new file's path (FMODE_CREATED) and fails the open when it is denied. The
+// kernel has created the empty file by then; the denial is recorded with its
+// path. Every other node is denied: device nodes, FIFOs, socket nodes and
+// regular files made by mknod, because no hook with a path sees them first.
+//
+// The allow rests on kernel internals that are NOT a stable interface. Every
+// condition below must hold, and each one fails closed (the create is denied,
+// so open(O_CREAT) of a new file fails with EPERM) if a kernel changes it:
+//   1. mode is S_IFREG and dev is 0 (may_o_create passes op->mode|S_IFREG, 0);
+//   2. current->nameidata is non-NULL: the open's walk is published
+//      (set_nameidata in do_filp_open) and do_mknodat/unix_bind_bsd run after
+//      restore_nameidata;
+//   3. that walk carries the open intent LOOKUP_OPEN|LOOKUP_CREATE (0x100|0x200,
+//      include/linux/namei.h), which open_last_lookups() ORs in from
+//      build_open_flags() for O_CREAT and filename_create() never sets;
+//   4. dir is that walk's own parent path (&current->nameidata->path), the
+//      argument lookup_open() passes to may_o_create();
+//   5. the syscall in progress (task_pt_regs(current)->orig_ax) is x86-64
+//      open (2), creat (85), openat (257) or openat2 (437). mknod (133) and
+//      mknodat (259) never match, whatever nameidata holds; a 32-bit or x32
+//      task and io_uring do not match either and are denied. A kernel open
+//      made in a task's own context is not excluded: a core dump written while
+//      orig_ax still holds an open-family number (a fatal signal delivered as
+//      such a syscall returns) can pass 1 to 5, and then file_open still
+//      decides CREATE on the core file's path like any open(O_CREAT).
+// Conditions 2 to 4 are internal; 5 is the syscall ABI and bounds a change to
+// them: a kernel that left nameidata published during mknod(2) still cannot
+// pass 5. Re-verify 1 to 5, FMODE_CREATED (0x100000) and the sleepable hook set
+// on every new kernel (docs/QUALIFICATION.md lists the checklist); the kit's
+// allow-create and deny-mknod-regular probes exercise both sides.
+#define LOOKUP_OPEN_ 0x0100
+#define LOOKUP_CREATE_ 0x0200
+#define NR_OPEN_ 2
+#define NR_CREAT_ 85
+#define NR_OPENAT_ 257
+#define NR_OPENAT2_ 437
+static __always_inline int open_creates(struct path *dir,struct task_struct *task)
+{
+    struct nameidata *nd=BPF_CORE_READ(task,nameidata);
+    if(!nd)return 0;
+    if((BPF_CORE_READ(nd,flags)&(LOOKUP_OPEN_|LOOKUP_CREATE_))!=(LOOKUP_OPEN_|LOOKUP_CREATE_))return 0;
+    if((__u64)dir!=(__u64)nd+bpf_core_field_offset(struct nameidata,path))return 0;
+    struct pt_regs *regs=(struct pt_regs *)bpf_task_pt_regs(task);
+    if(!regs)return 0;
+    unsigned long nr=BPF_CORE_READ(regs,orig_ax);
+    return nr==NR_OPEN_ || nr==NR_CREAT_ || nr==NR_OPENAT_ || nr==NR_OPENAT2_;
+}
+SEC("lsm/path_mknod") int BPF_PROG(fs_create,struct path *dir,struct dentry *dentry,unsigned short mode,unsigned int dev,int ret)
+{
+    if(ret)return ret;
+    __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
+    if(!bpf_map_lookup_elem(&owned,&domain))return 0;
+    struct state *p=bpf_map_lookup_elem(&policies,&domain);
+    if(!p || !p->generation)return mutation_denied(domain,p,CREATE,1);
+    if(bpf_ktime_get_ns()>=p->expires_ns)return mutation_denied(domain,p,CREATE,2);
+    struct task_struct *task=(void *)bpf_get_current_task_btf();
+    if((mode&S_IFMT_)==S_IFREG_ && !dev && open_creates(dir,task))return 0;
+    return mutation_denied(domain,p,CREATE,7);
+}
+SEC("lsm/path_mkdir") int BPF_PROG(fs_mkdir,struct path *dir,struct dentry *dentry,unsigned short mode,int ret){return ret?ret:child_check(dir,dentry,3);}
+SEC("lsm/path_unlink") int BPF_PROG(fs_unlink,struct path *dir,struct dentry *dentry,int ret){return ret?ret:child_check(dir,dentry,4);}
+SEC("lsm/path_rmdir") int BPF_PROG(fs_rmdir,struct path *dir,struct dentry *dentry,int ret){return ret?ret:child_check(dir,dentry,4);}
+SEC("lsm/path_rename") int BPF_PROG(fs_rename,struct path *old_dir,struct dentry *old_dentry,struct path *new_dir,struct dentry *new_dentry,unsigned int flags,int ret)
+{return ret?ret:rename_check(old_dir,old_dentry,new_dir,new_dentry);}
+// A hard link exposes an existing inode under a new name, and this hook has no
+// path for the old inode. A managed domain therefore never creates one.
+SEC("lsm/path_link") int BPF_PROG(fs_link,struct dentry *old_dentry,struct path *new_dir,struct dentry *new_dentry,int ret)
+{if(ret)return ret;__u64 domain=bpf_get_current_ancestor_cgroup_id(1);return bpf_map_lookup_elem(&owned,&domain)?mutation_denied(domain,0,6,7):0;}
+SEC("lsm/path_symlink") int BPF_PROG(fs_symlink,struct path *dir,struct dentry *dentry,const char *target,int ret){return ret?ret:child_check(dir,dentry,7);}
+SEC("lsm/path_chmod") int BPF_PROG(fs_chmod,struct path *path,unsigned short mode,int ret){return ret?ret:check_path(path,8);}
+SEC("lsm/path_chown") int BPF_PROG(fs_chown,struct path *path,unsigned int uid,unsigned int gid,int ret){return ret?ret:check_path(path,8);}
 SEC("lsm/path_truncate") int BPF_PROG(fs_truncate,struct path *path,int ret){return ret?ret:check_path(path,WRITE);}
-SEC("lsm/file_ioctl") int BPF_PROG(fs_ioctl,struct file *file,unsigned int cmd,unsigned long arg,int ret){return ret?ret:mutation(8);}
+// Only terminal-independent descriptor queries are allowed without a rule:
+// FIONREAD, FIONBIO, FIONCLEX, FIOCLEX and TCGETS. All other requests may change
+// device or filesystem state, so a managed domain is denied them.
+SEC("lsm/file_ioctl") int BPF_PROG(fs_ioctl,struct file *file,unsigned int cmd,unsigned long arg,int ret)
+{
+    if(ret)return ret;
+    __u64 domain=bpf_get_current_ancestor_cgroup_id(1);
+    if(!bpf_map_lookup_elem(&owned,&domain))return 0;
+    if(cmd==0x541B || cmd==0x5421 || cmd==0x5450 || cmd==0x5451 || cmd==0x5401)return 0;
+    return mutation_denied(domain,0,8,7);
+}
 char LICENSE[] SEC("license")="GPL";

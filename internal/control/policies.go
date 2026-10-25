@@ -245,6 +245,7 @@ func (s *Store) DecideRequest(op Operation, id, match string, in Decision) (any,
 		if err != nil {
 			return nil, err
 		}
+		op.Version = q.RequestedVersion
 		if match == "" {
 			return nil, fail(428, "precondition_required", "Supply the request If-Match revision.")
 		}

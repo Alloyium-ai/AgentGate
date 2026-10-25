@@ -142,6 +142,11 @@ func (b *Backend) Stop(ctx context.Context, binding lifecycle.Binding, reason st
 		if err = b.persistTerminal(r, *r.terminal); err != nil {
 			return *r.stopped, err
 		}
+		if b.config.PilotTarget != nil && r.document.Network != nil && r.document.Network.Pilot != nil && r.streams.Directory != "" {
+			if err = b.artifacts.Remove(r.binding); err != nil {
+				return *r.stopped, err
+			}
+		}
 		b.evict(r)
 		return copyValue(*r.stopped), nil
 	}
@@ -278,8 +283,16 @@ func (b *Backend) Stop(ctx context.Context, binding lifecycle.Binding, reason st
 	}
 	sum := sha256.Sum256(output)
 	outputDigest := hex.EncodeToString(sum[:])
+	stderrDigest := ""
+	if r.manifest.AgentKind == "ssh" {
+		stderrSum := sha256.Sum256(diagnostic)
+		stderrDigest = hex.EncodeToString(stderrSum[:])
+	}
 	state := terminalState(reason, r.exitCode)
 	terminal := lifecycle.Terminal{Protocol: lifecycle.TerminalProtocol, Binding: copyValue(r.binding), State: state, ExitCode: r.exitCode, DomainEmpty: true, RightsRemoved: true, EvidenceDigest: out.Digest, Output: output, OutputDigest: outputDigest, EvidenceVerdict: "INCOMPLETE"}
+	if stderrDigest != "" {
+		terminal.Stderr, terminal.StderrDigest = diagnostic, stderrDigest
+	}
 	if r.writer != nil {
 		if e := r.control(cleanup, "stopped", struct {
 			Evidence         lifecycle.Evidence
@@ -292,7 +305,7 @@ func (b *Backend) Stop(ctx context.Context, binding lifecycle.Binding, reason st
 			auditErrors = append(auditErrors, e)
 		}
 		if len(auditErrors) == 0 && available && lost == 0 && r.authorization != nil {
-			_, e := r.writer.Seal(cleanup, jobaudit.Terminal{State: state, ExitCode: r.exitCode, Empty: true, RightsRemoved: true, OutputDigest: outputDigest, CountersAvailable: true}, b.config.Signer)
+			_, e := r.writer.Seal(cleanup, jobaudit.Terminal{State: state, ExitCode: r.exitCode, Empty: true, RightsRemoved: true, OutputDigest: outputDigest, StderrDigest: stderrDigest, CountersAvailable: true}, b.config.Signer)
 			if e == nil {
 				receipt, e := b.config.Authority.Countersign(cleanup, r.writer.Export())
 				if e == nil {
@@ -315,6 +328,11 @@ func (b *Backend) Stop(ctx context.Context, binding lifecycle.Binding, reason st
 	trace.phase("terminal-persist", err)
 	if err != nil {
 		return out, err
+	}
+	if b.config.PilotTarget != nil && r.document.Network != nil && r.document.Network.Pilot != nil && r.streams.Directory != "" {
+		if err = b.artifacts.Remove(r.binding); err != nil {
+			return out, err
+		}
 	}
 	b.evict(r)
 	return out, nil
@@ -386,11 +404,11 @@ func (b *Backend) persistRecovered(ctx context.Context, evidence lifecycle.Evide
 	if !errors.Is(readErr, os.ErrNotExist) {
 		return evidence, readErr
 	}
-	var output []byte
+	var output, diagnostic []byte
 	if b.artifacts != nil {
 		// The domain is empty. Preserve bounded owned output even though the
 		// lost reader prevents a complete audit or a recovered exit status.
-		output, _, _ = b.artifacts.Outputs(evidence.Binding)
+		output, diagnostic, _ = b.artifacts.Outputs(evidence.Binding)
 	}
 	sum := sha256.Sum256(output)
 	state := terminalState(reason, -1)
@@ -398,6 +416,10 @@ func (b *Backend) persistRecovered(ctx context.Context, evidence lifecycle.Evide
 		state = "aborted"
 	}
 	terminal := lifecycle.Terminal{Protocol: lifecycle.TerminalProtocol, Binding: copyValue(evidence.Binding), State: state, ExitCode: -1, DomainEmpty: true, RightsRemoved: true, EvidenceDigest: evidence.Digest, Output: output, OutputDigest: hex.EncodeToString(sum[:]), EvidenceVerdict: "INCOMPLETE"}
+	if len(diagnostic) > 0 {
+		stderrSum := sha256.Sum256(diagnostic)
+		terminal.Stderr, terminal.StderrDigest = diagnostic, hex.EncodeToString(stderrSum[:])
+	}
 	r := &run{binding: copyValue(evidence.Binding), reservation: domainstore.Reservation{Name: name}, stopped: &evidence}
 	return evidence, b.persistTerminal(r, terminal)
 }

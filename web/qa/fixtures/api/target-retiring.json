@@ -1,0 +1,45 @@
+{
+  "agent_version": "0.1.0",
+  "capabilities": [
+    "docker",
+    "live-mounts",
+    "snapshot-mounts",
+    "brokered-secrets",
+    "pocpolicy-v2"
+  ],
+  "created_at": "2026-10-25T03:40:04.879939506Z",
+  "created_by": "oidc:ada",
+  "encryption_key": "_yZL57CxQaDjUqJXP4lsmuegTL8VNOK2U9j57wSONBk",
+  "heartbeat_seconds": 10,
+  "host_clock_measured_at": "2026-10-25T03:40:04.558Z",
+  "host_clock_skew_ms": 0,
+  "host_key_id": "ed25519:d4f53e46dafa9401bda67464f263bd65",
+  "host_public_key": "UXWLL08DNYZ6D7BAcSVFQRjOlMw7sRKOSX4vAFhSdE4",
+  "hostname": "host-1",
+  "id": "fe854bf4bbcd6484d2d728ea93059aa0",
+  "job_key_id": "ed25519:06c7f62c4116d6ea1861ca7b855e2d14",
+  "kernel_verified": false,
+  "last_seen_at": "2026-10-25T03:40:04.558Z",
+  "mount_roots": [],
+  "name": "old-host",
+  "online": true,
+  "retiring_since": "2026-10-25T03:40:04.912496591Z",
+  "revision": 5,
+  "seal_key": {
+    "record": {
+      "format": "agentgate.sealkey.v1",
+      "host_key": "SHA256:1PU+Rtr6lAG9pnRk8mO9ZYMrn1gBDcyRdDG/8dqag0c",
+      "key_id": "08a9cf700364a48c1fb50d8f58b421c4e0a56ae21b305afe351421172091e9b6",
+      "not_after": "2026-11-24T03:40:04Z",
+      "not_before": "2026-10-25T03:40:04Z",
+      "public_key": "_yZL57CxQaDjUqJXP4lsmuegTL8VNOK2U9j57wSONBk",
+      "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
+      "target_id": "fe854bf4bbcd6484d2d728ea93059aa0"
+    },
+    "signature": "rCX09iZVtscZ5U_FZAy81orpSebamdHjEjsUtkIIouzRbNGqchofKvuXE8U8FXDlSL5Kly06Y3GKELEZ1MOqCQ"
+  },
+  "seal_key_id": "08a9cf700364a48c1fb50d8f58b421c4e0a56ae21b305afe351421172091e9b6",
+  "seal_key_not_after": "2026-11-24T03:40:04Z",
+  "state": "retiring",
+  "updated_at": "2026-10-25T03:40:04.912496591Z"
+}

@@ -1,0 +1,90 @@
+{
+  "host_ed25519_seed": "1111111111111111111111111111111111111111111111111111111111111111",
+  "seal_x25519_private": "2222222222222222222222222222222222222222222222222222222222222222",
+  "target_id": "vector-target",
+  "not_before": "2026-10-01T00:00:00Z",
+  "record": {
+    "record": {
+      "format": "agentgate.sealkey.v1",
+      "target_id": "vector-target",
+      "key_id": "1021e9a76089f83afc494598d7194f35ba9753e033bc2314057f5c3fd396014e",
+      "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
+      "public_key": "D6poTtKIZ7l_Smot7l34zpdOdrcBjj8iocTPJnhXDyA",
+      "not_before": "2026-10-01T00:00:00Z",
+      "not_after": "2026-10-31T00:00:00Z",
+      "host_key": "SHA256:ELpoLIrRNROXHotWiBqri9cCu4B3luyoGTLHNalNbm0"
+    },
+    "signature": "f6J2LDgmAjYun1tK2DQRuSf7Rb15DNsoQjpElbotmc-92-7AO_ErwIUa5nteqM-DaCQ3UfsnN2VD2ftp3FD3BA"
+  },
+  "policy": {
+    "upstreams": [
+      {
+        "host": "api.example.test",
+        "port": 443,
+        "base_path": "",
+        "private_addresses": []
+      },
+      {
+        "host": "eu.api.example.test",
+        "port": 8443,
+        "base_path": "",
+        "private_addresses": []
+      }
+    ],
+    "header": "authorization",
+    "scheme": "Bearer",
+    "username": "",
+    "extra_headers": [
+      {
+        "name": "anthropic-version",
+        "value": "2023-06-01"
+      }
+    ],
+    "forward_headers": [
+      "git-protocol"
+    ],
+    "rules": [
+      {
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "path": "/v1/messages",
+        "match": "exact"
+      },
+      {
+        "methods": [
+          "GET"
+        ],
+        "path": "/v1/models",
+        "match": "prefix"
+      }
+    ],
+    "wildcard": false
+  },
+  "policy_digest": "b513caaa0da3387f19ac0448847c2c39751c1fa95996911ee851095eeb737634",
+  "envelope": {
+    "format": "agentgate.secretseal.v2",
+    "target_id": "vector-target",
+    "name": "vector",
+    "version": 1790899200000,
+    "key_id": "1021e9a76089f83afc494598d7194f35ba9753e033bc2314057f5c3fd396014e",
+    "nonce": "24fd0ae46e942082b5b41766ef7d6998",
+    "policy_digest": "b513caaa0da3387f19ac0448847c2c39751c1fa95996911ee851095eeb737634",
+    "sealed": "0KUwfJNtbI49lQQsIdAs3MYe-JFAweg0gVGsTtswGEhd9rx66fgbUnedOlp0UaR2gCxdw3g4dsYdzMyrdzAtVFOD08jHhyx0Bw"
+  },
+  "plaintext": "sk-test-FAKE-vector-value",
+  "fingerprint_key": "3333333333333333333333333333333333333333333333333333333333333333",
+  "fingerprint": "sfp1_9ae7803e90631f326ea37d37a008d162",
+  "receipt": {
+    "format": "agentgate.secretseal.receipt.v2",
+    "target_id": "vector-target",
+    "name": "vector",
+    "version": 1790899200000,
+    "key_id": "1021e9a76089f83afc494598d7194f35ba9753e033bc2314057f5c3fd396014e",
+    "nonce": "24fd0ae46e942082b5b41766ef7d6998",
+    "policy_digest": "b513caaa0da3387f19ac0448847c2c39751c1fa95996911ee851095eeb737634",
+    "fingerprint": "sfp1_9ae7803e90631f326ea37d37a008d162",
+    "tag": "2FSv-WGbZ_8OfNkhX9QKeFvJiBnphwLWhFfnxsP_hcU"
+  }
+}

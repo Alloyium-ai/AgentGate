@@ -96,6 +96,12 @@ func verifyActorBinding(request qualification.Request, result qualification.Resu
 	return nil
 }
 func verifyCandidateStreams(r candidateReceipt) ([]syscallrules.Event, []kernel.Event, error) {
+	childPID := uint32(0)
+	for _, record := range r.Records {
+		if record.ID == 50 && record.Result > 0 && record.Error == 0 {
+			childPID = uint32(record.Result)
+		}
+	}
 	version := syscallrules.Format
 	if samples := r.Streams["syscalls"]; len(samples) > 0 && len(samples[0]) == 104 {
 		version = syscallrules.LegacyFormat
@@ -120,7 +126,27 @@ func verifyCandidateStreams(r candidateReceipt) ([]syscallrules.Event, []kernel.
 		if decode == nil {
 			return nil, nil, errors.New("qualification raw ABI decoder is unavailable")
 		}
-		for i, raw := range r.Streams[name] {
+		// Kernel events from different CPUs can reach the reader out of
+		// sequence. Keep the signed raw stream unchanged, then verify the
+		// complete zero-loss sequence set in kernel counter order.
+		ordered := append([][]byte(nil), r.Streams[name]...)
+		for _, raw := range ordered {
+			if len(raw) < 8 {
+				return nil, nil, errors.New("qualification raw event lacks a sequence")
+			}
+		}
+		slices.SortFunc(ordered, func(a, b []byte) int {
+			left, right := binary.LittleEndian.Uint64(a), binary.LittleEndian.Uint64(b)
+			switch {
+			case left < right:
+				return -1
+			case left > right:
+				return 1
+			default:
+				return 0
+			}
+		})
+		for i, raw := range ordered {
 			fact, err := decode(raw)
 			if err != nil {
 				return nil, nil, err
@@ -136,8 +162,10 @@ func verifyCandidateStreams(r candidateReceipt) ([]syscallrules.Event, []kernel.
 				if e != nil {
 					return nil, nil, e
 				}
-				if event.TGID != uint32(r.Active.PID) || event.TID != uint32(r.Active.PID) || event.UID != 65534 || event.Cgroup != r.DomainID {
-					return nil, nil, errors.New("qualification syscall actor differs")
+				childExit := childPID != 0 && event.Type == syscallrules.TaskExit && event.TGID == childPID && event.TID == childPID && event.ParentTGID == uint32(r.Active.PID) && event.ExitCode == 90<<8
+				childCloneReturn := childPID != 0 && event.Type == syscallrules.Result && event.SyscallID == unix.SYS_CLONE && event.Result == 0 && event.TGID == childPID && event.TID == childPID && event.ParentTGID == uint32(r.Active.PID)
+				if !childExit && !childCloneReturn && (event.TGID != uint32(r.Active.PID) || event.TID != uint32(r.Active.PID)) || event.UID != 65534 || event.Cgroup != r.DomainID {
+					return nil, nil, fmt.Errorf("qualification syscall actor differs: type=%d syscall=%d result=%d tgid=%d tid=%d parent=%d uid=%d cgroup=%d", event.Type, event.SyscallID, event.Result, event.TGID, event.TID, event.ParentTGID, event.UID, event.Cgroup)
 				}
 				if err := verifyExpiryEvent(r, event); err != nil {
 					return nil, nil, err
@@ -203,11 +231,25 @@ func verifyRecords(request qualification.Request, r candidateReceipt) (map[uint3
 	if r.Protocol == candidateReceiptVersion {
 		expected = append(expected, 2, 3, 4)
 	}
+	if request.Document.Network != nil && request.Document.Network.Pilot != nil {
+		// The fixed actor probes only its own IPv4 and IPv6 loopback endpoints.
+		// These records precede the ordinary scalar denial sequence.
+		expected = append(expected, 60, 61, 62, 63)
+	}
 	expected = append(expected, 10, 11, 12)
 	if r.Protocol == candidateReceiptVersion {
-		expected = append(expected, 50, 51, 52)
+		expected = append(expected, 50)
+		if slices.Contains(request.Document.Runtime.Seccomp.AllowSyscalls, "clone") {
+			expected = append(expected, 53, 54)
+		}
+		expected = append(expected, 51, 52)
 	}
-	expected = append(expected, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
+	expected = append(expected, 13, 14)
+	pipeCreate := slices.Contains(request.Document.Runtime.Seccomp.AllowSyscalls, "pipe2") && request.Document.Runtime.IPC != nil && slices.Contains(request.Document.Runtime.IPC.Pipes, "create")
+	if pipeCreate {
+		expected = append(expected, 28, 29, 30, 31, 32, 33, 34, 35, 36)
+	}
+	expected = append(expected, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
 	heap := request.Document.Runtime.Memory != nil && request.Document.Runtime.Memory.Heap == "allow" && slices.Contains(request.Document.Runtime.Seccomp.AllowSyscalls, "brk")
 	if heap {
 		expected = append(expected, 25, 27, 26)
@@ -225,6 +267,42 @@ func verifyRecords(request qualification.Request, r candidateReceipt) (map[uint3
 			return nil, errors.New("qualification actor raw identity or operation differs")
 		}
 		switch record.ID {
+		case 60:
+			if record.Result < 0 || record.Error != 0 {
+				return nil, errors.New("qualification owned IPv4 socket creation differs")
+			}
+		case 61:
+			if record.Result != -1 || record.Error != uint32(unix.EPERM) {
+				return nil, errors.New("qualification owned IPv4 loopback denial differs")
+			}
+		case 62:
+			if record.Result < 0 && (record.Result != -1 || record.Error != uint32(unix.EPERM)) || record.Result >= 0 && record.Error != 0 {
+				return nil, errors.New("qualification owned IPv6 socket creation differs")
+			}
+		case 63:
+			if out[62].Result < 0 {
+				if record.Result != -2 || record.Error != 0 {
+					return nil, errors.New("qualification owned IPv6 socket denial marker differs")
+				}
+			} else if record.Result != -1 || record.Error != uint32(unix.EPERM) {
+				return nil, errors.New("qualification owned IPv6 loopback denial differs")
+			}
+		case 50:
+			if slices.Contains(request.Document.Runtime.Seccomp.AllowSyscalls, "clone") {
+				if record.Result <= 0 || record.Result > int64(^uint32(0)) || record.Result == int64(r.Active.PID) || record.Error != 0 {
+					return nil, errors.New("qualification clone child identity differs")
+				}
+			} else if record.Result != -1 || record.Error != uint32(unix.EPERM) {
+				return nil, errors.New("qualification clone denial differs")
+			}
+		case 53:
+			if record.Result != out[50].Result || record.Error != 0 {
+				return nil, errors.New("qualification child wait differs")
+			}
+		case 54:
+			if record.Result != 90<<8 || record.Error != 0 {
+				return nil, errors.New("qualification child exit status differs")
+			}
 		case 2:
 			if record.Result != int64(r.ManagerPID) || record.Error != 0 {
 				return nil, errors.New("the release signal sender PID differs")
@@ -244,6 +322,38 @@ func verifyRecords(request qualification.Request, r candidateReceipt) (map[uint3
 		case 12:
 			if record.Result != -1 || record.Error != uint32(unix.ENOSYS) {
 				return nil, errors.New("qualification clone3 denial differs")
+			}
+		case 14:
+			if pipeCreate {
+				if record.Result != 0 || record.Error != 0 {
+					return nil, errors.New("qualification pipe2 creation differs")
+				}
+			} else if record.Result != -1 || record.Error != uint32(unix.EPERM) {
+				return nil, errors.New("qualification pipe2 denial differs")
+			}
+		case 28, 31:
+			if record.Result != 0 || record.Error != 0 {
+				return nil, fmt.Errorf("qualification pipe descriptor stat differs: operation=%d result=%d errno=%d", record.ID, record.Result, record.Error)
+			}
+		case 29, 32:
+			if record.Result&unix.S_IFMT != unix.S_IFIFO || record.Error != 0 {
+				return nil, errors.New("qualification created object is not a pipe")
+			}
+		case 30:
+			if record.Result <= 0 || record.Error != 0 {
+				return nil, errors.New("qualification pipe inode differs")
+			}
+		case 33:
+			if record.Result != out[30].Result || record.Error != 0 {
+				return nil, errors.New("qualification pipe endpoints have different inodes")
+			}
+		case 34, 35:
+			if record.Result != 1 || record.Error != 0 {
+				return nil, errors.New("qualification pipe byte transfer differs")
+			}
+		case 36:
+			if record.Result != 0x5a || record.Error != 0 {
+				return nil, errors.New("qualification pipe payload differs")
 			}
 		case 24:
 			if heap {
@@ -293,8 +403,53 @@ func observedMemory(events []kernel.Event, r candidateReceipt, minimum int) bool
 	return count >= minimum
 }
 
+func observedPipeUse(events []kernel.Event, r candidateReceipt, hook uint32) bool {
+	for _, event := range events {
+		if event.Hook == hook && event.Allowed == 1 && event.Cgroup == r.DomainID &&
+			event.Generation == r.Generation && event.PID == uint32(r.Active.PID) &&
+			event.UID == 65534 && event.MonoNS >= r.Active.MonoNS && event.MonoNS < r.DeadlineNS {
+			return true
+		}
+	}
+	return false
+}
+
+// The same-policy fixed actor is measured both while active and after its
+// child has exited. These are process-status observations only; they do not
+// prove privilege escalation denial or the admitted Docker workload.
+func managedUnprivilegedReadback(request qualification.Request, r candidateReceipt) bool {
+	return request.Document.Runtime.Profile == "managed-unprivileged.v1" &&
+		request.Document.Runtime.UID == 65534 && request.Document.Runtime.GID == 65534 &&
+		len(request.Document.Runtime.SupplementaryGroups) == 0 &&
+		len(request.Document.Runtime.Capabilities) == 0 && request.Document.Runtime.NoNewPrivileges &&
+		validateProcess(r.Active, false, "2") == nil && validateProcess(r.FinalActive, false, "2") == nil &&
+		memberSnapshot(r.Active, r.Domain) && memberSnapshot(r.FinalActive, r.Domain)
+}
+
 func candidateCoverage(request qualification.Request, result qualification.Result, r candidateReceipt, calls []syscallrules.Event, files []kernel.Event, records map[uint32]scalarRecord) []qualification.Coverage {
 	cases := positiveCases(request, r, calls, files)
+	for capability, names := range positiveNetworkCases(request, r, calls) {
+		cases[capability] = append(cases[capability], names...)
+	}
+	for capability, names := range ownedLoopbackDenialCases(request, r, calls, records) {
+		cases[capability] = append(cases[capability], names...)
+	}
+	pilotDirectAddressBoundaryCases(request, r, cases)
+	for capability, names := range deniedIPv6SocketCases(request, r, calls, records) {
+		cases[capability] = append(cases[capability], names...)
+	}
+	pilotIPv6FamilyBoundaryCases(request, r, cases)
+	for capability, names := range allowedIPv4SocketCases(request, r, calls, records) {
+		cases[capability] = append(cases[capability], names...)
+	}
+	if managedUnprivilegedReadback(request, r) {
+		cases["runtime.managed-unprivileged.v1"] = []string{
+			"uid-gid-groups-readback", "capabilities-empty-readback", "no-new-privileges-readback",
+		}
+	}
+	if slices.Contains(request.Document.Runtime.Seccomp.AllowSyscalls, "clone") {
+		cases["process.job-domain.v1"] = append(cases["process.job-domain.v1"], "child-in-same-root")
+	}
 	add := func(capability, name string, number int64) {
 		if observedCall(calls, r, number, -int64(unix.EPERM)) {
 			cases[capability] = append(cases[capability], name)
@@ -307,13 +462,27 @@ func candidateCoverage(request qualification.Request, result qualification.Resul
 	}
 	add("runtime.explicit-pipes.v1", "ungranted-pipe-create-denied", unix.SYS_PIPE)
 	add("runtime.explicit-pipes.v1", "ungranted-pipe2-create-denied", unix.SYS_PIPE2)
+	if record, ok := records[14]; ok && record.Result == 0 && record.Error == 0 &&
+		successfulAfterFilter(calls, r, installedFilterSequence(r, calls), unix.SYS_PIPE2, 0) && records[36].Result == 0x5a {
+		cases["runtime.explicit-pipes.v1"] = append(cases["runtime.explicit-pipes.v1"], "explicit-allow:"+digestJSON("create"))
+		if ipc := request.Document.Runtime.IPC; ipc != nil && records[34].Result == 1 && records[35].Result == 1 {
+			for _, proof := range []struct {
+				operation string
+				hook      uint32
+			}{{"read", 16}, {"write", 17}} {
+				if slices.Contains(ipc.Pipes, proof.operation) && observedPipeUse(files, r, proof.hook) {
+					cases["runtime.explicit-pipes.v1"] = append(cases["runtime.explicit-pipes.v1"], "explicit-allow:"+digestJSON(proof.operation))
+				}
+			}
+		}
+	}
 	add("runtime.explicit-eventfds.v1", "legacy-eventfd-denied", unix.SYS_EVENTFD)
 	add("runtime.explicit-eventfds.v1", "ungranted-eventfd2-denied", unix.SYS_EVENTFD2)
 	add("runtime.explicit-signals.v1", "ungranted-kill-denied", unix.SYS_KILL)
 	add("runtime.explicit-signals.v1", "ungranted-tkill-denied", unix.SYS_TKILL)
 	add("runtime.explicit-signals.v1", "ungranted-tgkill-denied", unix.SYS_TGKILL)
 	if observedMemory(files, r, 2) && observedCall(calls, r, unix.SYS_MMAP, -int64(unix.EPERM)) {
-		cases["runtime.explicit-memory.v1"] = []string{"anonymous-execute-denied", "writable-execute-denied"}
+		cases["runtime.explicit-memory.v1"] = append(cases["runtime.explicit-memory.v1"], "anonymous-execute-denied", "writable-execute-denied")
 	}
 	if heap, ok := records[25]; ok && observedCall(calls, r, unix.SYS_BRK, heap.Result) {
 		cases["runtime.explicit-memory.v1"] = append(cases["runtime.explicit-memory.v1"], "explicit-allow:"+digestJSON("heap"))
@@ -354,7 +523,10 @@ func (a *candidateDenial) verify(request qualification.Request, result qualifica
 	if err = verifyActorBinding(request, result, r); err != nil {
 		return nil, err
 	}
-	plan, err := enforcement.Compile(request.Document, r.DomainID, r.Generation, result.StartedMonoNS, r.DeadlineNS, nil)
+	if err := a.verifyCandidateNetwork(request, r); err != nil {
+		return nil, err
+	}
+	plan, err := enforcement.Compile(request.Document, r.DomainID, r.Generation, result.StartedMonoNS, r.DeadlineNS, r.Network.Leases)
 	if err != nil || plan.Digest() != r.PlanSHA256 || plan.Syscalls().Digest() != r.FilterSHA256 {
 		return nil, errors.New("qualification compiled policy or exact filter differs")
 	}
@@ -375,7 +547,7 @@ func (a *candidateDenial) verify(request qualification.Request, result qualifica
 	if err != nil {
 		return nil, err
 	}
-	if err = verifyNoCreateProjection(request, r, calls); err != nil {
+	if err = verifyProcessProjection(request, r, calls, records); err != nil {
 		return nil, err
 	}
 	if err = verifyBrokerClosure(r, calls); err != nil {

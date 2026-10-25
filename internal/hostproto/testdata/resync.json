@@ -1,0 +1,6 @@
+{
+  "domain": "agentgate.hostd.resync.v1",
+  "key_id": "ed25519:1325b850c2871916eae203f0efc3c898",
+  "payload": "eyJob3N0X2lkIjoiMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ0aW1lc3RhbXBfbXMiOjE3OTAwMDAwMDAwMDAsInJlYXNvbiI6ImNvdW50ZXItbG9zdCJ9",
+  "signature": "zYc50D7qhfbzzse9J_BjaNtIqe7gDNs50wUS76Y8YIMlgCVJ2ONtbCU5K50HoD1BXpAFjOqNqYZTABF9Ts2zBQ"
+}

@@ -1,0 +1,79 @@
+{
+  "invalid_ciphertext": {
+    "body": {
+      "error": {
+        "code": "invalid_ciphertext",
+        "message": "Seal the value with secretseal to the target's published seal key (GET /targets/{id}/seal-key) and send Envelope.Encode()."
+      },
+      "request_id": "35cc291449a1adb80d08bea861bf6691"
+    },
+    "method": "POST",
+    "status": 422
+  },
+  "invalid_secret": {
+    "body": {
+      "error": {
+        "code": "invalid_secret",
+        "message": "Broker injection settings: an extra header names a header the broker never injects."
+      },
+      "request_id": "129d1811163610051dead990b8f3a684"
+    },
+    "method": "POST",
+    "status": 422
+  },
+  "policy_mismatch": {
+    "body": {
+      "error": {
+        "code": "policy_mismatch",
+        "message": "The broker settings (upstreams, header, scheme, username, extra headers, forward headers, rules) differ from the policy sealed in the envelope (fc076f73f3d950c670dd0267fffaffa0f6fa22f8d070abb7e50bce250b606cbb). Seal the value again for exactly these settings."
+      },
+      "request_id": "4e6f50bdebec014addde211ca4333d81"
+    },
+    "method": "POST",
+    "status": 422
+  },
+  "seal_key_changed": {
+    "body": {
+      "error": {
+        "code": "seal_key_changed",
+        "message": "The envelope is sealed to another seal key than the one the target publishes; fetch the seal key again and reseal."
+      },
+      "request_id": "2a3e05d0d2d46ea36240dcfd8b4dccf9"
+    },
+    "method": "POST",
+    "status": 409
+  },
+  "seal_key_missing": {
+    "body": {
+      "error": {
+        "code": "seal_key_unavailable",
+        "message": "The target's host has not published a host-signed seal key yet. Start a current agentgate-hostd on it and wait for its next poll."
+      },
+      "request_id": "dad1d33759ccd94b64e0dd8152d404a8"
+    },
+    "method": "GET",
+    "status": 404
+  },
+  "seal_key_unavailable": {
+    "body": {
+      "error": {
+        "code": "seal_key_unavailable",
+        "message": "The target has not published a host-signed seal key; no envelope can be sealed to it."
+      },
+      "request_id": "5842649a9b5d7854bed4533e4b2cb14d"
+    },
+    "method": "POST",
+    "status": 409
+  },
+  "secret_rules_missing": {
+    "body": {
+      "error": {
+        "code": "secret_rules_missing",
+        "message": "Secret bare-key has no broker rules, so it allows nothing (deny by default). Recreate it with explicit rules, for example [{\"methods\":[\"POST\"],\"path\":\"/v1/messages\",\"match\":\"exact\"}], or with the wildcard [{\"methods\":[\"*\"],\"path\":\"/\"}] to allow every method and path of its upstreams."
+      },
+      "request_id": "74d2c3900a7c61fef8728a6423b332d9"
+    },
+    "method": "POST",
+    "status": 422
+  }
+}

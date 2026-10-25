@@ -1,0 +1,36 @@
+Launch plan for repo-fixer (dry run: nothing was created)
+  target         local (6f1d2c3b4a5968778695a4b3c2d1e0f1)
+  access         profile python-dev version 3 (digest ffffffffffffffff)
+  mode           session, lifetime 1h, expires 2026-10-24T13:00:00Z if queued now (the lifetime starts when the launch is queued)
+  image          agentgate-coding@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  command        claude --print "fix the failing tests"
+  workdir        /var/lib/agentgate/workspace
+  spec digest    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  policy digest  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+What this agent may do
+  network           default deny; IPv6 deny
+  web               https to public addresses
+  dns               1.1.1.1
+  taskboard         none (a launch with secrets reaches only its broker)
+  read              /usr, /lib, /var/lib/agentgate/mounts/repo
+  write             /var/lib/agentgate/workspace, /tmp
+  execute           /usr/bin, /usr/local/bin
+  denied            /etc/shadow
+  devices           /dev/null, /dev/urandom
+  signals           SIGTERM (own process tree only)
+  anonymous exec    no
+  mount repo        /srv/repos/app -> /var/lib/agentgate/mounts/repo (read-only, live)
+  broker            172.30.7.2:8443 on network 172.30.7.0/29 (agent at 172.30.7.3); the one private endpoint the agent may reach
+                    a dry run shows an example endpoint; the created launch is assigned its own
+  secret anthropic  $ANTHROPIC_BASE_URL = http://172.30.7.2:8443/anthropic -> api.anthropic.com (header x-api-key; only POST /v1/messages (exact); sets anthropic-version; value sfp1_abababababababababababababababab; sealed policy 836c14d9fbfa4fb15f01683ef39890f7cefac72502ef6b3653d1c4bd38a19041; the value never enters the sandbox)
+
+Approval: required
+  - brokered secrets anthropic
+  - live host folder repo
+  - the profile requires approval
+  A different human with the approver role decides it (agentgate approve ID); never the requester.
+
+Notices
+  - the agent reaches its secrets only through the broker at 172.30.7.2:8443; the taskboard TCP endpoint is not allowed in this launch
+  - kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel

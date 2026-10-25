@@ -1,0 +1,52 @@
+{
+  "agent_version": "0.1.0",
+  "capabilities": [
+    "docker",
+    "live-mounts",
+    "snapshot-mounts",
+    "brokered-secrets",
+    "pocpolicy-v2"
+  ],
+  "created_at": "2026-10-25T03:40:04.613268808Z",
+  "created_by": "oidc:ada",
+  "encryption_key": "boZ_NT7tuVt3A3kYpdLTW6XglIubURPfTqbyuSTWJVs",
+  "heartbeat_seconds": 10,
+  "host_clock_measured_at": "2026-10-25T03:40:04.558Z",
+  "host_clock_skew_ms": 0,
+  "host_key_id": "ed25519:2717c711dbee3951d24420a69eed929b",
+  "host_mount_roots": [
+    "/srv/repos/app"
+  ],
+  "host_public_key": "KzVeSPywETwEb42Af8UyA_6vvi1kLMqBKMbleaFwmkI",
+  "hostname": "host-1",
+  "id": "13bb5542b7837790b18e92e891fbe811",
+  "job_key_id": "ed25519:06c7f62c4116d6ea1861ca7b855e2d14",
+  "kernel_verified": false,
+  "last_seen_at": "2026-10-25T03:40:04.558Z",
+  "mount_roots": [
+    "/srv/repos"
+  ],
+  "mount_roots_not_on_host": [
+    "/srv/repos"
+  ],
+  "name": "local",
+  "online": true,
+  "revision": 5,
+  "seal_key": {
+    "record": {
+      "format": "agentgate.sealkey.v1",
+      "host_key": "SHA256:JxfHEdvuOVHSRCCmnu2Smzr4WdZyvWtjcLQMmc2CsNQ",
+      "key_id": "0aedd7a8d47501a3b570904d7f738da89b64ed55c1fd251d3d9b8e2affe3a8b7",
+      "not_after": "2026-11-24T03:40:04Z",
+      "not_before": "2026-10-25T03:40:04Z",
+      "public_key": "boZ_NT7tuVt3A3kYpdLTW6XglIubURPfTqbyuSTWJVs",
+      "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
+      "target_id": "13bb5542b7837790b18e92e891fbe811"
+    },
+    "signature": "lC5WtR2bL1jlINHaa7LlYWa73PTftZ3rHJW16ZiGQsuNkLN90R861dLMP6IxqIDq81RbxTrtCal-d6sn_wIIAA"
+  },
+  "seal_key_id": "0aedd7a8d47501a3b570904d7f738da89b64ed55c1fd251d3d9b8e2affe3a8b7",
+  "seal_key_not_after": "2026-11-24T03:40:04Z",
+  "state": "active",
+  "updated_at": "2026-10-25T03:40:04.685115137Z"
+}

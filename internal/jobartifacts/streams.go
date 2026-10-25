@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Store struct {
@@ -53,6 +54,94 @@ func (s *Store) Paths(binding lifecycle.Binding) (Streams, error) {
 	digest := sha256.Sum256([]byte(binding.NodeID + "\n" + binding.RunID))
 	directory := filepath.Join(s.root, "job-"+hex.EncodeToString(digest[:]))
 	return Streams{Directory: directory, Paths: childwire.IOPaths{Input: filepath.Join(directory, "input"), Output: filepath.Join(directory, "output"), Error: filepath.Join(directory, "error")}}, nil
+}
+
+// OnlyJob rejects a Docker bind that would expose any other job's streams to
+// the shared runtime UID. The caller holds its run reservation while checking.
+func (s *Store) OnlyJob(binding lifecycle.Binding) error {
+	streams, err := s.Paths(binding)
+	if err != nil {
+		return err
+	}
+	// A fresh open-file description leaves the retained descriptor's offset
+	// unchanged across repeated checks.
+	duplicate, err := unix.Openat(s.fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	reader := os.NewFile(uintptr(duplicate), s.root)
+	defer reader.Close()
+	entries, err := reader.ReadDir(2)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(streams.Directory) || !entries[0].IsDir() {
+		return errors.New("the Docker stream root contains another entry")
+	}
+	return nil
+}
+
+// Remove erases only the three files created for a completed job. It is called
+// after the terminal record is durable and the whole job domain is empty.
+func (s *Store) Remove(binding lifecycle.Binding) error {
+	streams, err := s.Paths(binding)
+	if err != nil {
+		return err
+	}
+	name := filepath.Base(streams.Directory)
+	if !strings.HasPrefix(name, "job-") {
+		return errors.New("the job stream name differs")
+	}
+	dir, err := unix.Openat(s.fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	defer unix.Close(dir)
+	view, err := unix.Openat(dir, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	reader := os.NewFile(uintptr(view), name)
+	entries, readErr := reader.ReadDir(4)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil {
+		return errors.Join(readErr, closeErr)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "input" && entry.Name() != "output" && entry.Name() != "error" {
+			return errors.New("the completed job stream directory contains a foreign entry")
+		}
+	}
+	for _, entry := range []string{"input", "output", "error"} {
+		var st unix.Stat_t
+		if err = unix.Fstatat(dir, entry, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				continue
+			}
+			return err
+		}
+		if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != 65534 || st.Nlink != 1 || st.Mode&077 != 0 {
+			return errors.New("the completed job stream custody differs")
+		}
+	}
+	for _, entry := range []string{"input", "output", "error"} {
+		if err = unix.Unlinkat(dir, entry, 0); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				continue
+			}
+			return err
+		}
+	}
+	if err = unix.Fsync(dir); err != nil {
+		return err
+	}
+	if err = unix.Unlinkat(s.fd, name, unix.AT_REMOVEDIR); err != nil {
+		return err
+	}
+	return unix.Fsync(s.fd)
 }
 func writeStream(dir int, name string, data []byte) error {
 	fd, err := unix.Openat(dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)

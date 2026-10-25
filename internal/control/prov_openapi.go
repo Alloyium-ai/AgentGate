@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Dan Metcalf
+package control
+
+import (
+	"alloyium.local/kernel-poc/internal/access"
+	"alloyium.local/kernel-poc/internal/hostproto"
+)
+
+func reasonSchema() map[string]any {
+	return map[string]any{"type": "string", "minLength": 3, "maxLength": 512}
+}
+
+func nameSchema() map[string]any {
+	return map[string]any{"type": "string", "pattern": `^[a-z0-9][a-z0-9-]{0,39}$`, "maxLength": 40}
+}
+
+func object(required []string, properties map[string]any) map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "required": required, "properties": properties}
+}
+
+// provisioningSchemas are the request bodies of the provisioning API. They
+// are merged into apiSchemas, so decodeBody enforces the same required fields
+// and bounds the OpenAPI document publishes.
+func provisioningSchemas() map[string]any {
+	strings := func(max int, item map[string]any) map[string]any {
+		return map[string]any{"type": "array", "maxItems": max, "items": item}
+	}
+	short := map[string]any{"type": "string", "maxLength": access.MaxValueBytes}
+	return map[string]any{
+		"TargetInput":      object([]string{"name", "reason"}, map[string]any{"name": nameSchema(), "reason": reasonSchema()}),
+		"KeyApprovalInput": object([]string{"host_key_id", "reason"}, map[string]any{"host_key_id": map[string]any{"type": "string", "pattern": "^ed25519:[a-f0-9]{32}$"}, "reason": reasonSchema()}),
+		"ReasonInput":      object([]string{"reason"}, map[string]any{"reason": reasonSchema()}),
+		"TargetMountRootsInput": object([]string{"mount_roots", "reason"}, map[string]any{"reason": reasonSchema(),
+			"mount_roots": map[string]any{"type": "array", "maxItems": hostproto.MaxMountRoots, "description": "The host folders launches on this target may mount or snapshot (a source must be a root or below one). Empty refuses every mount.",
+				"items": map[string]any{"type": "string", "maxLength": 4096, "pattern": hostproto.BindSourcePattern.String()}}}),
+		"TargetRetireInput": object([]string{"reason"}, map[string]any{"reason": reasonSchema(), "force": map[string]any{"type": "boolean",
+			"description": "Finish retiring a target whose host cannot confirm the removal of its secrets; those secrets are recorded with removal unconfirmed (the values may remain on the host)."}}),
+		"ProfileInput": object([]string{"name", "reason"}, map[string]any{"name": nameSchema(), "description": map[string]any{"type": "string", "maxLength": 1000},
+			"preset": map[string]any{"type": "string", "enum": access.PresetNames()}, "document": map[string]any{"type": "object", "description": "An agentgate.network-poc.v1 or agentgate.poc.v2 policy document."},
+			"require_approval": map[string]any{"type": "boolean", "description": "Defaults to true. Only an administrator may set false, which approves version 1 as created for launches without a second human."}, "reason": reasonSchema()}),
+		"ProfileSettingsInput": object([]string{"require_approval", "reason"}, map[string]any{"require_approval": map[string]any{"type": "boolean"},
+			"version": map[string]any{"type": "integer", "minimum": 1, "description": "With require_approval false (required then): the one profile version launchers may start alone, as reviewed by this administrator. Every other version needs a second human."},
+			"digest":  map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "The SHA-256 of that version as the administrator reviewed it; a different digest is refused (409 digest_mismatch)."},
+			"reason":  reasonSchema()}),
+		"ProfileVersionInput": object([]string{"parent_version", "document", "reason"}, map[string]any{"parent_version": map[string]any{"type": "integer", "minimum": 1}, "document": map[string]any{"type": "object"}, "reason": reasonSchema()}),
+		"Edit": object([]string{"action"}, map[string]any{
+			"action":        map[string]any{"type": "string", "enum": access.Actions},
+			"kind":          map[string]any{"type": "string", "enum": access.RevokeKinds},
+			"values":        strings(access.MaxValues, short),
+			"mode":          map[string]any{"type": "string", "enum": []string{"read-only", "read-write"}},
+			"upgrade_to_v2": map[string]any{"type": "boolean"},
+		}),
+		"GrantInput": object([]string{"edits", "reason"}, map[string]any{"edits": map[string]any{"type": "array", "minItems": 1, "maxItems": maxProfileEdits, "items": map[string]any{"$ref": "#/components/schemas/Edit"}}, "reason": reasonSchema(),
+			"dry_run": map[string]any{"type": "boolean", "description": "Compute the resulting document, digests and change list with the same checks, store nothing (audited as profile.grant.previewed)."}}),
+		"DecisionInput": object([]string{"reason"}, map[string]any{"reason": reasonSchema()}),
+		"IdentityLinkInput": object([]string{"subjects", "reason"}, map[string]any{"reason": reasonSchema(),
+			"subjects": map[string]any{"type": "array", "minItems": 2, "maxItems": maxLinkedSubjects, "uniqueItems": true,
+				"description": "Subjects of one person (local:<username>, oidc:<issuer subject>); groups they already belong to merge. The link only widens the self-approval refusal.",
+				"items":       map[string]any{"type": "string", "maxLength": 261, "pattern": identitySubject.String()}}}),
+		"IdentityUnlinkInput": object([]string{"subject", "reason"}, map[string]any{"reason": reasonSchema(),
+			"subject": map[string]any{"type": "string", "maxLength": 261, "pattern": identitySubject.String()}}),
+		"SecretInput": object([]string{"name", "target", "upstreams", "header", "ciphertext", "allowed_profiles", "allowed_launchers", "reason"}, map[string]any{
+			"allowed_profiles":  map[string]any{"type": "array", "minItems": 1, "maxItems": 32, "items": nameSchema()},
+			"allowed_launchers": map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "pattern": safeMeta.String()}},
+			"name":              nameSchema(), "target": map[string]any{"type": "string", "maxLength": 40},
+			"upstreams": map[string]any{"type": "array", "minItems": 1, "maxItems": 8, "items": map[string]any{"type": "string", "pattern": hostproto.UpstreamPattern.String(), "maxLength": 253}},
+			"header":    map[string]any{"type": "string", "pattern": hostproto.HeaderPattern.String()},
+			"scheme":    map[string]any{"type": "string", "enum": []string{"", "Bearer", "Basic"}, "description": "How the broker injects the value; empty with an Authorization header means Bearer."},
+			"username":  map[string]any{"type": "string", "maxLength": 64, "pattern": `^[!-9;-~]+$`, "description": "The Basic scheme's user name (visible ASCII, no colon)."},
+			"rules": map[string]any{"type": "array", "maxItems": hostproto.MaxBrokerRules, "description": "Broker rules (deny by default: a secret without rules cannot be used by any launch). " +
+				`The single rule {"methods":["*"],"path":"/"} is the explicit wildcard, flagged in every plan.`,
+				"items": object([]string{"methods", "path"}, map[string]any{
+					"methods": map[string]any{"type": "array", "minItems": 1, "maxItems": len(hostproto.BrokerMethods), "items": map[string]any{"type": "string", "enum": append([]string{"*"}, hostproto.BrokerMethods...)}},
+					"path":    map[string]any{"type": "string", "minLength": 1, "maxLength": 512, "pattern": `^/`},
+					"match":   map[string]any{"type": "string", "enum": []string{"exact", "prefix"}},
+				})},
+			"extra_headers": map[string]any{"type": "object", "maxProperties": hostproto.MaxBrokerExtraHeaders, "description": "Non-secret headers the broker sets on every forwarded request (for example an API version).",
+				"additionalProperties": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}},
+			"forward_headers": map[string]any{"type": "array", "maxItems": hostproto.MaxForwardHeaders, "description": "Request headers the broker forwards beyond its defaults (never a credential, override, forwarding, proxy, cookie or range header).",
+				"items": map[string]any{"type": "string", "pattern": hostproto.HeaderPattern.String()}},
+			"ciphertext": map[string]any{"type": "string", "maxLength": (hostproto.MaxSealedBytes*4 + 2) / 3, "description": "secretseal.Envelope.Encode(): the value sealed to the target's host-signed seal key (GET /targets/{id}/seal-key), for this target id and secret name, and for the injection policy these settings make (hostproto.SecretPolicy): a policy_digest that differs from the settings is refused (422 policy_mismatch)."},
+			"reason":     reasonSchema(),
+		}),
+		"APITokenInput": object([]string{"name", "roles", "expires_in_seconds", "reason"}, map[string]any{
+			"name":               map[string]any{"type": "string", "pattern": tokenNamePattern.String()},
+			"roles":              map[string]any{"type": "array", "minItems": 1, "maxItems": len(validRoles), "items": map[string]any{"type": "string", "enum": []string{"viewer", "auditor", "editor", "launcher", "approver", "admin"}}},
+			"expires_in_seconds": map[string]any{"type": "integer", "minimum": int(minTokenLifetime.Seconds()), "maximum": int(maxTokenLifetime.Seconds())},
+			"reason":             reasonSchema(),
+		}),
+		"LaunchSpec": LaunchSpecSchema(),
+		"HostEnvelope": object([]string{"domain", "key_id", "payload", "signature"}, map[string]any{
+			"domain":    map[string]any{"type": "string", "enum": []string{hostproto.DomainEnroll, hostproto.DomainPoll, hostproto.DomainEvents, hostproto.DomainResync}},
+			"key_id":    map[string]any{"type": "string"},
+			"payload":   map[string]any{"type": "string", "description": "Unpadded base64url of the exact signed JSON payload (internal/hostproto)."},
+			"signature": map[string]any{"type": "string"},
+		}),
+	}
+}
+
+func provisioningOperations() []apiOperation {
+	return []apiOperation{
+		{path: "targets", method: "get", scope: "target:read"},
+		{path: "targets", method: "post", scope: "targets:admin (human admin)", body: "TargetInput"},
+		{path: "targets/{id}", method: "get", scope: "target:read"},
+		{path: "targets/{id}", method: "patch", scope: "targets:admin (human admin)", body: "TargetInput"},
+		{path: "targets/{id}", method: "delete", scope: "targets:admin (human admin); refused while a launch is live; queues a secret-delete per secret and stays retiring until the host confirms them", body: "TargetRetireInput"},
+		{path: "targets/{id}/enrollment", method: "post", scope: "targets:admin (human admin)", body: "ReasonInput"},
+		{path: "targets/{id}/approve-key", method: "post", scope: "targets:admin (human admin)", body: "KeyApprovalInput"},
+		{path: "targets/{id}/mount-roots", method: "post", scope: "targets:admin (human admin); replaces the host folders launches may mount", body: "TargetMountRootsInput"},
+		{path: "targets/{id}/seal-key", method: "get", scope: "target:read; the host-signed seal key record, served verbatim"},
+		{path: "targets/{id}/secrets", method: "get", scope: "launch:write (launcher); ?profile=NAME; names, states, upstreams and a rule summary of the target's secrets, and whether this human and profile may reference each"},
+		{path: "profiles", method: "get", scope: "policy:read"},
+		{path: "profiles", method: "post", scope: "policy:write (editor)", body: "ProfileInput"},
+		{path: "profiles/{id}", method: "get", scope: "policy:read"},
+		{path: "profiles/{id}", method: "patch", scope: "profiles:admin (human admin); require_approval false approves exactly one reviewed version (version and digest), true clears it", body: "ProfileSettingsInput"},
+		{path: "profiles/{id}/versions", method: "get", scope: "policy:read"},
+		{path: "profiles/{id}/versions", method: "post", scope: "policy:write (editor)", body: "ProfileVersionInput"},
+		{path: "profiles/{id}/versions/{n}", method: "get", scope: "policy:read"},
+		{path: "profiles/{id}/versions/{n}/grants", method: "post", scope: "policy:write (editor)", body: "GrantInput"},
+		{path: "access-presets", method: "get", scope: "policy:read"},
+		{path: "launches", method: "get", scope: "launch:read; filters state (a state, active or ended), target, name (substring), requester, mine; limit 1..200 (default 100); cursor resumes after the last launch of a page (next_cursor), newest first"},
+		{path: "launches/summary", method: "get", scope: "launch:read; launch counts by state, launches waiting for this actor's decision and launches expiring within 30 minutes"},
+		{path: "launches", method: "post", scope: "launch:write (launcher)", body: "LaunchSpec"},
+		{path: "launch-plans", method: "post", scope: "launch:write (launcher)", body: "LaunchSpec"},
+		{path: "launches/{id}", method: "get", scope: "launch:read"},
+		{path: "launches/{id}/approve", method: "post", scope: "launch:approve (approver, not the requester)", body: "DecisionInput"},
+		{path: "launches/{id}/reject", method: "post", scope: "launch:approve (approver, not the requester)", body: "DecisionInput"},
+		{path: "launches/{id}/stop", method: "post", scope: "launch:write (launcher); idempotent", body: "DecisionInput"},
+		{path: "launches/{id}/events", method: "get", scope: "launch:read; Accept: text/event-stream streams"},
+		{path: "launches/{id}/logs", method: "get", scope: "launch:read; bounded agent output (?after=); Accept: text/event-stream streams it (event log, id = line sequence, resume with Last-Event-ID; keepalives; event end when the launch is terminal)"},
+		{path: "secrets", method: "get", scope: "secrets:admin (admin)"},
+		{path: "secrets", method: "post", scope: "secrets:admin (human admin)", body: "SecretInput"},
+		{path: "secrets/{id}", method: "delete", scope: "secrets:admin (human admin)", body: "ReasonInput"},
+		{path: "secrets/{id}/receipt", method: "get", scope: "secrets:admin; the host's secretseal receipt for the sealing client to verify"},
+		{path: "identity-links", method: "get", scope: "identities:admin (admin); every person and its linked subjects"},
+		{path: "identity-links", method: "post", scope: "identities:admin (human admin); link 2 to 8 subjects as one person: none of them may decide a launch another requested", body: "IdentityLinkInput"},
+		{path: "identity-links", method: "delete", scope: "identities:admin (human admin), never one whose own subject is in the group; removes one subject from its person, and a group of one with it", body: "IdentityUnlinkInput"},
+		{path: "api-tokens", method: "get", scope: "human session"},
+		{path: "api-tokens", method: "post", scope: "human browser session", body: "APITokenInput"},
+		{path: "api-tokens/{id}", method: "delete", scope: "human session (own token, or admin)", body: "ReasonInput"},
+		{path: "launch-spec-schema", method: "get", scope: "any authenticated actor"},
+		{path: "audit-catalog", method: "get", scope: "audit:read"},
+		{path: "hostd/enroll", method: "post", scope: "host key (one-time token)", body: "HostEnvelope"},
+		{path: "hostd/poll", method: "post", scope: "host key", body: "HostEnvelope"},
+		{path: "hostd/resync", method: "post", scope: "host key", body: "HostEnvelope"},
+		{path: "hostd/jobs/{id}/events", method: "post", scope: "host key", body: "HostEnvelope"},
+	}
+}
+
+// provisioningQuery names the query parameters of provisioning reads beyond
+// the generic ones apiParameters lists.
+var provisioningQuery = map[string][]map[string]any{
+	"launches": {
+		{"name": "target", "in": "query", "schema": map[string]any{"type": "string"}, "description": "A target name or id."},
+		{"name": "name", "in": "query", "schema": map[string]any{"type": "string", "pattern": `^[a-z0-9-]{1,40}$`}, "description": "Launches whose name contains this text."},
+		{"name": "requester", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Launches requested by this subject."},
+		{"name": "mine", "in": "query", "schema": map[string]any{"type": "boolean"}, "description": "Launches requested by the caller."},
+	},
+	"launches/{id}/logs": {
+		{"name": "Accept", "in": "header", "schema": map[string]any{"type": "string"}, "description": "text/event-stream streams the output as Server-Sent Events."},
+		{"name": "Last-Event-ID", "in": "header", "schema": map[string]any{"type": "string"}, "description": "Resume the stream after this line sequence (?after= wins)."},
+	},
+	"targets/{id}/secrets": {{"name": "profile", "in": "query", "schema": map[string]any{"type": "string", "pattern": `^[a-z0-9][a-z0-9-]{0,39}$`}, "description": "Also answer whether this profile may use each secret."}},
+}
+
+// addProvisioning merges the provisioning API into an OpenAPI document.
+func addProvisioning(api map[string]any) {
+	paths := api["paths"].(map[string]any)
+	for _, op := range provisioningOperations() {
+		path := "/api/v1/" + op.path
+		v, ok := paths[path].(map[string]any)
+		if !ok {
+			v = map[string]any{}
+		}
+		d := apiDescription(op)
+		if extra := provisioningQuery[op.path]; op.method == "get" && len(extra) > 0 {
+			params := d["parameters"].([]any)
+			for _, p := range extra {
+				params = append(params, p)
+			}
+			d["parameters"] = params
+		}
+		if len(op.path) > 6 && op.path[:6] == "hostd/" {
+			d["security"] = []any{map[string]any{"hostSignature": []string{}}}
+		} else {
+			d["security"] = append(d["security"].([]any), map[string]any{"apiToken": []string{}})
+		}
+		v[op.method] = d
+		paths[path] = v
+	}
+	security := api["components"].(map[string]any)["securitySchemes"].(map[string]any)
+	security["apiToken"] = map[string]string{"type": "http", "scheme": "bearer", "description": "agt_ API token for one human, limited to the provisioning endpoints."}
+	security["hostSignature"] = map[string]string{"type": "apiKey", "in": "header", "name": "none", "description": "The body is a hostproto Envelope signed by the enrolled host key."}
+}

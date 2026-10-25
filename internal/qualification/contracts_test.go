@@ -6,6 +6,7 @@ import (
 	"alloyium.local/kernel-poc/internal/policy"
 	_ "embed"
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -92,4 +93,34 @@ func TestContractsReturnOwnedCopies(t *testing.T) {
 	if b[0].Cases[0] == "changed" || b[0].ArtifactNames[0] == "changed" || b[0].Mechanisms[0] == "changed" {
 		t.Fatal("catalog leaked mutable storage")
 	}
+}
+
+func TestPilotContractRequiresMeasuredHostnameLookup(t *testing.T) {
+	d := candidate(t)
+	d.Network.Pilot = &policy.PilotNetwork{Mode: "ssh-coding.v1", TaskboardIP: "10.77.0.2", TaskboardPort: 18080, TaskboardTaskID: 42}
+	d.Network.Rules = append(d.Network.Rules, policy.NetworkRule{
+		ID: "taskboard", Family: "ipv4", Protocol: "tcp",
+		Destination: policy.Destination{Kind: "ip", Value: "10.77.0.2"}, PortFrom: 18080, PortTo: 18080, Effect: "allow",
+	})
+	var err error
+	d.RequiredCapabilities, err = policy.Requirements(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contracts, err := Contracts(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, contract := range contracts {
+		if contract.CapabilityID != "net.ssh-lan-boundary.v1" {
+			continue
+		}
+		for _, required := range []string{"target-hosts-match-trusted-lease", "target-hosts-change-before-release-denied", "changed-lease-stops-before-map-publish"} {
+			if !slices.Contains(contract.Cases, required) {
+				t.Fatalf("the pilot omits %s", required)
+			}
+		}
+		return
+	}
+	t.Fatal("the signed pilot lacks a LAN boundary contract")
 }

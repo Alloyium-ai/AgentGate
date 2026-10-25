@@ -1,0 +1,27 @@
+{
+  "active": 2,
+  "awaiting_your_decision": {
+    "count": 0,
+    "items": []
+  },
+  "counts": {
+    "approval_pending": 1,
+    "approved": 0,
+    "cancelled": 0,
+    "expired": 0,
+    "failed": 0,
+    "provisioning": 0,
+    "queued": 0,
+    "rejected": 0,
+    "requested": 0,
+    "running": 1,
+    "stopped": 0,
+    "stopping": 0
+  },
+  "expiring_soon": {
+    "count": 0,
+    "items": [],
+    "window_seconds": 1800
+  },
+  "total": 2
+}

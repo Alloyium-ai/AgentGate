@@ -423,6 +423,18 @@
         "dns"
       ],
       "properties": {
+        "pilot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "taskboard_ip", "taskboard_port", "taskboard_task_id"],
+          "x-capability": "net.ssh-lan-boundary.v1",
+          "properties": {
+            "mode": {"const": "ssh-coding.v1", "x-capability": "runtime.docker-target.v1"},
+            "taskboard_ip": {"type": "string", "minLength": 2, "maxLength": 45},
+            "taskboard_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "taskboard_task_id": {"type": "integer", "minimum": 1, "x-capability": "identity.taskboard-bridge.v1"}
+          }
+        },
         "default": {
           "const": "deny"
         },

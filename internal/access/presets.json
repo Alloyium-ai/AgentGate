@@ -1,0 +1,152 @@
+{
+  "version": "agentgate.poc-presets.v1",
+  "presets": {
+    "locked-down": {
+      "description": "No public web. Writes only to the workspace, no scratch tree. System programs run; /etc and /proc are read-only; secrets and kernel controls are denied.",
+      "web": [],
+      "filesystem": {
+        "workspace": "/var/lib/agentgate/workspace",
+        "scratch": [],
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/lib",
+          "/lib64"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/urandom"
+        ],
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        }
+      },
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL"
+        ]
+      }
+    },
+    "python-dev": {
+      "description": "HTTP and HTTPS (no QUIC) for package indexes and docs. Workspace and /tmp are writable, never executable. System programs, including Python, run.",
+      "web": [
+        "http",
+        "https"
+      ],
+      "filesystem": {
+        "workspace": "/var/lib/agentgate/workspace",
+        "scratch": [
+          "/tmp"
+        ],
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/sbin",
+          "/lib",
+          "/lib64"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        }
+      },
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2",
+          "SIGCONT",
+          "SIGSTOP",
+          "SIGCHLD",
+          "SIGPIPE",
+          "SIGALRM"
+        ]
+      }
+    },
+    "web-readonly": {
+      "description": "All public IPv4 web (HTTP, HTTPS, QUIC). System files are read-only; the workspace (required) is the only writable tree, with no scratch tree.",
+      "web": [
+        "http",
+        "https",
+        "quic"
+      ],
+      "filesystem": {
+        "workspace": "/var/lib/agentgate/workspace",
+        "scratch": [],
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/lib",
+          "/lib64"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        }
+      },
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP"
+        ]
+      }
+    },
+    "full-example": {
+      "description": "Exactly the web, filesystem and process sections of the shipped policy.full.example.json.",
+      "from_example": "policy.full.example.json"
+    }
+  }
+}

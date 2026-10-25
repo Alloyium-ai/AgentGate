@@ -1,0 +1,16 @@
+{
+  "end": {
+    "last_seq": 1,
+    "state": "stopped",
+    "truncated": false
+  },
+  "log": {
+    "seq": 1,
+    "stream": "stdout",
+    "text": "checking",
+    "time": "2026-10-25T02:51:18.619Z"
+  },
+  "ready": {
+    "after": 0
+  }
+}

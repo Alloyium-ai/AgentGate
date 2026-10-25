@@ -35,9 +35,27 @@ services:
       - tls-config:/config
     depends_on:
       control: {condition: service_healthy}
-    networks: [control]
+    networks:
+      control:
+        # The one address settings.json trusts (trusted_proxies).
+        ipv4_address: 10.231.207.2
 networks:
-  control: {}
+  # An ordinary Docker bridge, not an internal network: any process on this
+  # machine can connect to the control service on it directly, and such a
+  # connection arrives from the bridge gateway 10.231.207.1. settings.json
+  # therefore trusts exactly the TLS front's fixed address, 10.231.207.2/32:
+  # the service limits and samples requests by the client address Caddy
+  # forwards, and a direct local connection is keyed by the gateway and
+  # cannot choose its own client address in X-Forwarded-For. Other
+  # containers (the control service) get addresses from 10.231.207.8/29
+  # only, so none can take the fixed one. Change the subnet, the range, the
+  # address and settings.json together if this range is taken on the machine.
+  control:
+    ipam:
+      config:
+        - subnet: 10.231.207.0/28
+          ip_range: 10.231.207.8/29
+          gateway: 10.231.207.1
 volumes:
   state: {}
   trust: {}

@@ -48,6 +48,8 @@ static __always_inline int local_match(struct socket_rule *rule, struct socket_o
 static __always_inline int option_match(struct socket_rule *rule, struct socket_operation *operation)
 {
     if (operation->operation != OP_SET_OPTION && operation->operation != OP_GET_OPTION) return 1;
+    if (rule->effect && operation->operation == OP_SET_OPTION && operation->level == 1 &&
+        (operation->name == 3 || operation->name == 4)) return 0; // SO_TYPE and SO_ERROR are getter-only.
     if (!rule->option_count && !rule->effect) return 1;
     for (int i = 0; i < MAX_SOCKET_OPTIONS; i++) {
         if (i >= rule->option_count) break;

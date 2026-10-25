@@ -43,15 +43,21 @@ func (c *Child) Close() error {
 // StartChild launches only the measured helper. Agent code waits for Release.
 // Place, Install, independent watchdog custody, and BindBootstrap must follow.
 func (g *Group) StartChild(ctx context.Context, p Plan, helper, helperDigest string, manifest lifecycle.Manifest, paths childwire.IOPaths) (out *Child, err error) {
-	return g.startChild(ctx, p, helper, helperDigest, manifest, paths, nil, childwire.NamespaceIdentity{})
+	return g.startChild(ctx, p, helper, helperDigest, manifest, paths, nil, childwire.NamespaceIdentity{}, nil)
 }
 func (g *Group) StartChildNamespace(ctx context.Context, p Plan, helper, helperDigest string, manifest lifecycle.Manifest, paths childwire.IOPaths, namespace *os.File, identity childwire.NamespaceIdentity) (out *Child, err error) {
 	if namespace == nil || !p.bootstrapCredentialNamespace {
 		return nil, errors.New("the credential namespace requires explicit qualified bootstrap permission")
 	}
-	return g.startChild(ctx, p, helper, helperDigest, manifest, paths, namespace, identity)
+	return g.startChild(ctx, p, helper, helperDigest, manifest, paths, namespace, identity, nil)
 }
-func (g *Group) startChild(ctx context.Context, p Plan, helper, helperDigest string, manifest lifecycle.Manifest, paths childwire.IOPaths, namespace *os.File, identity childwire.NamespaceIdentity) (out *Child, err error) {
+func (g *Group) StartChildDocker(ctx context.Context, p Plan, helper, helperDigest string, manifest lifecycle.Manifest, paths childwire.IOPaths, docker childwire.DockerDescriptors) (out *Child, err error) {
+	if manifest.AgentKind != "ssh" {
+		return nil, errors.New("the Docker target is reserved for signed SSH coding")
+	}
+	return g.startChild(ctx, p, helper, helperDigest, manifest, paths, nil, childwire.NamespaceIdentity{}, &docker)
+}
+func (g *Group) startChild(ctx context.Context, p Plan, helper, helperDigest string, manifest lifecycle.Manifest, paths childwire.IOPaths, namespace *os.File, identity childwire.NamespaceIdentity, docker *childwire.DockerDescriptors) (out *Child, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed || g.Files == nil || p.domain != g.Files.ID || p.generation <= g.generation {
@@ -60,11 +66,13 @@ func (g *Group) startChild(ctx context.Context, p Plan, helper, helperDigest str
 	if err = p.ValidateChildBootstrap(helperDigest); err != nil {
 		return nil, err
 	}
-	if p.bootstrapCredentialNamespace != (namespace != nil) {
+	if p.bootstrapCredentialNamespace != (namespace != nil) || (docker != nil && namespace != nil) {
 		return nil, errors.New("the declared credential namespace custody differs")
 	}
 	var transport *childwire.Transport
-	if namespace != nil {
+	if docker != nil {
+		transport, err = childwire.NewDocker(manifest, paths, p.syscalls, *docker)
+	} else if namespace != nil {
 		transport, err = childwire.NewNamespace(manifest, paths, p.syscalls, namespace, identity)
 	} else {
 		transport, err = childwire.New(manifest, paths, p.syscalls)
@@ -85,7 +93,16 @@ func (g *Group) startChild(ctx context.Context, p Plan, helper, helperDigest str
 			}
 		}
 	}()
-	child.Held, err = heldprocess.Start(ctx, heldprocess.Spec{Executable: helper, SHA256: helperDigest, Arguments: []string{"--run"}, Environment: []string{}, ExtraFiles: transport.ExtraFiles(), RequireSeccomp: true, RequireFilterAcknowledgement: true, NamespaceDevice: identity.Device, NamespaceInode: identity.Inode})
+	spec := heldprocess.Spec{Executable: helper, SHA256: helperDigest, Arguments: []string{"--run"}, Environment: []string{}, ExtraFiles: transport.ExtraFiles(), RequireSeccomp: true, RequireFilterAcknowledgement: true, NamespaceDevice: identity.Device, NamespaceInode: identity.Inode}
+	if docker != nil {
+		id := docker.Identity
+		spec.Docker = true
+		spec.NamespaceDevice, spec.NamespaceInode = id.Mount.Device, id.Mount.Inode
+		spec.NetworkDevice, spec.NetworkInode = id.Network.Device, id.Network.Inode
+		spec.PIDDevice, spec.PIDInode = id.PID.Device, id.PID.Inode
+		spec.RootDevice, spec.RootInode = id.Root.Device, id.Root.Inode
+	}
+	child.Held, err = heldprocess.Start(ctx, spec)
 	if err != nil {
 		return nil, err
 	}

@@ -15,7 +15,19 @@ import (
 
 func runtimeMatches(enrollment Enrollment, manifest lifecycle.Manifest, binding lifecycle.Binding) bool {
 	runtime, ok := enrollment.Runtimes[manifest.AgentKind]
-	return ok && runtime.Version == manifest.RuntimeVersion && runtime.Executable == manifest.Executable && runtime.ExecutableDigest == manifest.ExecutableDigest && runtime.ImageDigest == manifest.ImageDigest && RuntimeFilesMatch(runtime, manifest, binding) && (manifest.AgentKind != "pi" || piRuntimeMatches(runtime, manifest, binding))
+	return ok && runtime.Version == manifest.RuntimeVersion && runtime.Executable == manifest.Executable && runtime.ExecutableDigest == manifest.ExecutableDigest && runtime.ImageDigest == manifest.ImageDigest && RuntimeFilesMatch(runtime, manifest, binding) && (manifest.AgentKind != "pi" || piRuntimeMatches(runtime, manifest, binding)) && (manifest.AgentKind != "ssh" || lifecycle.SSHRuntimeMatches(runtime.ArgumentsPrefix, manifest) && sshEnvironmentEqual(runtime.Environment, manifest.Environment))
+}
+
+func sshEnvironmentEqual(enrolled, requested map[string]string) bool {
+	if len(enrolled) != len(requested) {
+		return false
+	}
+	for key, value := range enrolled {
+		if requested[key] != value {
+			return false
+		}
+	}
+	return true
 }
 func (s *Server) bindingMatches(enrollment Enrollment, binding lifecycle.Binding) bool {
 	return binding.AgentID == enrollment.AgentID && binding.AgentKey == enrollment.AgentKey && binding.NodeID == s.config.Identity.NodeID && binding.BootID == s.config.Identity.BootID

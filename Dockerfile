@@ -25,6 +25,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd cmd
 COPY internal internal
+COPY poc/ssh-diagnostic/policy.example.json poc/ssh-diagnostic/policy.example.json
 RUN --mount=type=cache,id=agentgate-community-go,target=/root/.cache/go-build,sharing=locked go test -race -p 2 ./... && CGO_ENABLED=0 go build -trimpath -o /agentgate ./cmd/community && CGO_ENABLED=0 go build -trimpath -o /agentgate-node ./cmd/poc
 RUN mkdir -p /notices/go && go list -deps -test -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' ./... | sed '/^$/d' | sort -u > /notices/go/module-ids.txt && xargs go mod download -json < /notices/go/module-ids.txt > /notices/go/downloads.json
 RUN while read -r identifier; do go list -m -f '{{.Path}} {{.Version}} {{.Dir}}' "${identifier%@*}"; done < /notices/go/module-ids.txt > /notices/go/modules.txt && go version -m /agentgate /agentgate-node > /notices/go/build.txt && while read -r module version directory; do if [ -n "$directory" ]; then target="/notices/go/$module/$version"; mkdir -p "$target"; find "$directory" -type f \( -iname '*license*' -o -iname '*notice*' -o -iname 'copying*' \) -exec cp --parents '{}' "$target/" \;; fi; done < /notices/go/modules.txt

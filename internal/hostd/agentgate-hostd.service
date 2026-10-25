@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Dan Metcalf
+# agentgate-hostd: the AgentGate host agent. It makes only outbound HTTPS calls.
+[Unit]
+Description=AgentGate host agent
+Documentation=file:///usr/share/doc/agentgate/PROVISIONING.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=@BINARY@ run --state-dir @STATE@
+Restart=on-failure
+RestartSec=5
+# Stopping the service stops every launch runtime: each tears down its domain
+# and writes its receipt; the next start reports it.
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=240
+UMask=0077
+LimitNOFILE=4096
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

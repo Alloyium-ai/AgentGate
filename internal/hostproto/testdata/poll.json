@@ -1,0 +1,6 @@
+{
+  "domain": "agentgate.hostd.poll.v1",
+  "key_id": "ed25519:1325b850c2871916eae203f0efc3c898",
+  "payload": "eyJob3N0X2lkIjoiMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJub25jZSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHciLCJ0aW1lc3RhbXBfbXMiOjE3OTAwMDAwMDAwMDAsInNlcXVlbmNlIjo3LCJoZWFydGJlYXQiOnsiY2FwYWJpbGl0aWVzIjpbImRvY2tlciJdLCJydW5uaW5nX2xhdW5jaGVzIjpbImZlZGNiYTk4NzY1NDMyMTBmZWRjYmE5ODc2NTQzMjEwIl0sImFnZW50X3ZlcnNpb24iOiIwLjEuMCIsImtlcm5lbF92ZXJpZmllZCI6ZmFsc2V9LCJtYXhfam9icyI6NH0",
+  "signature": "5YgaQDp5Moaed67XC6rBpoFp4hNh85fdJ1jXkpWYdgiIhA9OVMMh6ioDXvZ-yF4F0N6BxlWgmbna9VGsakSiBA"
+}

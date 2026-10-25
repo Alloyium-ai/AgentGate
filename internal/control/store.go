@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 const schema = `
@@ -49,15 +50,33 @@ CREATE INDEX IF NOT EXISTS runs_agent_policy ON runs(agent_id,version_id,created
 PRAGMA user_version=1;`
 
 type Store struct {
-	DB                 *sql.DB
-	Authority          ed25519.PrivateKey
-	mu                 sync.Mutex
-	Changed            func(int64)
+	DB        *sql.DB
+	Authority ed25519.PrivateKey
+	mu        sync.Mutex
+	// Changed receives each committed change that touched something a
+	// change stream shows (changes.go).
+	Changed            func(Change)
 	ResolveRoles       func([]string) []string
 	CheckConfiguration func() error
 	LoginAuthority     string
 	LocalIdentity      bool
 	CustomerPolicy     bool
+	// JobKey signs every host job. It is separate from Authority so it can be
+	// rotated without changing the application authority.
+	JobKey ed25519.PrivateKey
+	// Provisioning holds the job queue timing; zero values use the defaults.
+	Provisioning ProvisioningConfig
+	// Now is the clock; tests replace it.
+	Now func() time.Time
+	// rejectedSealKeys remembers the digest of the last seal key record each
+	// host sent that did not verify, so it is audited once, not every poll.
+	// Guarded by mu (host requests hold it).
+	rejectedSealKeys map[string]string
+	// denials samples anonymous denial audit rows per source and minute
+	// (denial_sampling.go). Guarded by mu.
+	denials map[string]*denialWindow
+	// changes resolves audit rows into change stream resources.
+	changes changeNotifier
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -110,6 +129,16 @@ func OpenStore(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err = s.loadJobKey(dir); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// Change streams start from the audit log as it is now.
+	if err = db.QueryRow("SELECT coalesce(max(id),0) FROM audit").Scan(&s.changes.notified); err != nil {
+		db.Close()
+		return nil, err
+	}
+	s.changes.primed = true
 	return s, nil
 }
 func (s *Store) migrate() error {
@@ -117,10 +146,10 @@ func (s *Store) migrate() error {
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 4 {
+	if version > SchemaVersion {
 		return errors.New("unsupported database schema")
 	}
-	if version == 4 {
+	if version == SchemaVersion {
 		return nil
 	}
 	tx, err := s.DB.Begin()
@@ -128,25 +157,105 @@ func (s *Store) migrate() error {
 		return err
 	}
 	defer tx.Rollback()
-	if version == 0 {
-		if _, err = tx.Exec(schema); err != nil {
+	if version < 4 {
+		if version == 0 {
+			if _, err = tx.Exec(schema); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS audit_action_time ON audit(action,time,id); CREATE INDEX IF NOT EXISTS audit_time ON audit(time,id); CREATE INDEX IF NOT EXISTS audit_version_time ON audit(version,time,id); PRAGMA user_version=2;`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(localUserSchema + ` PRAGMA user_version=3;`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(targetReportSchema + documentVersionSchema + ` PRAGMA user_version=4;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 4", RequestID: "migration-4"}, "committed"); err != nil {
 			return err
 		}
 	}
-	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS audit_action_time ON audit(action,time,id); CREATE INDEX IF NOT EXISTS audit_time ON audit(time,id); CREATE INDEX IF NOT EXISTS audit_version_time ON audit(version,time,id); PRAGMA user_version=2;`); err != nil {
-		return err
+	if version < 5 {
+		if _, err = tx.Exec(provisioningSchema + ` PRAGMA user_version=5;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 5", RequestID: "migration-5"}, "committed"); err != nil {
+			return err
+		}
 	}
-	if _, err = tx.Exec(localUserSchema + ` PRAGMA user_version=3;`); err != nil {
-		return err
+	if version < 6 {
+		for _, c := range brokerColumns {
+			if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(brokerTriggers + ` PRAGMA user_version=6;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 6", RequestID: "migration-6"}, "committed"); err != nil {
+			return err
+		}
 	}
-	if _, err = tx.Exec(targetReportSchema + documentVersionSchema + ` PRAGMA user_version=4;`); err != nil {
-		return err
+	if version < 7 {
+		for _, c := range retirementColumns {
+			if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`PRAGMA user_version=7;`); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 7", RequestID: "migration-7"}, "committed"); err != nil {
+			return err
+		}
 	}
-	_, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: "Migrate schema to version 4", RequestID: "migration-4"}, "committed")
+	for _, step := range laterMigrations {
+		if version >= step.version {
+			continue
+		}
+		for _, c := range step.columns {
+			if err = addColumn(tx, c.table, c.column, c.decl); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(step.statements + fmt.Sprintf(" PRAGMA user_version=%d;", step.version)); err != nil {
+			return err
+		}
+		if step.after != nil {
+			if err = step.after(tx); err != nil {
+				return err
+			}
+		}
+		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: fmt.Sprintf("Migrate schema to version %d", step.version), RequestID: fmt.Sprintf("migration-%d", step.version)}, "committed"); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// addColumn adds one column unless the table already has it, so a migration
+// step can run again (for example after a restore) without failing.
+func addColumn(tx *sql.Tx, table, column, decl string) error {
+	rows, err := tx.Query("SELECT name FROM pragma_table_info(?)", table)
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	exists := false
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		exists = exists || name == column
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil || exists {
+		return err
+	}
+	_, err = tx.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl)
+	return err
 }
 func newID() string {
 	b := make([]byte, 16)
@@ -177,7 +286,7 @@ func scrub(v any) any {
 				if !ok || (verdict != "VALID_COMPLETE" && verdict != "INCOMPLETE" && verdict != "TAMPERED" && verdict != "UNKNOWN_KEY") {
 					x[k] = "[redacted]"
 				}
-			case "grant", "client_secret", "private_key", "id_token", "access_token", "csrf_token", "pkce_verifier", "session", "proof", "password", "password_hash", "salt":
+			case "grant", "client_secret", "private_key", "id_token", "access_token", "csrf_token", "pkce_verifier", "session", "proof", "password", "password_hash", "salt", "token", "api_token", "enrollment_token", "ciphertext", "token_hash":
 				x[k] = "[redacted]"
 			default:
 				x[k] = scrub(val)
@@ -201,6 +310,13 @@ func (s *Store) Denied(op Operation, cause error) error {
 	if err = retainDeniedNonce(tx, op); err != nil {
 		return err
 	}
+	write, err := s.sampleDenial(tx, op)
+	if err != nil {
+		return err
+	}
+	if !write {
+		return tx.Commit()
+	}
 	_, code, _ := errorResult(cause)
 	op.After = map[string]string{"error_code": code}
 	id, err := appendAudit(tx, op, "denied")
@@ -212,11 +328,6 @@ func (s *Store) Denied(op Operation, cause error) error {
 	}
 	s.notify(id)
 	return nil
-}
-func (s *Store) notify(id int64) {
-	if s.Changed != nil {
-		s.Changed(id)
-	}
 }
 func (s *Store) Mutation(op Operation, scope string, human bool, fn func(*sql.Tx, *Operation) (any, error)) (any, error) {
 	s.mu.Lock()

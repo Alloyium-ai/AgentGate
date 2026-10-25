@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Dan Metcalf
+# The TLS front of deploy/compose.public.yaml: Caddyfile with the public host
+# name instead of localhost. HTTPS only; no plain HTTP listener or redirect.
+{
+  auto_https disable_redirects
+  log default {
+    level ERROR
+    exclude http.log.error
+  }
+}
+https://{$AGENTGATE_PUBLIC_HOST}:9443 {
+  tls internal
+  # The control service trusts this container's fixed address
+  # (10.231.207.2, settings trusted_proxies) and limits and audits by the
+  # client address it forwards: replace anything a client sent.
+  reverse_proxy control:8930 {
+    header_up X-Forwarded-For {remote_host}
+  }
+}

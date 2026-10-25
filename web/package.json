@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "typecheck": "tsc -p .",
     "test:policy": "node --test qa/policy-schema.node.mjs",
-    "test:policy-browser": "node qa/policy-workspace.mjs"
+    "test:unit": "node --test qa/policy-schema.node.mjs qa/provisioning.node.mjs qa/secretseal.node.mjs",
+    "test:policy-browser": "node qa/policy-workspace.mjs",
+    "test:provisioning-browser": "node qa/provisioning.mjs"
   },
   "dependencies": {
     "lucide-react": "0.468.0",

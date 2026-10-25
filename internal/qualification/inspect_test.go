@@ -89,4 +89,18 @@ func TestLocalInspectorRequiresEveryArtifactMeasurement(t *testing.T) {
 	if _, err := NewLocalInspector(base); err == nil {
 		t.Fatal("caller-defined measurement accepted")
 	}
+	base.Measurements["qualification"] = Measurement{Kind: "file", Path: "/opt/agentgate/qualify"}
+	base.Expected.ArtifactDigests["resolver"] = strings.Repeat("5", 64)
+	base.Measurements["resolver"] = Measurement{Kind: "resolver", Path: "/var/lib/agentgate/node.json"}
+	if _, err := NewLocalInspector(base); err != nil {
+		t.Fatal("the protected resolver measurement was rejected", err)
+	}
+	base.Measurements["resolver"] = Measurement{Kind: "file", Path: "/var/lib/agentgate/node.json"}
+	if _, err := NewLocalInspector(base); err == nil {
+		t.Fatal("a resolver digest passed as a file hash")
+	}
+	base.Measurements["resolver"] = Measurement{Kind: "resolver", Path: "/tmp/node.json"}
+	if _, err := NewLocalInspector(base); err == nil {
+		t.Fatal("an unprotected resolver configuration passed")
+	}
 }

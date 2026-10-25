@@ -18,6 +18,22 @@ const Purpose = "agentgate.files-programs-component.v1"
 const OperationCount = 14
 const AnonymousDelegation = uint64(1) << 63
 
+// InheritedStdio lets a managed job use the launcher's stdin, stdout and
+// stderr pipes: only pipes whose inodes the launcher recorded for the domain
+// before the command joined (RecordStdio), each in its recorded direction. It
+// still requires the explicit pipe read and write rights, and it grants no
+// pathname right. Without a recorded inode no inherited pipe is usable.
+const InheritedStdio = uint64(1) << 62
+
+// operations are the file component's decisions, by index in bpf/fs_access.bpf.c.
+// "create" is a new regular file made by open(O_CREAT). The first kernel hook to
+// see that creation (path_mknod) has no path, so the decision is made when the
+// new file is opened, on its path: a denied create fails the open, but the kernel
+// has already made the empty file. No rule can allow a FIFO, a socket node
+// (AF_UNIX bind to a pathname), a device node or a regular file made by mknod(2);
+// the kernel component always denies those. "mkdir", "delete", "rename",
+// "symlink" and "metadata" are decided on the affected path before the change.
+// "hardlink" is never allowed.
 var operations = [OperationCount]string{"read", "write", "create", "mkdir", "delete", "rename", "hardlink", "symlink", "metadata", "mmap", "descriptor_receive", "execute", "map_execute", "mprotect"}
 
 type State struct {
@@ -35,12 +51,32 @@ type Plan struct {
 	digest          string
 	reference       [OperationCount]openrules.Plan
 	allowOperations []string
+	mutation        bool
+	sockets         SocketMode
 }
 
 // WithAnonymousGuard selects a separate mandatory guard. It grants no right.
 // Default access installation refuses this flag without the coupled runtime.
 func (plan Plan) WithAnonymousGuard() Plan {
 	plan.state.Pipes |= AnonymousDelegation
+	plan.digest = planDigest(plan)
+	return plan
+}
+
+// WithMutationEnforcement permits the namespace mutation allowances that the
+// access object's path hooks enforce: create, mkdir, delete, rename, symlink and
+// metadata. It exists for the SSH POC only. The composite product plan never
+// sets it, so product admission keeps refusing those rights until they qualify.
+// Hard links stay refused: their kernel hook has no path for the old inode.
+func (plan Plan) WithMutationEnforcement() Plan {
+	plan.mutation = true
+	plan.digest = planDigest(plan)
+	return plan
+}
+
+// WithInheritedStdio selects InheritedStdio and recomputes the plan digest.
+func (plan Plan) WithInheritedStdio() Plan {
+	plan.state.Pipes |= InheritedStdio
 	plan.digest = planDigest(plan)
 	return plan
 }
@@ -217,6 +253,19 @@ func planDigest(plan Plan) string {
 	for _, operation := range plan.allowOperations {
 		_ = binary.Write(h, binary.LittleEndian, uint32(len(operation)))
 		h.Write([]byte(operation))
+	}
+	if plan.mutation {
+		// Appended only when set, so every unmarked plan keeps its digest.
+		h.Write([]byte("mutation-enforcement.v1"))
+	}
+	if plan.state.Pipes&InheritedStdio != 0 {
+		// Inherited pipes are admitted only by recorded inode (RecordStdio).
+		h.Write([]byte("inherited-stdio-recorded-pipes.v1"))
+	}
+	if plan.sockets == SocketsCgroupNetworkOnly {
+		// Appended only for this mode; SocketsLSMGuard is already bound by the
+		// state's socket generation, so delegated product plans keep their digest.
+		h.Write([]byte("sockets-cgroup-network-guard-only.v1"))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

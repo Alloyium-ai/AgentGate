@@ -1,0 +1,352 @@
+{
+  "jobs": [
+    {
+      "attempts": 1,
+      "created_at": "2026-10-25T02:51:18.731978974Z",
+      "deadline": "2026-10-25T03:56:18.619Z",
+      "event_seq": 3,
+      "id": "f3b7dafce8217bb4fe6188f818d92465",
+      "key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+      "launch_id": "d5af70a47f15fffd62f1e4f5e65d7d33",
+      "policy_digest": "3a130c178525c4a66527140f0677daf2f62e212f77b16cc2b149a3c91cf6c710",
+      "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
+      "state": "delivered",
+      "target_id": "3051ed3763d89e3871ce3d313dc46788",
+      "type": "launch"
+    }
+  ],
+  "launch": {
+    "approval_required": true,
+    "created_at": "2026-10-25T02:51:18.726284525Z",
+    "decided_by": "oidc:app",
+    "decision_reason": "Reviewed the broker rules",
+    "expires_at": "2026-10-25T03:51:18.619Z",
+    "id": "d5af70a47f15fffd62f1e4f5e65d7d33",
+    "kernel_verified": false,
+    "lifetime_seconds": 3600,
+    "mode": "session",
+    "name": "docs-agent",
+    "plan": {
+      "approval": "required",
+      "approval_reasons": [
+        "brokered secrets docs-api, wild-api",
+        "live host folder repo (/srv/repos/app)",
+        "public web access",
+        "secret wild-api has wildcard broker rules",
+        "signals beyond the defaults: SIGALRM, SIGCHLD, SIGPIPE, SIGWINCH",
+        "the profile requires approval"
+      ],
+      "broker": {
+        "address": "172.30.137.10",
+        "port": 8443,
+        "subnet": "172.30.137.8/29",
+        "target_address": "172.30.137.11"
+      },
+      "command": [
+        "agent",
+        "--print",
+        "fix the failing tests"
+      ],
+      "expiry_rule": "the lifetime starts when the launch is queued; the host and the kernel policy end it at expires_at",
+      "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kernel_verified": false,
+      "lifetime_seconds": 3600,
+      "mode": "session",
+      "mounts": [
+        {
+          "mode": "read-only",
+          "name": "repo",
+          "path": "/var/lib/agentgate/mounts/repo",
+          "source": "/srv/repos/app"
+        }
+      ],
+      "notices": [
+        "WARNING: secret wild-api uses wildcard rules: the broker forwards every method on every path of api.wild.example with the credential",
+        "the agent reaches its secrets only through the broker at 172.30.137.10:8443; the taskboard TCP endpoint is not allowed in this launch",
+        "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
+        "the target does not advertise bpf-lsm; the host fails closed if it cannot enforce the policy"
+      ],
+      "permissions": {
+        "anonymous_execute": false,
+        "broker": "172.30.137.10:8443",
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "dns_resolvers": [
+          "1.1.1.1"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/sbin",
+          "/lib",
+          "/lib64"
+        ],
+        "ipv6": "deny",
+        "network_default": "deny",
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard",
+          "/srv/data",
+          "/var/lib/agentgate/mounts/repo"
+        ],
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2",
+          "SIGCONT",
+          "SIGSTOP",
+          "SIGCHLD",
+          "SIGPIPE",
+          "SIGALRM",
+          "SIGWINCH"
+        ],
+        "taskboard": "",
+        "web": [
+          "https"
+        ],
+        "writable": [
+          "/var/lib/agentgate/workspace",
+          "/tmp"
+        ]
+      },
+      "policy_digest": "3a130c178525c4a66527140f0677daf2f62e212f77b16cc2b149a3c91cf6c710",
+      "profile": {
+        "digest": "e51c290b9ee93aeee99c246e06387a843fcf85363c26abd0133eca5c39badf9a",
+        "id": "c717ba3bb2a5be625311ecc64aab9e9e",
+        "name": "python-dev",
+        "version": 2,
+        "version_id": "a3bad224d203d391a0411796098f09ab"
+      },
+      "secrets": [
+        {
+          "base_url": "http://172.30.137.10:8443/docs-api",
+          "env": "DOCS_BASE_URL",
+          "extra_headers": {
+            "docs-version": "2"
+          },
+          "forward_headers": [
+            "x-request-id"
+          ],
+          "header": "Authorization",
+          "policy_digest": "fc076f73f3d950c670dd0267fffaffa0f6fa22f8d070abb7e50bce250b606cbb",
+          "ref": "docs-api",
+          "rules": [
+            {
+              "match": "prefix",
+              "methods": [
+                "GET",
+                "HEAD"
+              ],
+              "path": "/v2/"
+            },
+            {
+              "match": "exact",
+              "methods": [
+                "POST"
+              ],
+              "path": "/v2/search"
+            }
+          ],
+          "scheme": "Basic",
+          "secret_id": "64a08773c8abfb22cf5f753fe8c86c14",
+          "upstreams": [
+            "api.docs.example"
+          ],
+          "username": "agent",
+          "value_fingerprint": "sfp1_253df75a6a09a95caa1eec0b69e94be4",
+          "wildcard_rules": false
+        },
+        {
+          "base_url": "http://172.30.137.10:8443/wild-api",
+          "env": "WILD_BASE_URL",
+          "extra_headers": {},
+          "forward_headers": [],
+          "header": "x-api-key",
+          "policy_digest": "697cd95840e2f60cbbf88dba9084a6fbb5d04a016d75f83bc85bf838515bb6b9",
+          "ref": "wild-api",
+          "rules": [
+            {
+              "match": "prefix",
+              "methods": [
+                "GET",
+                "HEAD",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "path": "/"
+            }
+          ],
+          "scheme": "",
+          "secret_id": "6e498e162a7e3d7b4ef70ae0c96a77d4",
+          "upstreams": [
+            "api.wild.example"
+          ],
+          "value_fingerprint": "sfp1_14fa5972fd2f22bdd000e27b41a4ebb6",
+          "wildcard_rules": true
+        }
+      ],
+      "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
+      "target": {
+        "id": "3051ed3763d89e3871ce3d313dc46788",
+        "name": "local"
+      },
+      "workdir": "/var/lib/agentgate/workspace"
+    },
+    "policy": {
+      "broker": {
+        "address": "172.30.137.10",
+        "port": 8443,
+        "protocol": "tcp"
+      },
+      "default": "deny",
+      "dns": {
+        "port": 53,
+        "protocols": [
+          "udp",
+          "tcp"
+        ],
+        "resolvers": [
+          "1.1.1.1"
+        ]
+      },
+      "duration_seconds": 3600,
+      "filesystem": {
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/sbin",
+          "/lib",
+          "/lib64"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        },
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard",
+          "/srv/data",
+          "/var/lib/agentgate/mounts/repo"
+        ],
+        "scratch": [
+          "/tmp"
+        ],
+        "workspace": "/var/lib/agentgate/workspace"
+      },
+      "ipv6": "deny",
+      "mode": "session",
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2",
+          "SIGCONT",
+          "SIGSTOP",
+          "SIGCHLD",
+          "SIGPIPE",
+          "SIGALRM",
+          "SIGWINCH"
+        ]
+      },
+      "version": "agentgate.poc.v2",
+      "web": {
+        "destination": "public-ipv4",
+        "rules": [
+          {
+            "port": 443,
+            "protocol": "tcp"
+          }
+        ]
+      }
+    },
+    "policy_digest": "3a130c178525c4a66527140f0677daf2f62e212f77b16cc2b149a3c91cf6c710",
+    "profile_version_id": "a3bad224d203d391a0411796098f09ab",
+    "queued_at": "2026-10-25T02:51:18.731503827Z",
+    "requested_by": "oidc:lin",
+    "revision": 6,
+    "spec": {
+      "access": {
+        "profile": "python-dev",
+        "version": 2
+      },
+      "agent": {
+        "command": [
+          "agent",
+          "--print",
+          "fix the failing tests"
+        ],
+        "env": {
+          "EDITOR": "vi"
+        },
+        "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "workdir": "/var/lib/agentgate/workspace"
+      },
+      "approval": "auto",
+      "lifetime_seconds": 3600,
+      "mode": "session",
+      "mounts": [
+        {
+          "mode": "read-only",
+          "name": "repo",
+          "source": "/srv/repos/app"
+        }
+      ],
+      "name": "docs-agent",
+      "secrets": [
+        {
+          "expose": {
+            "env": "DOCS_BASE_URL"
+          },
+          "ref": "docs-api"
+        },
+        {
+          "expose": {
+            "env": "WILD_BASE_URL"
+          },
+          "ref": "wild-api"
+        }
+      ],
+      "target": "local",
+      "version": "agentgate.launch.v1"
+    },
+    "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
+    "started_at": "2026-10-25T02:51:18.738348417Z",
+    "state": "running",
+    "target_id": "3051ed3763d89e3871ce3d313dc46788",
+    "updated_at": "2026-10-25T02:51:18.738348417Z"
+  }
+}

@@ -68,6 +68,7 @@ type Terminal struct {
 	Empty             bool   `json:"empty"`
 	RightsRemoved     bool   `json:"rights_removed"`
 	OutputDigest      string `json:"output_digest"`
+	StderrDigest      string `json:"stderr_digest,omitempty"`
 	CountersAvailable bool   `json:"counters_available"`
 }
 type NodeSeal struct {

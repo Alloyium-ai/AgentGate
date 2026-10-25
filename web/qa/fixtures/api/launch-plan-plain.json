@@ -1,0 +1,237 @@
+{
+  "request": {
+    "access": {
+      "profile": "python-dev",
+      "version": 1
+    },
+    "agent": {
+      "command": [
+        "agent",
+        "--print",
+        "fix the failing tests"
+      ],
+      "env": {
+        "EDITOR": "vi"
+      },
+      "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "workdir": "/var/lib/agentgate/workspace"
+    },
+    "approval": "auto",
+    "lifetime_seconds": 3600,
+    "mode": "session",
+    "mounts": [],
+    "name": "quick-check",
+    "secrets": [],
+    "target": "local",
+    "version": "agentgate.launch.v1"
+  },
+  "response": {
+    "dry_run": true,
+    "plan": {
+      "approval": "required",
+      "approval_reasons": [
+        "public web access",
+        "signals beyond the defaults: SIGALRM, SIGCHLD, SIGPIPE",
+        "the profile requires approval",
+        "the taskboard bridge /run/agentgate/taskboard (read-only)"
+      ],
+      "command": [
+        "agent",
+        "--print",
+        "fix the failing tests"
+      ],
+      "expires_at": "2026-10-25T03:51:18Z",
+      "expiry_rule": "the lifetime starts when the launch is queued; the host and the kernel policy end it at expires_at",
+      "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kernel_verified": false,
+      "lifetime_seconds": 3600,
+      "mode": "session",
+      "mounts": [],
+      "notices": [
+        "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
+        "the target does not advertise bpf-lsm; the host fails closed if it cannot enforce the policy"
+      ],
+      "permissions": {
+        "anonymous_execute": false,
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "dns_resolvers": [
+          "1.1.1.1"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/sbin",
+          "/lib",
+          "/lib64"
+        ],
+        "ipv6": "deny",
+        "network_default": "deny",
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2",
+          "SIGCONT",
+          "SIGSTOP",
+          "SIGCHLD",
+          "SIGPIPE",
+          "SIGALRM"
+        ],
+        "taskboard": "10.10.10.10:8080",
+        "web": [
+          "http",
+          "https"
+        ],
+        "writable": [
+          "/var/lib/agentgate/workspace",
+          "/tmp"
+        ]
+      },
+      "policy_digest": "0f9e8ba3d5583f75f456f3af5cd29300228859fe0fec81b19aa6d2c0efd8322c",
+      "profile": {
+        "digest": "d81ea3096db0b17b0f376a7e68a9cfb43714d7eeda858c2b7ad0148d1d00bad3",
+        "id": "c717ba3bb2a5be625311ecc64aab9e9e",
+        "name": "python-dev",
+        "version": 1,
+        "version_id": "8f5e872f74dbee2fdb3996b1d676578c"
+      },
+      "secrets": [],
+      "spec_digest": "2175321b70f7fbb3eacfb24f6d1c08b0e947e7a2ae90f55a446b78396250fa67",
+      "target": {
+        "id": "3051ed3763d89e3871ce3d313dc46788",
+        "name": "local"
+      },
+      "workdir": "/var/lib/agentgate/workspace"
+    },
+    "policy": {
+      "default": "deny",
+      "dns": {
+        "port": 53,
+        "protocols": [
+          "udp",
+          "tcp"
+        ],
+        "resolvers": [
+          "1.1.1.1"
+        ]
+      },
+      "duration_seconds": 3600,
+      "filesystem": {
+        "deny": [
+          "/etc/shadow",
+          "/etc/gshadow",
+          "/proc/sys",
+          "/proc/kcore",
+          "/proc/sysrq-trigger"
+        ],
+        "devices": [
+          "/dev/null",
+          "/dev/zero",
+          "/dev/random",
+          "/dev/urandom"
+        ],
+        "execute": [
+          "/usr",
+          "/bin",
+          "/sbin",
+          "/lib",
+          "/lib64"
+        ],
+        "memory": {
+          "anonymous_execute": false
+        },
+        "read_only": [
+          "/etc",
+          "/proc",
+          "/run/agentgate/taskboard"
+        ],
+        "scratch": [
+          "/tmp"
+        ],
+        "workspace": "/var/lib/agentgate/workspace"
+      },
+      "ipv6": "deny",
+      "mode": "session",
+      "process": {
+        "signals": [
+          "SIGINT",
+          "SIGTERM",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2",
+          "SIGCONT",
+          "SIGSTOP",
+          "SIGCHLD",
+          "SIGPIPE",
+          "SIGALRM"
+        ]
+      },
+      "taskboard": {
+        "address": "10.10.10.10",
+        "port": 8080,
+        "protocol": "tcp",
+        "task_id": 1
+      },
+      "version": "agentgate.poc.v2",
+      "web": {
+        "destination": "public-ipv4",
+        "rules": [
+          {
+            "port": 80,
+            "protocol": "tcp"
+          },
+          {
+            "port": 443,
+            "protocol": "tcp"
+          }
+        ]
+      }
+    },
+    "spec": {
+      "access": {
+        "profile": "python-dev",
+        "version": 1
+      },
+      "agent": {
+        "command": [
+          "agent",
+          "--print",
+          "fix the failing tests"
+        ],
+        "env": {
+          "EDITOR": "vi"
+        },
+        "image": "agentgate-coding@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "workdir": "/var/lib/agentgate/workspace"
+      },
+      "approval": "auto",
+      "lifetime_seconds": 3600,
+      "mode": "session",
+      "mounts": [],
+      "name": "quick-check",
+      "secrets": [],
+      "target": "local",
+      "version": "agentgate.launch.v1"
+    }
+  }
+}

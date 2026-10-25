@@ -61,7 +61,9 @@ const server = createServer(async (request, response) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch({ headless: true });
+// QA_CHROMIUM points at a preinstalled browser when the pinned Playwright
+// build is not downloaded (for example /opt/pw-browsers in the build sandbox).
+const browser = await chromium.launch({ headless: true, executablePath: process.env.QA_CHROMIUM || undefined });
 const errors = [];
 const requests = [];
 let roles = ["admin"];

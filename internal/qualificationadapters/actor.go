@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"os"
 	"os/exec"
 	"runtime"
 	"syscall"
 
+	"alloyium.local/kernel-poc/internal/policy"
 	"alloyium.local/kernel-poc/internal/runtimeguard"
 	"golang.org/x/sys/unix"
 )
@@ -26,7 +28,52 @@ type actorProcess struct {
 	brokerDone               <-chan struct{}
 }
 
-func actorFilters(file *os.File, plan runtimeguard.Plan, binding string) (setupSHA, finalSHA string, err error) {
+type actorEndpoint struct {
+	Family  uint8
+	Port    uint16
+	Address [16]byte
+}
+
+// Only the exact taskboard exception in the requested pilot document is
+// supplied to the fixed actor. The address is data from the signed policy,
+// never a source-template or SSH-client environment value.
+func pilotActorEndpoint(network *policy.Network) (actorEndpoint, error) {
+	var out actorEndpoint
+	if network == nil || network.Pilot == nil {
+		return out, nil
+	}
+	pilot := network.Pilot
+	address, err := netip.ParseAddr(pilot.TaskboardIP)
+	if err != nil || address.String() != pilot.TaskboardIP || address.Is4In6() || address.Zone() != "" || pilot.TaskboardPort < 1 || pilot.TaskboardPort > 65535 {
+		return out, errors.New("the fixed actor taskboard endpoint differs")
+	}
+	family := "ipv4"
+	out.Family = 4
+	if address.Is6() {
+		family = "ipv6"
+		out.Family = 6
+	}
+	matched := false
+	for _, rule := range network.Rules {
+		if rule.Effect == "allow" && rule.Family == family && rule.Protocol == "tcp" &&
+			rule.Destination.Kind == "ip" && rule.Destination.Value == pilot.TaskboardIP &&
+			rule.PortFrom == pilot.TaskboardPort && rule.PortTo == pilot.TaskboardPort {
+			matched = true
+		}
+	}
+	if !matched {
+		return actorEndpoint{}, errors.New("the fixed actor taskboard exception is not signed")
+	}
+	out.Port = uint16(pilot.TaskboardPort)
+	if address.Is4() {
+		copy(out.Address[:4], address.AsSlice())
+	} else {
+		out.Address = address.As16()
+	}
+	return out, nil
+}
+
+func actorFilters(file *os.File, plan runtimeguard.Plan, binding string, endpoint actorEndpoint) (setupSHA, finalSHA string, err error) {
 	if len(binding) != 64 {
 		return "", "", errors.New("the actor requires its exact binding digest")
 	}
@@ -34,7 +81,7 @@ func actorFilters(file *os.File, plan runtimeguard.Plan, binding string) (setupS
 	if err != nil {
 		return "", "", err
 	}
-	if _, err = file.Write([]byte("AGQCF002")); err != nil {
+	if _, err = file.Write([]byte("AGQCF003")); err != nil {
 		return "", "", err
 	}
 	for _, count := range []uint16{uint16(len(setup)), uint16(len(final))} {
@@ -43,6 +90,15 @@ func actorFilters(file *os.File, plan runtimeguard.Plan, binding string) (setupS
 		}
 	}
 	if _, err = file.Write([]byte(binding)); err != nil {
+		return "", "", err
+	}
+	if _, err = file.Write([]byte{endpoint.Family}); err != nil {
+		return "", "", err
+	}
+	if err = binary.Write(file, binary.LittleEndian, endpoint.Port); err != nil {
+		return "", "", err
+	}
+	if _, err = file.Write(endpoint.Address[:]); err != nil {
 		return "", "", err
 	}
 	for _, filters := range [][]unix.SockFilter{setup, final} {
@@ -54,14 +110,14 @@ func actorFilters(file *os.File, plan runtimeguard.Plan, binding string) (setupS
 	return filterDigest(setup), filterDigest(final), err
 }
 
-func (a *candidateDenial) startActor(ctx context.Context, path, workerHash string, io *ownedIO, plan runtimeguard.Plan, binding string) (actor *actorProcess, err error) {
+func (a *candidateDenial) startActor(ctx context.Context, path, workerHash string, io *ownedIO, plan runtimeguard.Plan, binding string, endpoint actorEndpoint) (actor *actorProcess, err error) {
 	file, err := os.CreateTemp(a.config.ScratchRoot, ".qualification-filter-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
-	setup, final, err := actorFilters(file, plan, binding)
+	setup, final, err := actorFilters(file, plan, binding, endpoint)
 	if err != nil {
 		return nil, err
 	}

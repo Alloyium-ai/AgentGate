@@ -15,6 +15,9 @@ func complete(b Bundle, t Terminal) bool {
 	if !t.Empty || !t.RightsRemoved || !t.CountersAvailable || !hash64.MatchString(t.OutputDigest) {
 		return false
 	}
+	if t.StderrDigest != "" && !hash64.MatchString(t.StderrDigest) {
+		return false
+	}
 	switch t.State {
 	case "completed":
 		if t.ExitCode != 0 {

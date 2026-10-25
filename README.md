@@ -2,14 +2,76 @@
 
 A kernel-level firewall for AI agents.
 
-Experimental software under active development. This source preview supports inspection, builds and isolated development.
-It does not provide complete workload confinement or a qualified production installation.
-Normal full-policy admission remains unavailable until the required behavior contracts pass for the exact target and policy.
+Start with the [guarded SSH POC](poc/ssh-diagnostic/README.md) and its [editable JSON policy](poc/ssh-diagnostic/policy.example.json).
+On a supported Linux Docker/KVM host, one command provisions the guarded VM and coding container:
+
+```sh
+python3 poc/ssh-diagnostic/appliance.py start --policy ./policy.json --token-file ./taskboard.token
+```
+
+The guide explains the two protected input files, ready-to-copy SSH command, persistent state, and workload base override.
+
+It runs authenticated coding commands in a fresh Docker target with a real BPF network guard.
+The default policy allows IPv4 DNS through configured resolvers, public HTTP and HTTPS, and explicit UDP443 for QUIC.
+It denies other endpoints and IPv6. An independent kernel boundary blocks LAN access except the exact taskboard TCP endpoint.
+The one-task bridge keeps its upstream token outside the target.
+
+Edit the installed `policy.json` through the management connection. The next SSH command validates and applies the edit.
+The audit records the effective policy digest. The POC uses JSON directly; its browser UI is separate.
+The guide includes the owned VM prerequisites, Docker builds, setup, command examples, and audit instructions.
+
+This is experimental software. The SSH POC supports a focused network flow with a 25-second command cutoff.
+Filesystem, executable, and process controls are implemented for the SSH POC as an opt-in policy version, but they are not yet exercised on a BPF LSM kernel. There is no syscall filter.
+Normal full-policy product admission remains closed. This does not prevent the explicitly isolated SSH POC.
+
+A provisioning control plane launches agents into the same guarded targets: a Go service with a REST API, a browser UI and the `agentgate` CLI, a host agent (`agentgate-hostd`) on each target, and a per-launch credential broker.
+It covers targets and host key approval, versioned access profiles, launches with a second person's approval, sealed secrets and audit.
+Read [provisioning](docs/PROVISIONING.md), the [CLI](docs/CLI.md) and the [quickstart](poc/ssh-diagnostic/README.md#quickstart-provision-grant-launch-control-plane), which has never run as a whole.
 
 The source includes a local policy API and browser UI, versioned policies, approval requests, basic roles, audit export and verification.
+The `ssh/` directory includes a standalone forced-command ingress and a read-only taskboard bridge. The [guarded SSH POC](poc/ssh-diagnostic/README.md) includes portable Docker targets and per-command setup. Full product qualification remains open.
 The local control service uses signed SQLite configuration. Its local authentication path needs no fleet service or vendor account.
 External OIDC is optional. First-party user-space code uses Apache-2.0, BPF uses GPL-2.0-only, and documentation uses CC-BY-4.0.
 Third-party dependencies retain their supplier terms. The component map records the exact license scope.
+
+## Status and verification
+
+**Built.** The guarded SSH POC and its BPF programs (network guard, filesystem, process); the control plane service,
+REST API, UI and CLI; the host agent; the launch runtime on the guarded-target path; the credential broker with its
+sealed secret relay; packaging (`make agentgate`, `deploy/install.sh`, compose files); and a kernel verification kit
+(`poc/ssh-diagnostic/verify-kernel.sh`).
+
+**Tested in the build sandbox only.** Go unit and integration tests run in process: the real service, host agent,
+host protocol and broker, with fake hosts, a TLS fake upstream, and Docker and the guard replaced by recorders. Python
+tests run the launch runtime, grants and the verification kit's logic against fakes. The UI has node unit tests and
+Playwright runs against a mock whose answers are checked against answers recorded from the real service. The BPF build
+target compiles the programs; compiling loads nothing into a kernel.
+
+**Never run.** No BPF LSM program has been loaded by a kernel's verifier or enforced anything: no BPF-LSM kernel was
+available. No Docker daemon ran a target, a guard, a broker container or a compose file. No systemd unit was installed
+or started. Nothing ran on a real host: there has been no end-to-end launch, no real DNS or upstream API, and every
+launch reports `kernel_verified: false`. Treat every enforcement claim in these documents as untested until the steps
+below pass.
+
+**Reviews.** Two independent adversarial review rounds examined this code. The findings they confirmed were fixed in
+follow-up commits with regression tests (the pull request lists them); a review does not show that no defect remains.
+
+**First steps on a disposable BPF-LSM VM.** Use only a fresh, disposable x86-64 QEMU VM that you own, never a machine
+with data you need:
+
+1. Boot kernel 6.8.0-142-generic with BPF LSM enabled (`bpf` in `lsm=`), BTF and cgroup v2, with rootful Docker,
+   Python 3 and util-linux installed. Check `grep -w bpf /sys/kernel/security/lsm`, `test -r /sys/kernel/btf/vmlinux`
+   and `mountpoint /sys/fs/bpf`.
+2. Mark the VM disposable: `echo kernel-poc-$(hostname) | sudo tee /etc/alloyium-disposable-vm`. The kit and the
+   guard's preflight refuse to run without this marker.
+3. Build the artifacts and target images and configure the instance `demo` as in the POC guide
+   ([Build the portable artifacts](poc/ssh-diagnostic/README.md#build-the-portable-artifacts),
+   [Configure the VM](poc/ssh-diagnostic/README.md#configure-the-vm)).
+4. Run `poc/ssh-diagnostic/verify-kernel.sh --self-check`, then
+   `sudo poc/ssh-diagnostic/verify-kernel.sh --instance demo --report ./verify-report.json`.
+5. Read the report: each BPF program's verifier result is reported verbatim, and every behaviour probe states what it
+   expected and what it saw. Expect first-boot failures. The kit never sets `kernel_verified`; check the kernel
+   assumptions in [qualification status](docs/QUALIFICATION.md) before relying on any result.
 
 ## Build and test
 
@@ -23,13 +85,13 @@ docker build --target bpf -t agentgate-preview-bpf .
 docker build -t agentgate-source-preview .
 ```
 
-The web target runs the schema unit tests and the browser workspace test against owned mock responses.
+The web target runs the schema unit tests and the isolated browser workspace test.
 The Go target runs the race suite and builds the local service and the limited node entrypoint.
 The BPF target compiles the selected inspection program. Compilation does not load a kernel program or qualify its behavior.
 Read [development instructions](docs/DEVELOPMENT.md) for source verification, dependency records and test prerequisites.
 
-This preview supplies source and build recipes. It supplies no prebuilt image, public registry artifact or production deployment.
-An eventual distributed image must come from reviewed CI and use an immutable registry digest.
+This preview supplies source and build recipes. It supplies no public registry artifact or production deployment.
+After independent review, protected release CI builds the Community product, standalone SSH ingress, coding target and taskboard bridge images and publishes them to the private registry. Deployments must use their immutable manifest digests. An image build alone does not qualify a policy or authorize workload admission.
 
 ## Architecture
 
@@ -37,10 +99,10 @@ The React UI calls the local Go policy service. The service stores immutable pol
 Separate trust storage pins its configuration and authority. Workload signing, kernel enforcement and evidence verification have distinct responsibilities.
 Read the [architecture and trust boundaries](docs/ARCHITECTURE.md) before testing these components.
 
-## Known limits
+## Wider product and legacy inspection limits
 
-The source contains a limited existing-file write and new IPv4 TCP inspection path, plus incomplete full-policy components.
-The limited path does not provide read, executable, complete filesystem mutation, IPv6 or UDP confinement.
+The older inspection path contains a limited existing-file write and new IPv4 TCP check. It is separate from the SSH network POC.
+That older path does not provide read, executable, complete filesystem mutation, IPv6 or UDP confinement.
 Existing descriptors and established connections lack immediate revocation in that path.
 The full-policy components do not yet satisfy every required behavior contract for general agent workloads.
 This preview makes no real-agent or model-turn qualification claim.

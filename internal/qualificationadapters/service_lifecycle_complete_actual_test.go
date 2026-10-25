@@ -5,14 +5,12 @@
 package qualificationadapters
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"alloyium.local/kernel-poc/internal/jobauthority"
-	"alloyium.local/kernel-poc/internal/nodecontrol"
 	"alloyium.local/kernel-poc/internal/qualification"
 )
 
@@ -37,110 +35,26 @@ func actualCompleteServiceLifecycleFixture(t *testing.T) (qualification.Request,
 	return request, output.Results
 }
 
-func TestActualServiceLifecycleAllScenesAndCutoff(t *testing.T) {
+func TestHistoricalCompleteServiceLifecycleCannotQualifyCurrentSchema(t *testing.T) {
 	request, results := actualCompleteServiceLifecycleFixture(t)
-	unique := map[string]bool{}
 	for index, mode := range []string{"stop", "expiry", "revoke"} {
 		coverage, err := (&serviceLifecycleAdapter{mode: mode}).Verify(request, results[index+1])
-		if err != nil {
-			t.Fatal(mode, err)
+		if err == nil || !strings.Contains(err.Error(), "qualification candidate binding differs") || len(coverage) != 0 {
+			t.Fatal("a historical service scene supplied current-schema coverage", mode, coverage, err)
 		}
-		count := 0
-		for _, item := range coverage {
-			count += len(item.Cases)
-			for _, name := range item.Cases {
-				unique[item.CapabilityID+"/"+name] = true
-			}
-		}
-		want := 22
-		if mode == "stop" {
-			want = 21
-		}
-		if count != want || len(coverage) != 6 {
-			t.Fatal("the complete actual scene coverage differs", mode, coverage)
-		}
-	}
-	if len(unique) != 23 || !unique["lifecycle.baseline.v1/grant-wall-and-mono-cutoff"] || !unique["lifecycle.baseline.v1/revoked-grant-stops"] {
-		t.Fatal("the unique actual fixture coverage differs", unique)
 	}
 }
 
-func TestActualServiceLifecycleCutoffRequiresEveryReadback(t *testing.T) {
-	for name, change := range map[string]func(*serviceLifecycleScene){
-		"missing watchdog row":  func(s *serviceLifecycleScene) { s.WatchdogState = nil },
-		"wider watchdog cutoff": func(s *serviceLifecycleScene) { s.WatchdogState.Rows[0].EffectiveDeadlineNS++ },
-		"different database":    func(s *serviceLifecycleScene) { s.WatchdogState.After.Inode++ },
-		"revoke before expiry": func(s *serviceLifecycleScene) {
-			s.AuthorityCalls = append(s.AuthorityCalls, serviceLifecycleAuthorityCall{Operation: "revoke"})
-		},
-		"missing observer": func(s *serviceLifecycleScene) {
-			mutateActualCutoffControl(t, s, "observer_binding_readback", func(_ *nodecontrol.Record) bool { return false })
-		},
-		"wider observer cutoff": func(s *serviceLifecycleScene) {
-			mutateActualCutoffControl(t, s, "observer_binding_readback", func(c *nodecontrol.Record) bool {
-				var p nodecontrol.ObserverBinding
-				if err := json.Unmarshal(c.Payload, &p); err != nil {
-					t.Fatal(err)
-				}
-				binary.LittleEndian.PutUint64(p.Binding[8:], binary.LittleEndian.Uint64(p.Binding[8:])+1)
-				c.Payload = serviceJSON(p)
-				return true
-			})
-		},
-		"changed wall sample": func(s *serviceLifecycleScene) {
-			mutateActualCutoffControl(t, s, "grant_expiry_bound", func(c *nodecontrol.Record) bool {
-				var p map[string]json.RawMessage
-				if err := json.Unmarshal(c.Payload, &p); err != nil {
-					t.Fatal(err)
-				}
-				p["wall_sample_unix_ns"] = json.RawMessage(`"1"`)
-				c.Payload = serviceJSON(p)
-				return true
-			})
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, results := actualCompleteServiceLifecycleFixture(t)
-			var receipt serviceLifecycleReceipt
-			if err := json.Unmarshal(results[2].Raw, &receipt); err != nil {
-				t.Fatal(err)
-			}
-			scene := receipt.Scenes[0]
-			if err := verifyServiceLifecycleCutoff(scene); err != nil {
-				t.Fatal("the original actual cutoff proof failed", err)
-			}
-			change(&scene)
-			if verifyServiceLifecycleCutoff(scene) == nil {
-				t.Fatal("changed actual cutoff facts supplied coverage")
-			}
-		})
-	}
-}
-
-func mutateActualCutoffControl(t *testing.T, scene *serviceLifecycleScene, phase string, mutate func(*nodecontrol.Record) bool) {
-	t.Helper()
-	bundle, err := jobauthority.DecodeAuditBundle(scene.Audit)
-	if err != nil {
+func TestHistoricalCompleteServiceCutoffIsNotCurrentProof(t *testing.T) {
+	_, results := actualCompleteServiceLifecycleFixture(t)
+	var receipt serviceLifecycleReceipt
+	if err := json.Unmarshal(results[2].Raw, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	for index := range bundle.Events {
-		if bundle.Events[index].Stream != nodecontrol.Stream {
-			continue
-		}
-		var control nodecontrol.Record
-		if err = json.Unmarshal(bundle.Events[index].Raw, &control); err != nil {
-			t.Fatal(err)
-		}
-		if control.Phase != phase {
-			continue
-		}
-		if mutate(&control) {
-			bundle.Events[index].Raw = serviceJSON(control)
-		} else {
-			bundle.Events = append(bundle.Events[:index], bundle.Events[index+1:]...)
-		}
-		scene.Audit = serviceJSON(bundle)
-		return
+	if len(receipt.Scenes) == 0 {
+		t.Fatal("the historical expiry scene is absent")
 	}
-	t.Fatal("the actual cutoff control is absent", phase)
+	if err := verifyServiceLifecycleCutoff(receipt.Scenes[0]); err == nil || !strings.Contains(err.Error(), "actual installed cutoff differs") {
+		t.Fatal("a historical cutoff readback supplied current proof")
+	}
 }

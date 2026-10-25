@@ -36,6 +36,9 @@ func fileHash(name string) (string, error) {
 
 var snapshotFiles = []string{"data/control.db", "data/authority.key", "data/manifest.json", "config/config.db", "config/config.key"}
 
+// optionalSnapshotFiles exist in backups made after host job keys were added.
+var optionalSnapshotFiles = []string{"data/jobs.key"}
+
 func backup(config *localconfig.Store, store *control.Store, record localconfig.Record, dest string) error {
 	if !filepath.IsAbs(dest) {
 		return errors.New("backup requires an absolute private directory")
@@ -56,6 +59,11 @@ func backup(config *localconfig.Store, store *control.Store, record localconfig.
 			return err
 		}
 		m.Files[path] = value
+	}
+	for _, path := range optionalSnapshotFiles {
+		if value, err := fileHash(filepath.Join(dest, path)); err == nil {
+			m.Files[path] = value
+		}
 	}
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -95,13 +103,24 @@ func restore(source, dest, trust string) error {
 	if err := jsonFile(filepath.Join(source, "manifest.json"), &m); err != nil {
 		return err
 	}
-	if m.Schema != "agentgate.community.backup.v1" || len(m.Files) != len(snapshotFiles) {
+	expected := len(snapshotFiles)
+	for _, path := range optionalSnapshotFiles {
+		if _, ok := m.Files[path]; ok {
+			expected++
+		}
+	}
+	if m.Schema != "agentgate.community.backup.v1" || len(m.Files) != expected {
 		return errors.New("unsupported Community backup")
 	}
-	for _, path := range snapshotFiles {
+	for path := range m.Files {
 		value, err := fileHash(filepath.Join(source, path))
 		if err != nil || value != m.Files[path] {
 			return errors.New("backup file differs from its manifest")
+		}
+	}
+	for _, path := range snapshotFiles {
+		if _, ok := m.Files[path]; !ok {
+			return errors.New("unsupported Community backup")
 		}
 	}
 	if err := os.Mkdir(dest, 0700); err != nil {

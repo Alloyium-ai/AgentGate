@@ -19,6 +19,7 @@ type RuntimeArtifact struct {
 	ExecutableDigest  string
 	ImageDigest       string
 	ArgumentsPrefix   []string
+	Environment       map[string]string `json:"environment,omitempty"`
 	EntryScript       string
 	EntryScriptDigest string
 	PackageRoot       string

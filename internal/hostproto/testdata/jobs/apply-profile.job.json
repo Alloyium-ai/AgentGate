@@ -1,0 +1,18 @@
+{
+  "version": "agentgate.hostd.job.v1",
+  "id": "00000000000000000000000000000002",
+  "type": "apply-profile",
+  "target_id": "0123456789abcdef0123456789abcdef",
+  "launch_id": "",
+  "spec_digest": "",
+  "policy_digest": "330fbdc7f3e2588f647355a2a50dcf6dc0c64f226ee7e1326ca21338f3579ab8",
+  "issued_at_ms": 1790000000000,
+  "deadline_ms": 1790007200000,
+  "payload": {
+    "profile_id": "abcdefabcdefabcdefabcdefabcdefab",
+    "profile_version": 3,
+    "policy": {
+      "version": "agentgate.poc.v2"
+    }
+  }
+}
