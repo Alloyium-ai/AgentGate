@@ -240,7 +240,12 @@ func (s *Store) PreauthenticateHost(raw []byte, domain string) (string, error) {
 // signature verifies are audited as anonymous denials. After it verifies,
 // the nonce and sequence advance even when the request is then refused, so
 // a refused signed request can never be replayed later.
-func (s *Store) hostRequest(raw []byte, domain, action string, op Operation, decode func(hostproto.Envelope) (hostproto.Header, error), dst any, headerOf func() hostproto.Header, work func(*sql.Tx, Target) (any, error)) (any, error) {
+//
+// Change streams hear of the request only when it changed something they
+// show: the audit rows it appended (a job delivered, a state transition, a
+// receipt, a capability change) and what work adds to touched (new launch
+// events and log lines). A heartbeat alone changes nothing they show.
+func (s *Store) hostRequest(raw []byte, domain, action string, op Operation, decode func(hostproto.Envelope) (hostproto.Header, error), dst any, headerOf func() hostproto.Header, touched *[]string, work func(*sql.Tx, Target) (any, error)) (any, error) {
 	env, err := hostproto.DecodeEnvelope(raw)
 	if err != nil {
 		return nil, s.hostDenied(op, fail(422, "invalid_envelope", "Supply one signed hostproto envelope."))
@@ -295,7 +300,11 @@ func (s *Store) hostRequest(raw []byte, domain, action string, op Operation, dec
 	if err != nil {
 		return nil, err
 	}
-	s.notify(last)
+	var extra []string
+	if touched != nil && werr == nil {
+		extra = *touched
+	}
+	s.notify(last, extra...)
 	if werr != nil {
 		return nil, werr
 	}
@@ -393,7 +402,7 @@ func (s *Store) HostPoll(raw []byte, requestID string) (hostproto.PollResponse, 
 			var pre hostproto.PollRequest
 			err := hostproto.UnverifiedPayload(env, &pre)
 			return pre.Header, err
-		}, &req, func() hostproto.Header { return req.Header },
+		}, &req, func() hostproto.Header { return req.Header }, nil,
 		func(tx *sql.Tx, t Target) (any, error) {
 			if err := req.Check(s.now()); err != nil {
 				return nil, fail(422, "invalid_poll", strings.TrimPrefix(err.Error(), "hostproto: "))
@@ -483,13 +492,14 @@ func (s *Store) pollWork(tx *sql.Tx, t Target, req hostproto.PollRequest) (hostp
 // HostEvents appends ordered job events and applies their effects.
 func (s *Store) HostEvents(jobID string, raw []byte, requestID string) (hostproto.EventsResponse, error) {
 	var req hostproto.EventsRequest
+	var touched []string
 	op := hostOp(requestID, "hostd.events", "job:"+jobID)
 	value, err := s.hostRequest(raw, hostproto.DomainEvents, "hostd.events", op,
 		func(env hostproto.Envelope) (hostproto.Header, error) {
 			var pre hostproto.EventsRequest
 			err := hostproto.UnverifiedPayload(env, &pre)
 			return pre.Header, err
-		}, &req, func() hostproto.Header { return req.Header },
+		}, &req, func() hostproto.Header { return req.Header }, &touched,
 		func(tx *sql.Tx, t Target) (any, error) {
 			if err := req.Check(s.now()); err != nil {
 				return nil, fail(422, "invalid_events", strings.TrimPrefix(err.Error(), "hostproto: "))
@@ -497,7 +507,16 @@ func (s *Store) HostEvents(jobID string, raw []byte, requestID string) (hostprot
 			if req.JobID != jobID {
 				return nil, fail(422, "invalid_events", "The signed job id differs from the path.")
 			}
-			return s.eventsWork(tx, t, req)
+			var seq int
+			var launch string
+			tx.QueryRow("SELECT event_seq,launch_id FROM jobs WHERE id=? AND target_id=?", jobID, t.ID).Scan(&seq, &launch)
+			resp, err := s.eventsWork(tx, t, req)
+			// New events of a launch job (progress, log lines) wake that
+			// launch's own streams; re-sent events change nothing.
+			if err == nil && launch != "" && int(resp.AcceptedThrough) > seq {
+				touched = append(touched, "launch-log:"+launch)
+			}
+			return resp, err
 		})
 	if err != nil {
 		return hostproto.EventsResponse{}, err

@@ -12,6 +12,7 @@ import { loadTS } from "./load-ts.mjs";
 import { shapeIssues } from "./api-shapes.mjs";
 
 const M = await loadTS("launch-spec", "access-model", "launch-stream", "log-view", "evidence", "secret-rules");
+const C = await loadTS("changes");
 const repo = (p) => {
   try {
     return readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
@@ -442,4 +443,57 @@ test("the recorded fixtures carry the final secret API", () => {
   assert.ok(plan.notices.some((n) => n.startsWith("WARNING: secret wild-api uses wildcard rules")));
   assert.equal(fixture("launch-plan-plain.json").response.plan.broker, undefined);
   assert.ok(!JSON.stringify(fixture("secrets.json")).includes("synthetic-credential"));
+});
+
+test("a change event reloads only the paths it names", () => {
+  const touched = (path, resources) => C.pathTouched(path, resources);
+  assert.equal(touched("launches/abc", ["launch:abc"]), true);
+  assert.equal(touched("launches/abc", ["launch:def", "target:t1"]), false);
+  assert.equal(touched("launches?state=running", ["launch:def"]), true);
+  assert.equal(touched("launches/summary", ["launch:def"]), true);
+  assert.equal(touched("targets", ["launch:def"]), false);
+  assert.equal(touched("targets/t1", ["target:t1"]), true);
+  assert.equal(touched("targets/t1/seal-key", ["target:t2"]), false);
+  assert.equal(touched("secrets", ["secret:s1"]), true);
+  assert.equal(touched("profiles/p%201", ["profile:p 1"]), true);
+  assert.equal(touched("access-presets", ["profile:p1"]), true);
+  assert.equal(touched("audit?limit=50", ["audit"]), true);
+  assert.equal(touched("audit", ["launch:a"]), false);
+  assert.equal(touched("launch-spec-schema", ["launch:a", "audit", "other"]), false);
+  assert.equal(touched("overview", ["other"]), true);
+  assert.equal(touched("overview", ["launch:a"]), false);
+  // No resources: everything may have changed.
+  assert.equal(touched("launches/abc", undefined), true);
+  assert.equal(touched("launch-spec-schema", undefined), true);
+  assert.deepEqual(C.parseChange('{"id":7,"resources":["launch:a"]}'), { resources: ["launch:a"] });
+  assert.deepEqual(C.parseChange('{"id":7}'), {});
+  assert.deepEqual(C.parseChange("not json"), {});
+  assert.deepEqual(C.parseChange('{"resources":[1]}'), {});
+});
+
+test("reloads back off while changes keep coming and recover after a quiet period", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  let reloads = 0;
+  const paced = C.pacedReload(() => reloads++);
+  // A change every 100 ms for 20 s: the gap grows to RELOAD_MAX_MS.
+  for (let ms = 0; ms < 20000; ms += 100) {
+    paced.hit();
+    t.mock.timers.tick(100);
+  }
+  t.mock.timers.tick(C.RELOAD_MAX_MS);
+  assert.ok(reloads >= 3 && reloads <= 8, `reloads during a 20 s burst: ${reloads}`);
+  // After a quiet period one change reloads within the minimum delay.
+  t.mock.timers.tick(15000);
+  const before = reloads;
+  paced.hit();
+  t.mock.timers.tick(200);
+  assert.equal(reloads, before + 1);
+  // Listeners receive what is published, and stop when they unsubscribe.
+  const seen = [];
+  const off = C.subscribeChanges((n) => seen.push(n));
+  C.publishChange({ resources: ["launch:a"] });
+  off();
+  C.publishChange({});
+  assert.deepEqual(seen, [{ resources: ["launch:a"] }]);
+  paced.cancel();
 });

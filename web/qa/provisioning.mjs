@@ -66,6 +66,9 @@ const streamRequests = [];
 const logStreams = [];
 const requests = [];
 const served = [];
+// Changed events the fixture's /api/v1/events sends on the browser's next
+// (re)connect, each {id, resources}, as the real change stream sends them.
+const changeFeed = [];
 const opened = [];
 const targets = [];
 // Subjects an administrator linked as one person (internal/control prov_identity.go).
@@ -683,7 +686,12 @@ await ctx.route("**/api/v1/**", async (route) => {
   const headers = req.headers();
   const input = req.method() === "GET" ? undefined : req.postDataJSON();
   requests.push({ method: req.method(), path, url: req.url(), headers, body: req.postData() || "" });
-  if (path === "events") return route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
+  if (path === "events") {
+    const frames = changeFeed.splice(0);
+    for (const data of frames) served.push({ method: "SSE", path, status: 200, event: "changed", body: data });
+    const body = ": fixture\n\n" + frames.map((data) => `id: ${data.id}\nevent: changed\ndata: ${JSON.stringify(data)}\n\n`).join("");
+    return route.fulfill({ contentType: "text/event-stream", body });
+  }
   try {
     const value = api(req.method(), path, url.searchParams, input, headers);
     if (value && value.__sse !== undefined) {
@@ -1015,6 +1023,36 @@ try {
     await checkLabels("launch detail");
     await page.screenshot({ path: `${output}/launch-detail-desktop.png`, fullPage: true });
     await noHorizontalScroll("launch-detail");
+  });
+
+  await step("an idle tab on an ended launch sends nothing and reloads only what a change names", async () => {
+    await go(`launches/${launchID}`, "alice");
+    await page.locator(".section-title .badge", { hasText: "stopped" }).waitFor();
+    await text("Ended; the timeline is complete").waitFor();
+    const idleFrom = requests.length;
+    await page.waitForTimeout(6000);
+    // The fixture ends every /events response at once (the service keeps a
+    // stream open five minutes), so the browser reconnects every few seconds
+    // and checks its session once per reconnect; nothing else may load.
+    const reconnects = requests.slice(idleFrom).filter((r) => r.path === "events").length;
+    const checks = requests.slice(idleFrom).filter((r) => r.path === "session").length;
+    assert.ok(checks <= reconnects, `${checks} session checks for ${reconnects} reconnects`);
+    const idle = requests.slice(idleFrom).filter((r) => r.path !== "events" && r.path !== "session");
+    assert.deepEqual(idle.map((r) => r.path), [], `an idle tab on an ended launch made requests: ${idle.map((r) => r.method + " " + r.url).join(", ")}`);
+    // Changes naming other records do not reload this launch.
+    const before = requests.length;
+    changeFeed.push({ id: 900, resources: ["audit", `launch:${"f".repeat(32)}`] }, { id: 901, resources: ["secret:qa-secret"] });
+    const reconnected = () => requests.slice(before).filter((r) => r.path === "events").length;
+    for (let i = 0; i < 100 && (changeFeed.length || reconnected() < 2); i++) await page.waitForTimeout(100);
+    await page.waitForTimeout(1000);
+    assert.equal(requests.slice(before).filter((r) => r.path === `launches/${launchID}` || r.path === `launches/${launchID}/events`).length, 0, "a change naming another launch reloaded this one");
+    // A change naming this launch reloads it, once.
+    const named = requests.length;
+    changeFeed.push({ id: 902, resources: ["audit", `launch:${launchID}`] });
+    for (let i = 0; i < 100 && !requests.slice(named).some((r) => r.path === `launches/${launchID}`); i++) await page.waitForTimeout(100);
+    await page.waitForTimeout(1000);
+    assert.equal(requests.slice(named).filter((r) => r.path === `launches/${launchID}` && r.method === "GET").length, 1, "the named launch was not reloaded exactly once");
+    report.idle_tab = { seconds: 6, requests: idle.length, change_stream_reconnects: requests.slice(idleFrom).filter((r) => r.path === "events").length };
   });
 
   await step("a terminal launch without evidence shows evidence_missing", async () => {
@@ -1466,6 +1504,7 @@ try {
       ["GET launches/{id}/logs (stream: ready)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "ready", [(await real("launch-log-stream.json")).ready]],
       ["GET launches/{id}/logs (stream: log)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "log", [(await real("launch-log-stream.json")).log, ...(await real("launch-logs.json")).items]],
       ["GET launches/{id}/logs (stream: end)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "end", [(await real("launch-log-stream.json")).end]],
+      ["GET events (stream: changed)", (r) => r.method === "SSE" && r.path === "events" && r.event === "changed", [await real("change-event.json")]],
       ["POST grants (dry run)", (r) => ok("POST", /\/grants$/)(r) && r.input?.dry_run, [(await real("grant-dry-run.json")).response]],
       ["POST grants", (r) => ok("POST", /\/grants$/)(r) && !r.input?.dry_run, [(await real("grant-applied.json")).response]],
       ["errors", (r) => r.status >= 400, errors],

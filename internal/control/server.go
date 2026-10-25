@@ -32,7 +32,7 @@ type Server struct {
 	// every other request by its peer. Empty trusts no proxy.
 	TrustedProxies []netip.Prefix
 	mu             sync.Mutex
-	clients        map[chan int64]bool
+	clients        map[chan Change]bool
 	// limits holds one bounded rate table per client-keyed family
 	// (ratelimit.go); hostLimits the buckets of authenticated host requests,
 	// apart from them, so no flood of other keys can crowd them out.
@@ -55,7 +55,7 @@ type call struct {
 var safeMeta = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,100}$`)
 
 func NewServer(s *Store, a *Auth, spool, web string) *Server {
-	app := &Server{Store: s, Auth: a, Spool: spool, Web: web, clients: map[chan int64]bool{}, limits: map[string]*rateTable{}, hostLimits: newRateTable(hostTableSize), inflight: make(chan struct{}, 32)}
+	app := &Server{Store: s, Auth: a, Spool: spool, Web: web, clients: map[chan Change]bool{}, limits: map[string]*rateTable{}, hostLimits: newRateTable(hostTableSize), inflight: make(chan struct{}, 32)}
 	s.Changed = app.changed
 	return app
 }
@@ -741,12 +741,12 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	}
 	http.ServeFile(w, r, filepath.Join(s.Web, strings.TrimPrefix(name, "/")))
 }
-func (s *Server) changed(id int64) {
+func (s *Server) changed(change Change) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for c := range s.clients {
 		select {
-		case c <- id:
+		case c <- change:
 		default:
 			close(c)
 			delete(s.clients, c)
@@ -764,7 +764,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, a Actor) {
 		http.Error(w, "stream capacity reached", 503)
 		return
 	}
-	c := make(chan int64, 16)
+	c := make(chan Change, 64)
 	s.clients[c] = true
 	s.mu.Unlock()
 	defer func() {
@@ -784,18 +784,57 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, a Actor) {
 	defer tick.Stop()
 	end := time.NewTimer(5 * time.Minute)
 	defer end.Stop()
+	// Changes are filtered to what this actor may read and merged: at most
+	// one changed event per changeInterval, naming every resource since the
+	// last one (no resources: refresh everything).
+	var batch changeBatch
+	var last time.Time
+	flush := time.NewTimer(time.Hour)
+	flush.Stop()
+	armed := false
+	send := func() bool {
+		if !s.streamAuthorized(r, a) {
+			return false
+		}
+		id, resources, all := batch.take()
+		data := map[string]any{"id": id}
+		if !all {
+			data["resources"] = resources
+		}
+		raw, _ := json.Marshal(data)
+		http.NewResponseController(w).SetWriteDeadline(time.Now().Add(20 * time.Second))
+		fmt.Fprintf(w, "id: %d\nevent: changed\ndata: %s\n\n", id, raw)
+		f.Flush()
+		last = time.Now()
+		return true
+	}
 	for {
 		select {
-		case id, ok := <-c:
+		case change, ok := <-c:
 			if !ok {
 				return
 			}
-			if !s.streamAuthorized(r, a) {
+			resources, all, visible := visibleChange(a, change)
+			if !visible {
+				continue
+			}
+			batch.add(resources, all, change.ID)
+			if armed {
+				continue
+			}
+			if wait := changeInterval - time.Since(last); wait > 0 {
+				flush.Reset(wait)
+				armed = true
+				continue
+			}
+			if !send() {
 				return
 			}
-			http.NewResponseController(w).SetWriteDeadline(time.Now().Add(20 * time.Second))
-			fmt.Fprintf(w, "id: %d\nevent: changed\ndata: {\"id\":%d}\n\n", id, id)
-			f.Flush()
+		case <-flush.C:
+			armed = false
+			if batch.pending() && !send() {
+				return
+			}
 		case <-tick.C:
 			if !s.streamAuthorized(r, a) {
 				return

@@ -196,12 +196,21 @@ The launch page shows:
   which the browser cannot detect; the host enforces only the policy it sealed with the value. The plan marks each
   secret "These settings make the policy digest the plan names. The host enforces the policy it sealed with the
   value." or "These settings do not make the policy digest the plan names: do not approve.";
+- **live updates** come from one change stream per tab (`GET /api/v1/events`). Each `changed` event names the records
+  that changed and that this account may read (`launch:ID`, `target:ID`, `secret:ID`, `profile:ID`, `apitoken:ID`,
+  `identity:ID`, `audit`, `other`, `self`), at most one a second; a page reloads only the records an event names, the
+  session only when `self` (this account) changed, and every page only for an event without names. While events keep
+  coming the gap between reloads of one page doubles from 0.5 s to 8 s, and falls back after 10 s of quiet. Host
+  heartbeats send nothing, so an idle tab makes no requests; a page of targets reads them again once a minute for
+  their heartbeat age;
 - **Stop** with confirmation; it is idempotent. While stopping, the page says the launch ends stopped or expired only
   when the host confirms an empty domain and released enforcement;
 - the **state timeline**: every event with its sequence, from → to, actor, reason and data (digests, expiry), live
   over Server-Sent Events. The client resumes after the last sequence (`?after=` and `Last-Event-ID`), reconnects with
   backoff (1, 2, 4 … 30 s), and after four failures polls the JSON events every 5 s while retrying the stream each
-  minute. The status line says Live, Reconnecting or Polling;
+  minute. The status line says Live, Reconnecting or Polling. An ended launch is not followed: its timeline is read
+  once (the status line says it is complete) and again only when the change stream names the launch, for example for
+  a late receipt;
 - **agent output**: streamed from `/logs` as Server-Sent Events (one `log` event per line, resumed after the last line
   with `?after=` and `Last-Event-ID`, ended by the service's `end` event once the launch is terminal); when the stream
   keeps failing, or the service does not stream, the page polls `/logs?after=` every 4 s and retries the stream each

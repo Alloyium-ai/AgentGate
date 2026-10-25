@@ -50,10 +50,12 @@ CREATE INDEX IF NOT EXISTS runs_agent_policy ON runs(agent_id,version_id,created
 PRAGMA user_version=1;`
 
 type Store struct {
-	DB                 *sql.DB
-	Authority          ed25519.PrivateKey
-	mu                 sync.Mutex
-	Changed            func(int64)
+	DB        *sql.DB
+	Authority ed25519.PrivateKey
+	mu        sync.Mutex
+	// Changed receives each committed change that touched something a
+	// change stream shows (changes.go).
+	Changed            func(Change)
 	ResolveRoles       func([]string) []string
 	CheckConfiguration func() error
 	LoginAuthority     string
@@ -73,6 +75,8 @@ type Store struct {
 	// denials samples anonymous denial audit rows per source and minute
 	// (denial_sampling.go). Guarded by mu.
 	denials map[string]*denialWindow
+	// changes resolves audit rows into change stream resources.
+	changes changeNotifier
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -129,6 +133,12 @@ func OpenStore(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Change streams start from the audit log as it is now.
+	if err = db.QueryRow("SELECT coalesce(max(id),0) FROM audit").Scan(&s.changes.notified); err != nil {
+		db.Close()
+		return nil, err
+	}
+	s.changes.primed = true
 	return s, nil
 }
 func (s *Store) migrate() error {
@@ -318,11 +328,6 @@ func (s *Store) Denied(op Operation, cause error) error {
 	}
 	s.notify(id)
 	return nil
-}
-func (s *Store) notify(id int64) {
-	if s.Changed != nil {
-		s.Changed(id)
-	}
 }
 func (s *Store) Mutation(op Operation, scope string, human bool, fn func(*sql.Tx, *Operation) (any, error)) (any, error) {
 	s.mu.Lock()

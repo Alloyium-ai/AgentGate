@@ -8,6 +8,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Actor, ApiError, api } from "./api";
+import { pacedReload, pathTouched, subscribeChanges } from "./changes";
+export { pacedReload, parseChange, pathTouched, publishChange, subscribeChanges } from "./changes";
+export type { ChangeNotice } from "./changes";
 
 export type Target = {
   id: string;
@@ -380,14 +383,37 @@ export function roleText(actor: Actor) {
   return actor.roles?.length ? actor.roles.join(", ") : "no roles";
 }
 
+// Targets report liveness by heartbeat, which the change stream never sends:
+// a visible view of targets reads them again every minute.
+const LIVENESS_MS = 60000;
+
 // useResource loads one API path and cancels the request when the path
 // changes or the page unmounts, so leaving a page never applies a late reply.
+// It reloads when epoch changes and when the change stream names what the
+// path shows (pathTouched), paced by pacedReload.
 export function useResource<T>(path: string | null, epoch = 0) {
   const [data, setData] = useState<T>();
   const [error, setError] = useState<unknown>();
   const [loading, setLoading] = useState(Boolean(path));
   const [tick, setTick] = useState(0);
   const loaded = useRef(false);
+  useEffect(() => {
+    if (!path) return;
+    const paced = pacedReload(() => setTick((x) => x + 1));
+    const off = subscribeChanges((notice) => {
+      if (pathTouched(path, notice.resources)) paced.hit();
+    });
+    const liveness = path.startsWith("targets")
+      ? setInterval(() => {
+          if (document.visibilityState === "visible") setTick((x) => x + 1);
+        }, LIVENESS_MS)
+      : undefined;
+    return () => {
+      off();
+      paced.cancel();
+      clearInterval(liveness);
+    };
+  }, [path]);
   useEffect(() => {
     if (!path) {
       setLoading(false);

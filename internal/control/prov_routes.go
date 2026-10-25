@@ -334,7 +334,7 @@ func (s *Server) launchStream(w http.ResponseWriter, r *http.Request, a Actor, i
 		http.Error(w, "stream capacity reached", 503)
 		return
 	}
-	c := make(chan int64, 16)
+	c := make(chan Change, 64)
 	s.clients[c] = true
 	s.mu.Unlock()
 	defer func() {
@@ -374,8 +374,15 @@ func (s *Server) launchStream(w http.ResponseWriter, r *http.Request, a Actor, i
 	defer end.Stop()
 	for {
 		select {
-		case _, ok := <-c:
-			if !ok || !send() {
+		case change, ok := <-c:
+			if !ok {
+				return
+			}
+			// Only this launch's events, lines or state wake its stream.
+			if !change.touches("launch:"+id, "launch-log:"+id) {
+				continue
+			}
+			if !send() {
 				return
 			}
 		case <-tick.C:
@@ -470,7 +477,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request, a Actor, id s
 		http.Error(w, "stream capacity reached", 503)
 		return
 	}
-	c := make(chan int64, 16)
+	c := make(chan Change, 64)
 	s.clients[c] = true
 	s.mu.Unlock()
 	defer func() {
@@ -545,8 +552,15 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request, a Actor, id s
 	defer end.Stop()
 	for {
 		select {
-		case _, ok := <-c:
-			if !ok || !send() {
+		case change, ok := <-c:
+			if !ok {
+				return
+			}
+			// Only this launch's events, lines or state wake its stream.
+			if !change.touches("launch:"+id, "launch-log:"+id) {
+				continue
+			}
+			if !send() {
 				return
 			}
 		case <-tick.C:

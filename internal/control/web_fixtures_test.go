@@ -267,6 +267,16 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	// Linked identities as an administrator lists them.
 	w.call("POST", "/api/v1/identity-links", admin, map[string]any{"subjects": []string{"oidc:lin", "local:lin"}, "reason": "Lin signs in two ways"}, 200)
 	w.record("identity-links.json", w.call("GET", "/api/v1/identity-links", admin, nil, 200))
+	// One changed event of the change stream, as an administrator's browser
+	// receives it when a launch is created.
+	changes := openChanges(t, f, "oidc:ada")
+	f.launch(f.launcher(), specMap("dev"))
+	select {
+	case e := <-changes:
+		w.record("change-event.json", map[string]any{"id": e.ID, "resources": e.Resources})
+	case <-time.After(5 * time.Second):
+		t.Fatal("no changed event")
+	}
 
 	// The log stream (SSE) of a launch that ends: ready, one log frame per
 	// line, end.

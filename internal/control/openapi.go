@@ -116,6 +116,9 @@ func apiDescription(op apiOperation) map[string]any {
 	if op.body != "" {
 		v["requestBody"] = map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": map[string]string{"$ref": "#/components/schemas/" + op.body}}}}
 	}
+	if op.path == "events" {
+		v["description"] = "Server-Sent Events. event: ready once, then event: changed (id = the last audit id) at most once per second, merging every change since the previous one, with data {\"id\": N, \"resources\": [...]}. resources names what the changes touched and the caller may read: launch:ID (launch:read), target:ID (target:read), secret:ID (secrets:admin), profile:ID (policy:read), apitoken:ID (auth:write), identity:ID (identities:admin), audit (the audit log grew; audit:read), other (records outside provisioning; policy:read) and self (the caller's own account). Without resources, everything may have changed. A change touching nothing the caller may read is not sent; a host heartbeat sends nothing; launch progress and output reach only launches/{id}/events and launches/{id}/logs. Keepalive comments every 15 s; the stream ends after five minutes."
+	}
 	if op.path == "machine-challenge" {
 		v["security"] = []any{}
 	}

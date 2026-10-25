@@ -47,7 +47,7 @@ import { Secrets } from "./secrets";
 import { Tokens } from "./tokens";
 import { Identities } from "./identities";
 import { ProvisioningOverview } from "./prov-overview";
-import { permissions } from "./prov-api";
+import { pacedReload, parseChange, permissions, publishChange } from "./prov-api";
 import "./provisioning.css";
 const nav = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -130,6 +130,11 @@ function App() {
       : "overview",
   );
   const [epoch, setEpoch] = useState(0);
+  // Views outside provisioning read their records without useResource:
+  // otherEpoch reloads them when the change stream names "other" records,
+  // auditEpoch the audit explorer when it names "audit".
+  const [otherEpoch, setOtherEpoch] = useState(0);
+  const [auditEpoch, setAuditEpoch] = useState(0);
   const [mobile, setMobile] = useState(false);
   const refresh = () => setEpoch((x) => x + 1);
   const navigate = (p: string) => {
@@ -174,22 +179,38 @@ function App() {
     if (!session) return;
     let live = true;
     const stream = new EventSource("/api/v1/events");
-    let timer: ReturnType<typeof setTimeout>;
-    stream.addEventListener("changed", () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        api<Session>('session').then(current => {
+    // The session is read again only when this account changed (its roles
+    // may differ) or the event names nothing in particular.
+    const sessionReload = pacedReload(() => {
+      api<Session>("session")
+        .then((current) => {
           if (!live) return;
           useCSRF(current.csrf_token);
           setCustomerPolicy(Boolean(current.customer_policy));
           setSession(current);
-          refresh();
-        }).catch(error => {
+        })
+        .catch((error) => {
           if (!live) return;
           if (error.status === 401) setSession(null);
           else setError(error);
         });
-      }, 200);
+    });
+    const everything = pacedReload(refresh);
+    const other = pacedReload(() => setOtherEpoch((x) => x + 1));
+    const audit = pacedReload(() => setAuditEpoch((x) => x + 1));
+    stream.addEventListener("changed", (event) => {
+      const notice = parseChange((event as MessageEvent<string>).data);
+      // Provisioning views (useResource) reload only what the event names.
+      publishChange(notice);
+      const resources = notice.resources;
+      if (!resources) {
+        everything.hit();
+        sessionReload.hit();
+        return;
+      }
+      if (resources.includes("self")) sessionReload.hit();
+      if (resources.includes("other") || resources.includes("self")) other.hit();
+      if (resources.includes("audit")) audit.hit();
     });
     stream.onerror = () => {
       api<Session>("session").catch((e) => {
@@ -201,7 +222,7 @@ function App() {
     };
     return () => {
       live = false;
-      clearTimeout(timer);
+      for (const paced of [sessionReload, everything, other, audit]) paced.cancel();
       stream.close();
     };
   }, [session?.actor.subject, session?.expires]);
@@ -245,7 +266,7 @@ function App() {
       content = <Identities actor={actor} epoch={epoch} />;
       break;
     case "users":
-      content = session.local_identity && actor.roles.includes('admin') ? <Users epoch={epoch} refresh={refresh} /> : <ErrorBox error={new Error('Local user administration requires an administrator.')} />;
+      content = session.local_identity && actor.roles.includes('admin') ? <Users epoch={epoch + otherEpoch} refresh={refresh} /> : <ErrorBox error={new Error('Local user administration requires an administrator.')} />;
       break;
     case "policy-builder":
       content = session.customer_policy ? <PolicyWorkspace key={path} actor={actor} parentID={path.split("/")[1]} navigate={navigate} refresh={refresh} /> : <ErrorBox error={new Error("The full policy builder requires the Community contract.")} />;
@@ -255,34 +276,34 @@ function App() {
         <PolicyDetail
           id={path.split("/")[1]}
           actor={actor}
-          epoch={epoch}
+          epoch={epoch + otherEpoch}
           navigate={navigate}
           refresh={refresh}
         />
       ) : (
         <Policies
           actor={actor}
-          epoch={epoch}
+          epoch={epoch + otherEpoch}
           navigate={navigate}
           refresh={refresh}
         />
       );
       break;
     case "requests":
-      content = <Requests key={path} actor={actor} epoch={epoch} refresh={refresh} versionID={path.split("/")[1]} />;
+      content = <Requests key={path} actor={actor} epoch={epoch + otherEpoch} refresh={refresh} versionID={path.split("/")[1]} />;
       break;
     case "runs":
       content = path.includes("/") ? (
-        <RunDetail id={path.split("/")[1]} epoch={epoch} navigate={navigate} />
+        <RunDetail id={path.split("/")[1]} epoch={epoch + otherEpoch} navigate={navigate} />
       ) : (
-        <Runs epoch={epoch} navigate={navigate} />
+        <Runs epoch={epoch + otherEpoch} navigate={navigate} />
       );
       break;
     case "audit":
-      content = <AuditExplorer key={path} epoch={epoch} actor={actor} versionID={path.split("/")[1]} />;
+      content = <AuditExplorer key={path} epoch={epoch + auditEpoch} actor={actor} versionID={path.split("/")[1]} />;
       break;
     default:
-      content = <Overview epoch={epoch} navigate={navigate} extra={<ProvisioningOverview actor={actor} epoch={epoch} navigate={navigate} />} />;
+      content = <Overview epoch={epoch + otherEpoch} navigate={navigate} extra={<ProvisioningOverview actor={actor} epoch={epoch} navigate={navigate} />} />;
   }
   return (
     <div className="app-shell">

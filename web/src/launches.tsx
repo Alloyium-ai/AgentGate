@@ -9,7 +9,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, Pause, Play, RotateCcw, Square } from "lucide-react";
 import { Actor, SESSION_ENDED, api, when } from "./api";
 import { Empty, ErrorBox, Loading, SectionTitle } from "./components";
-import { Items, Job, LAUNCH_STATES, Launch, LaunchEvent, LaunchPage, LogPage, Target, isTerminal, permissions, roleText, targetName, useResource } from "./prov-api";
+import { Items, Job, LAUNCH_STATES, Launch, LaunchEvent, LaunchPage, LogPage, Target, isTerminal, pacedReload, pathTouched, permissions, roleText, subscribeChanges, targetName, useResource } from "./prov-api";
 import { CodeBlock, ConfirmDialog, CopyButton, Digest, Gate, KernelNotice, LiveRegion, ServerMessages, StateBadge } from "./prov-components";
 import { CursorPager, useCursorPages } from "./prov-paging";
 import { PlanView, usePlanPolicyCheck } from "./launch-form";
@@ -507,7 +507,38 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
     const t = setInterval(() => setNow((x) => x + 1), 30000);
     return () => clearInterval(t);
   }, []);
+  // An ended launch is not followed: its timeline is read once, and again
+  // only when the change stream names the launch (a late receipt).
+  const ended = detail.data ? isTerminal(detail.data.launch.state) : false;
   useEffect(() => {
+    if (!ended) return;
+    let live = true;
+    const load = async () => {
+      const all: LaunchEvent[] = [];
+      for (let after = 0; ; ) {
+        const page = await api<{ items: LaunchEvent[] }>(`launches/${encodeURIComponent(id)}/events?after=${after}&limit=500`);
+        all.push(...page.items);
+        if (page.items.length < 500) break;
+        after = page.items[page.items.length - 1].seq;
+      }
+      if (live) setEvents(all.slice(-5000));
+    };
+    load().catch(() => {
+      /* the next change retries */
+    });
+    setStream({ mode: "stopped", attempt: 0, lastSeq: 0, detail: "Ended; the timeline is complete" });
+    const paced = pacedReload(() => load().catch(() => undefined));
+    const off = subscribeChanges((notice) => {
+      if (pathTouched(`launches/${id}`, notice.resources)) paced.hit();
+    });
+    return () => {
+      live = false;
+      off();
+      paced.cancel();
+    };
+  }, [id, ended]);
+  useEffect(() => {
+    if (ended) return;
     setEvents([]);
     let refreshTimer: ReturnType<typeof setTimeout>;
     const handle = followLaunch(id, {
@@ -528,7 +559,7 @@ export function LaunchDetail({ id, actor, epoch, navigate }: { id: string; actor
       clearTimeout(refreshTimer);
       handle.stop();
     };
-  }, [id]);
+  }, [id, ended]);
   if (detail.loading) return <Loading />;
   if (detail.error || !detail.data) return <ErrorBox error={detail.error} />;
   const l = detail.data.launch;
