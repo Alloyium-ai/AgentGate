@@ -183,6 +183,11 @@ function brokerSettings(input) {
   return out;
 }
 const BROKER = { address: "172.30.25.218", port: 8443, subnet: "172.30.25.216/29", target_address: "172.30.25.219" };
+// hostproto.ProtectedMountTrees, for the fixture's mount root check.
+const PROTECTED = ["/proc", "/sys", "/dev", "/run", "/var/run", "/etc", "/root", "/boot", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+  "/var/lib/docker", "/var/lib/containerd", "/var/lib/cloud", "/var/lib/kubelet", "/snap", "/var/lib/agentgate", "/var/lib/containers", "/var/lib/rancher",
+  "/var/lib/systemd", "/var/lib/private", "/var/lib/libvirt", "/var/lib/lxd", "/var/lib/incus", "/var/lib/sss", "/var/lib/polkit-1", "/var/lib/sudo",
+  "/var/backups", "/var/log", "/var/mail", "/var/spool", "/lost+found"];
 function plan(spec, actor) {
   need("launcher");
   if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(spec.name || "")) throw new Fail(422, "invalid_launch_spec", "name must match ^[a-z0-9][a-z0-9-]{0,39}$");
@@ -196,7 +201,11 @@ function plan(spec, actor) {
   else if (!p.approved_digest) reasons.push(`no version of profile ${p.name} is approved by an administrator for launches without approval`);
   else if (p.approved_digest !== v.digest) reasons.push(`profile ${p.name} version ${v.number} (digest ${v.digest.slice(0, 12)}) is not the administrator-approved version ${p.approved_version} (digest ${p.approved_digest.slice(0, 12)})`);
   if (spec.approval === "required") reasons.push("the spec requires approval");
-  for (const m of spec.mounts) if (m.mode !== "snapshot") reasons.push((m.mode === "read-write" ? "read-write host folder " : "live host folder ") + m.name);
+  for (const m of spec.mounts) {
+    if (!(target.mount_roots || []).some((r) => m.source === r || m.source.startsWith(r + "/")))
+      throw new Fail(422, "mount_root_not_allowed", `Mount ${m.name}: ${m.source} is not inside a host folder target ${target.name} allows (mount roots: ${(target.mount_roots || []).join(", ") || "none"}). An administrator lists the folders launches may mount with POST /targets/{id}/mount-roots.`);
+    reasons.push((m.mode === "read-write" ? "read-write host folder " : m.mode === "snapshot" ? "snapshot of host folder " : "live host folder ") + m.name + " (" + m.source + ")");
+  }
   const planned = [];
   for (const s of spec.secrets) {
     const sec = secrets.find((x) => x.target_id === target.id && x.name === s.ref && x.state === "stored");
@@ -265,7 +274,7 @@ function api(method, path, query, input, headers) {
     if (method === "GET" && !id) return { items: targets };
     if (method === "POST" && !id) {
       need("admin");
-      const t = { id: newID(), name: input.name, state: "pending", capabilities: [], hostname: "", agent_version: "", host_key_id: "", encryption_key: "", job_key_id: "", online: false, heartbeat_seconds: 10, created_at: now(), created_by: actors[who].subject, updated_at: now(), revision: 1, kernel_verified: false };
+      const t = { id: newID(), name: input.name, state: "pending", capabilities: [], hostname: "", agent_version: "", host_key_id: "", encryption_key: "", job_key_id: "", online: false, heartbeat_seconds: 10, created_at: now(), created_by: actors[who].subject, updated_at: now(), revision: 1, kernel_verified: false, mount_roots: [] };
       targets.push(t);
       return { target: t, enrollment: { token: "agtenr_" + randomBytes(32).toString("base64url"), expires_at: new Date(Date.now() + 900000).toISOString(), single_use: true, enroll_path: "/api/v1/hostd/enroll" } };
     }
@@ -304,6 +313,14 @@ function api(method, path, query, input, headers) {
           return item;
         });
       return { target_id: t.id, target: t.name, ...(profile ? { profile } : {}), items };
+    }
+    if (method === "POST" && sub === "mount-roots") {
+      need("admin");
+      const roots = input.mount_roots;
+      if (!Array.isArray(roots) || roots.length > 16 || new Set(roots).size !== roots.length || roots.some((r) => !/^\/[A-Za-z0-9._@+/-]+$/.test(r) || r === "/" || PROTECTED.some((p) => r === p || r.startsWith(p + "/") || p.startsWith(r + "/"))))
+        throw new Fail(422, "invalid_mount_roots", "mount source must be a canonical absolute path of safe characters.");
+      Object.assign(t, { mount_roots: roots, updated_at: now(), revision: t.revision + 1 });
+      return t;
     }
     if (method === "POST" && sub === "approve-key") {
       need("admin");
@@ -732,6 +749,14 @@ try {
     const pins = await page.evaluate(() => localStorage.getItem("agentgate.known-targets.v1"));
     assert.equal(JSON.parse(pins)[findTarget("build-host").id], hostKeyID(host.hostPub), "approval pins the host key in this browser");
     await text("no — not yet verified on this host").waitFor();
+    await text("none: every host folder mount is refused").waitFor();
+    await page.getByRole("button", { name: "Mount roots…" }).click();
+    await page.getByLabel("Mount roots, one absolute path per line").fill("/srv/repos");
+    await page.locator("dialog").getByRole("textbox", { name: "Reason", exact: true }).fill("Launches may mount the repositories");
+    await page.getByRole("button", { name: "Save mount roots" }).click();
+    await page.locator("dialog").waitFor({ state: "detached" });
+    await text("/srv/repos").waitFor();
+    assert.deepEqual(JSON.parse(requests.filter((r) => r.path.endsWith("/mount-roots")).at(-1).body).mount_roots, ["/srv/repos"]);
   });
 
   await step("create a profile from a preset, preview a grant with the service's dry run, apply it, and see validator errors verbatim", async () => {

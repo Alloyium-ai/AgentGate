@@ -114,9 +114,15 @@ test("every rule the form enforces reports a field", () => {
 });
 
 test("approval predictions name every reason the contract lists", () => {
-  const reasons = M.predictApproval({ ...goodForm(), approval: "required", mounts: [{ name: "a", source: "/srv/a", mode: "read-write" }] }, true, true);
+  const reasons = M.predictApproval({ ...goodForm(), approval: "required", mounts: [{ name: "a", source: "/srv/a", mode: "read-write" }] }, "the profile requires approval", true);
   assert.deepEqual(reasons, ["you asked for approval", "the profile requires approval", "read-write host folder a", "brokered secrets anthropic", "public web access"]);
-  assert.deepEqual(M.predictApproval({ ...goodForm(), secrets: [], mounts: [{ name: "s", source: "/srv/s", mode: "snapshot" }] }, false, false), []);
+  assert.deepEqual(M.predictApproval({ ...goodForm(), secrets: [], mounts: [{ name: "s", source: "/srv/s", mode: "snapshot" }] }, undefined, false), ["snapshot of host folder s"]);
+  assert.deepEqual(M.predictApproval({ ...goodForm(), secrets: [], mounts: [] }, undefined, false), []);
+  const digest = "a".repeat(64);
+  assert.equal(M.profileApprovalReason({ require_approval: false, approved_version: 1, approved_digest: digest }, { number: 1, digest }), undefined);
+  assert.match(M.profileApprovalReason({ require_approval: false, approved_version: 1, approved_digest: digest }, { number: 2, digest: "b".repeat(64) }), /version 2 is not the administrator-approved version 1/);
+  assert.match(M.profileApprovalReason({ require_approval: false }, { number: 1, digest }), /no version of the profile is approved/);
+  assert.equal(M.profileApprovalReason({ require_approval: true }, { number: 1, digest }), "the profile requires approval");
 });
 
 test("import is strict: unknown fields, duplicate keys and a secret value are refused", () => {

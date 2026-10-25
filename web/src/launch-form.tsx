@@ -12,7 +12,7 @@ import { Actor, ApiError, api } from "./api";
 import { ErrorBox, Loading, Modal, SectionTitle } from "./components";
 import { Items, Launch, LaunchPlan, PolicyDocument, Profile, ProfileVersion, Target, TargetSecrets, permissions, roleText, useResource } from "./prov-api";
 import { AccessSummary, Capabilities, CodeBlock, CopyButton, Digest, Gate, Issues, KernelNotice, LiveRegion, ServerMessages } from "./prov-components";
-import { LIFETIME, LaunchForm, MountMode, buildSpec, cliCommands, emptyForm, envNameIssue, lifetimeText, parseSpec, predictApproval, specJSON } from "./launch-spec";
+import { LIFETIME, LaunchForm, MountMode, buildSpec, cliCommands, emptyForm, envNameIssue, lifetimeText, parseSpec, predictApproval, profileApprovalReason, specJSON } from "./launch-spec";
 import { webOf } from "./access-model";
 import { refusalHelp } from "./secret-rules";
 
@@ -375,7 +375,7 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
   const live = caps.includes("live-mounts");
   const snap = caps.includes("snapshot-mounts");
   const targetSecrets = secrets.data?.target_id === target?.id ? secrets.data?.items || [] : [];
-  const reasons = predictApproval(form, profile?.require_approval, version ? webOf(version.document).length > 0 : undefined);
+  const reasons = predictApproval(form, profileApprovalReason(profile, version), version ? webOf(version.document).length > 0 : undefined);
   const commands = cliCommands(built.spec);
   const issues = touched ? built.issues : [];
   if (!p.launch && !from)
@@ -633,8 +633,9 @@ export function LaunchPage({ actor, from, navigate }: { actor: Actor; from?: str
         <section className="panel">
           <h2>4. Host folders</h2>
           <p className="form-note">
-            A live folder (read-only or read-write) needs a target with live-mounts; a snapshot needs snapshot-mounts. Live folders always need approval. Protected
-            host trees, credential stores and home directories are refused; the host checks again.
+            A live folder (read-only or read-write) needs a target with live-mounts; a snapshot needs snapshot-mounts. Every host folder, a snapshot too, needs
+            approval and must be at or below one of the target's mount roots, which an administrator lists. Protected host trees, credential stores and home
+            directories are refused; the host checks again.
           </p>
           {form.mounts.map((m, i) => (
             <div className="row-edit" key={i}>

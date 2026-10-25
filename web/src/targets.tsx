@@ -273,9 +273,35 @@ function Rename({ target, onClose, onDone }: { target: Target; onClose: () => vo
   );
 }
 
+function MountRoots({ target, onClose, onDone }: { target: Target; onClose: () => void; onDone: () => void }) {
+  const [text, setText] = useState((target.mount_roots || []).join("\n"));
+  const roots = text.split("\n").map((x) => x.trim()).filter(Boolean);
+  return (
+    <ConfirmDialog
+      title={`Host folders launches on ${target.name} may mount`}
+      confirmLabel="Save mount roots"
+      onClose={onClose}
+      onConfirm={async (reason) => {
+        await api(`targets/${target.id}/mount-roots`, "POST", { mount_roots: roots, reason });
+        onDone();
+      }}
+    >
+      <label>
+        Mount roots, one absolute path per line
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} spellCheck={false} placeholder="/srv/repos" />
+      </label>
+      <p className="form-note">
+        A launch may mount or snapshot only a folder at or below one of these roots, and every such mount still needs a second person's approval. No roots
+        refuses every host folder. System trees, container and VM state, backups, logs, mail, spools, credential stores and home directories are never
+        allowed.
+      </p>
+    </ConfirmDialog>
+  );
+}
+
 function TargetActions({ target, actor, onChanged }: { target: Target; actor: Actor; onChanged: () => void }) {
   const p = permissions(actor);
-  const [dialog, setDialog] = useState<"approve" | "enroll" | "rename" | "retire" | "force">();
+  const [dialog, setDialog] = useState<"approve" | "enroll" | "rename" | "retire" | "force" | "roots">();
   const notAdmin = `Only an administrator manages targets. Your roles: ${roleText(actor)}.`;
   const retired = target.state === "retired";
   const retiring = target.state === "retiring";
@@ -296,6 +322,9 @@ function TargetActions({ target, actor, onChanged }: { target: Target; actor: Ac
       <Gate className="secondary" allowed={p.targetsAdmin && !retired && !retiring} reason={retired || retiring ? "A retired or retiring target cannot change." : notAdmin} onClick={() => setDialog("rename")}>
         Rename
       </Gate>
+      <Gate className="secondary" allowed={p.targetsAdmin && !retired && !retiring} reason={retired || retiring ? "A retired or retiring target cannot change." : notAdmin} onClick={() => setDialog("roots")}>
+        Mount roots…
+      </Gate>
       {retiring ? (
         <Gate className="secondary danger" allowed={p.targetsAdmin} reason={notAdmin} onClick={() => setDialog("force")}>
           Retire without the host's confirmation…
@@ -308,6 +337,7 @@ function TargetActions({ target, actor, onChanged }: { target: Target; actor: Ac
       {dialog === "approve" && <ApproveKey target={target} onClose={() => setDialog(undefined)} onDone={done} />}
       {dialog === "enroll" && <Reenroll target={target} onClose={() => setDialog(undefined)} onDone={done} />}
       {dialog === "rename" && <Rename target={target} onClose={() => setDialog(undefined)} onDone={done} />}
+      {dialog === "roots" && <MountRoots target={target} onClose={() => setDialog(undefined)} onDone={done} />}
       {dialog === "retire" && (
         <ConfirmDialog
           title={`Retire ${target.name}`}
@@ -406,6 +436,10 @@ export function TargetDetail({ id, actor, epoch, navigate }: { id: string; actor
           <div>
             <span>Kernel verified</span>
             <strong>no — {target.kernel_verified ? "the API reported true, which protocol v1 never allows; treat as unverified" : "not yet verified on this host"}</strong>
+          </div>
+          <div>
+            <span>Mount roots (host folders launches may mount)</span>
+            <strong>{target.mount_roots?.length ? target.mount_roots.join(", ") : "none: every host folder mount is refused"}</strong>
           </div>
           <div>
             <span>Target id</span>

@@ -1,0 +1,52 @@
+{
+  "request": {
+    "mount_roots": [
+      "/srv/repos"
+    ],
+    "reason": "Launches may mount the repositories"
+  },
+  "response": {
+    "agent_version": "0.1.0",
+    "capabilities": [
+      "docker",
+      "live-mounts",
+      "snapshot-mounts",
+      "brokered-secrets",
+      "pocpolicy-v2"
+    ],
+    "created_at": "2026-10-25T02:07:43.074972558Z",
+    "created_by": "oidc:ada",
+    "encryption_key": "7nExWMxarQQkbUljwC-z66QvJMlqv7Lvp343Fyq-uhw",
+    "heartbeat_seconds": 10,
+    "host_key_id": "ed25519:0d5c097aec4e494f6ad8e43740d065f9",
+    "host_public_key": "zKyE9gggmJQSE-jSF4lWTiW5DUrdu9jlk_map8Xu_kI",
+    "hostname": "host-1",
+    "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+    "job_key_id": "ed25519:d84158bb2095b4600f1d6e7ef05debfa",
+    "kernel_verified": false,
+    "last_seen_at": "2026-10-25T02:07:43.018Z",
+    "mount_roots": [
+      "/srv/repos"
+    ],
+    "name": "local",
+    "online": true,
+    "revision": 5,
+    "seal_key": {
+      "record": {
+        "format": "agentgate.sealkey.v1",
+        "host_key": "SHA256:DVwJeuxOSU9q2OQ3QNBl+bY+kjCOEiw5bJw5wpbI63Y",
+        "key_id": "08143bf6833807bcfec4aa4f0a943dd502e1dc639e8328f17ee4da283a310e5f",
+        "not_after": "2026-11-24T02:07:43Z",
+        "not_before": "2026-10-25T02:07:43Z",
+        "public_key": "7nExWMxarQQkbUljwC-z66QvJMlqv7Lvp343Fyq-uhw",
+        "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
+        "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377"
+      },
+      "signature": "7oRHEdDxviMcfDtLBa3udn55UEgd_Z_2YT1xYAdLkFhPB0NDCAyUkXyuQBc4arvVMYn4GM6Qs0menZYerWzzCQ"
+    },
+    "seal_key_id": "08143bf6833807bcfec4aa4f0a943dd502e1dc639e8328f17ee4da283a310e5f",
+    "seal_key_not_after": "2026-11-24T02:07:43Z",
+    "state": "active",
+    "updated_at": "2026-10-25T02:07:43.109190214Z"
+  }
+}

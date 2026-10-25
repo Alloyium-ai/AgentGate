@@ -28,6 +28,7 @@ var AuditCatalog = []AuditAction{
 	{"target.sequence.reset", "target:<id>", "A host reset its request sequence with a signed resync."},
 	{"hostd.resync", "target:<id>", "A signed host resync request (denials only)."},
 	{"target.renamed", "target:<id>", "A target name changed."},
+	{"target.mount_roots.changed", "target:<id>", "An administrator replaced the host folders launches on a target may mount or snapshot."},
 	{"target.retired", "target:<id>", "A target was retired and its host key revoked (at once, after its host confirmed every secret removal, or with force)."},
 	{"target.retirement.started", "target:<id>", "An administrator retired a target whose host may hold secrets: a secret-delete was queued for each and the target is retiring until its host confirms them."},
 	{"target.capabilities.changed", "target:<id>", "A host reported different capabilities or agent version."},

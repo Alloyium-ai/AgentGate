@@ -512,10 +512,51 @@ func checkUpstreams(values []string) error {
 	return nil
 }
 
-// ProtectedMountTrees may never be shared or contain a shared tree.
+// ProtectedMountTrees may never be shared or contain a shared tree: system
+// trees, container and VM runtimes' state (their images and volumes hold
+// other workloads' data and credentials), the host's backups (which include
+// copies of /etc/shadow), logs, mail and spools.
 var ProtectedMountTrees = []string{"/proc", "/sys", "/dev", "/run", "/var/run", "/etc", "/root", "/boot", "/usr", "/bin",
 	"/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/var/lib/docker", "/var/lib/containerd",
-	"/var/lib/cloud", "/var/lib/kubelet", "/snap", "/var/lib/agentgate"}
+	"/var/lib/cloud", "/var/lib/kubelet", "/snap", "/var/lib/agentgate",
+	"/var/lib/containers", "/var/lib/rancher", "/var/lib/systemd", "/var/lib/private", "/var/lib/libvirt", "/var/lib/lxd",
+	"/var/lib/incus", "/var/lib/sss", "/var/lib/polkit-1", "/var/lib/sudo", "/var/backups", "/var/log", "/var/mail",
+	"/var/spool", "/lost+found"}
+
+// MaxMountRoots bounds a target's mount root allowlist.
+const MaxMountRoots = 16
+
+// CheckMountRoots validates a target's mount root allowlist: at most
+// MaxMountRoots unique roots, each a source CheckMountSource accepts.
+func CheckMountRoots(roots []string) error {
+	if roots == nil || len(roots) > MaxMountRoots {
+		return fmt.Errorf("hostproto: mount roots must be an explicit list of at most %d", MaxMountRoots)
+	}
+	seen := map[string]bool{}
+	for _, r := range roots {
+		if err := CheckMountSource(r); err != nil {
+			return err
+		}
+		if seen[r] {
+			return fmt.Errorf("hostproto: mount root %s is listed twice", r)
+		}
+		seen[r] = true
+	}
+	return nil
+}
+
+// MountUnderRoots reports whether source is one of roots or below one. The
+// service refuses a launch mount outside the target's roots, and a host
+// agent applies the same rule to its own configured roots: an empty list
+// allows no host folder at all.
+func MountUnderRoots(source string, roots []string) bool {
+	for _, r := range roots {
+		if source == r || strings.HasPrefix(source, r+"/") {
+			return true
+		}
+	}
+	return false
+}
 
 // secretComponents are per-user credential stores; a source may not contain or
 // sit inside one.

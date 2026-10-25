@@ -430,21 +430,29 @@ func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical [
 		plan.ApprovalReasons = append(plan.ApprovalReasons, "the spec requires approval")
 	}
 	for _, m := range spec.Mounts {
+		// Every mount brings host data into the sandbox: it must come from a
+		// root the target's administrator listed, and a second human
+		// approves it, a snapshot as much as a live folder.
+		if !hostproto.MountUnderRoots(m.Source, target.MountRoots) {
+			return r, fail(422, "mount_root_not_allowed", "Mount "+m.Name+": "+m.Source+" is not inside a host folder target "+target.Name+" allows (mount roots: "+joinOr(target.MountRoots)+
+				"). An administrator lists the folders launches may mount with POST /targets/{id}/mount-roots.")
+		}
 		switch m.Mode {
 		case "read-write":
 			if !contains(target.Capabilities, hostproto.CapabilityLiveMounts) {
 				return r, fail(422, "capability_missing", "A read-write mount needs a target that advertises live-mounts.")
 			}
-			plan.ApprovalReasons = append(plan.ApprovalReasons, "read-write host folder "+m.Name)
+			plan.ApprovalReasons = append(plan.ApprovalReasons, "read-write host folder "+m.Name+" ("+m.Source+")")
 		case "snapshot":
 			if !contains(target.Capabilities, hostproto.CapabilitySnapshots) {
 				return r, fail(422, "capability_missing", "A snapshot mount needs a target that advertises snapshot-mounts.")
 			}
+			plan.ApprovalReasons = append(plan.ApprovalReasons, "snapshot of host folder "+m.Name+" ("+m.Source+")")
 		case "read-only":
 			if !contains(target.Capabilities, hostproto.CapabilityLiveMounts) {
 				return r, fail(422, "capability_missing", "A live read-only host folder needs a target that advertises live-mounts; use snapshot otherwise.")
 			}
-			plan.ApprovalReasons = append(plan.ApprovalReasons, "live host folder "+m.Name)
+			plan.ApprovalReasons = append(plan.ApprovalReasons, "live host folder "+m.Name+" ("+m.Source+")")
 		}
 		mode := "read-only"
 		if m.Mode == "read-write" {

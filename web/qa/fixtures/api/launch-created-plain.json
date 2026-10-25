@@ -1,8 +1,8 @@
 {
   "launch": {
     "approval_required": true,
-    "created_at": "2026-10-25T01:58:03.241128681Z",
-    "id": "6bcaddefbe7bce4d57ab35954d0c3153",
+    "created_at": "2026-10-25T02:07:43.170804146Z",
+    "id": "fea0f15d4643d72541b93fe8dba60d7f",
     "kernel_verified": false,
     "lifetime_seconds": 3600,
     "mode": "session",
@@ -88,27 +88,27 @@
       "policy_digest": "0f9e8ba3d5583f75f456f3af5cd29300228859fe0fec81b19aa6d2c0efd8322c",
       "profile": {
         "digest": "d81ea3096db0b17b0f376a7e68a9cfb43714d7eeda858c2b7ad0148d1d00bad3",
-        "id": "a68248290c1892d6a3262fe1ac50ef92",
+        "id": "9c8cd7c4cd583134e47f7fd8315a2d21",
         "name": "python-dev",
         "version": 1,
-        "version_id": "3a5233fe17b0daf93c337dca7c0bd4e3"
+        "version_id": "41575a60fcfd7f0362385c98758e221c"
       },
       "secrets": [],
       "spec_digest": "2175321b70f7fbb3eacfb24f6d1c08b0e947e7a2ae90f55a446b78396250fa67",
       "target": {
-        "id": "c58de5aaa7a9b49afe9203e70f4d301e",
+        "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
         "name": "local"
       },
       "workdir": "/var/lib/agentgate/workspace"
     },
     "policy_digest": "0f9e8ba3d5583f75f456f3af5cd29300228859fe0fec81b19aa6d2c0efd8322c",
-    "profile_version_id": "3a5233fe17b0daf93c337dca7c0bd4e3",
+    "profile_version_id": "41575a60fcfd7f0362385c98758e221c",
     "requested_by": "oidc:lin",
     "revision": 2,
     "spec_digest": "2175321b70f7fbb3eacfb24f6d1c08b0e947e7a2ae90f55a446b78396250fa67",
     "state": "approval_pending",
-    "target_id": "c58de5aaa7a9b49afe9203e70f4d301e",
-    "updated_at": "2026-10-25T01:58:03.241213477Z"
+    "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+    "updated_at": "2026-10-25T02:07:43.170973318Z"
   },
   "plan": {
     "approval": "required",
@@ -191,15 +191,15 @@
     "policy_digest": "0f9e8ba3d5583f75f456f3af5cd29300228859fe0fec81b19aa6d2c0efd8322c",
     "profile": {
       "digest": "d81ea3096db0b17b0f376a7e68a9cfb43714d7eeda858c2b7ad0148d1d00bad3",
-      "id": "a68248290c1892d6a3262fe1ac50ef92",
+      "id": "9c8cd7c4cd583134e47f7fd8315a2d21",
       "name": "python-dev",
       "version": 1,
-      "version_id": "3a5233fe17b0daf93c337dca7c0bd4e3"
+      "version_id": "41575a60fcfd7f0362385c98758e221c"
     },
     "secrets": [],
     "spec_digest": "2175321b70f7fbb3eacfb24f6d1c08b0e947e7a2ae90f55a446b78396250fa67",
     "target": {
-      "id": "c58de5aaa7a9b49afe9203e70f4d301e",
+      "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
       "name": "local"
     },
     "workdir": "/var/lib/agentgate/workspace"

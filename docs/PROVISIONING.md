@@ -72,16 +72,25 @@ Rules every implementation enforces (`internal/control/prov_launchspec.go`; JSON
   bind), `snapshot` (a read-only copy) or `read-write` (a live writable bind). A live mount needs the target capability
   `live-mounts`; a snapshot needs `snapshot-mounts`. `source` is a canonical absolute path of safe characters that
   does not overlap a protected host tree (`/proc`, `/sys`, `/dev`, `/run`, `/etc`, `/root`, `/boot`, `/usr`, `/bin`,
-  `/sbin`, `/lib*`, container runtime state, `/var/lib/agentgate`), a credential store (`.ssh`, `.gnupg`, `.aws`,
-  `.config`, `.docker`, `.kube`, `.local`, ...), a home directory itself, or another mount. A writable mount is never
-  executable (`internal/access` refuses the overlap). The host re-checks every rule.
+  `/sbin`, `/lib*`, container and VM runtime state (`/var/lib/docker`, `containerd`, `containers`, `rancher`,
+  `kubelet`, `libvirt`, `lxd`, `incus`), `/var/lib/systemd`, `/var/lib/private`, `/var/lib/sss`, `/var/lib/polkit-1`,
+  `/var/lib/sudo`, `/var/backups`, `/var/log`, `/var/mail`, `/var/spool`, `/lost+found`, `/var/lib/agentgate`), a
+  credential store (`.ssh`, `.gnupg`, `.aws`, `.config`, `.docker`, `.kube`, `.local`, ...), a home directory itself,
+  or another mount, and that is at or below one of the target's **mount roots**: the host folders an administrator
+  lists for the target (`POST /targets/{id}/mount-roots`, audited as `target.mount_roots.changed`, at most 16 roots
+  that pass the same source rules). A new target has none, so every mount is refused (`422 mount_root_not_allowed`)
+  until its administrator lists roots. Every mount brings host data into the sandbox and needs a second human's
+  approval, a snapshot as much as a live folder; the reason names the mount and its source. A writable mount is never
+  executable (`internal/access` refuses the overlap). The host re-checks every source rule; it must also apply the
+  same allowlist to the roots in its own configuration (`hostproto.MountUnderRoots`), which `agentgate-hostd` does not
+  carry yet (see the host-side changes).
 - `secrets[]` (at most 8): `ref` names a secret on that target, by name only; `expose.env` names the variable that
   receives the broker address and may not also appear in `agent.env`. The spec never contains a value (an unknown
   field such as `value` is rejected).
 - `approval` is `auto` or `required`. `auto` is honoured only when nothing requires a second human. Approval is
   required when any of these hold: the spec says `required`; the profile has `require_approval` (the default for a
   new profile); the launched profile version is not the one an administrator approved for launches without approval
-  (below); access is an inline document; any mount is live (`read-only` or `read-write`); any secret is referenced;
+  (below); access is an inline document; any host folder is mounted (`read-only`, `read-write` or `snapshot`); any secret is referenced;
   the effective policy allows public web. The plan lists every reason.
 - Automatic approval is per profile **version**, not per profile. Only an administrator relaxes a profile
   (`PATCH /profiles/{id}` with `require_approval: false`, the `version` they reviewed and its `digest`; or creating a
@@ -292,6 +301,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/targets/{id}` | GET, PATCH, DELETE | viewer, admin | status, capabilities, key fingerprint, encryption key; rename; retire (refused while a launch is live; with secrets on the host it queues one `secret-delete` per secret and the target is `retiring` until the host confirms them, then retired; `{"force": true}` finishes without the host and records those secrets `removal: unconfirmed`) |
 | `/targets/{id}/enrollment` | POST | admin | a new one-time token (reinstall, job key rotation) |
 | `/targets/{id}/approve-key` | POST | admin | approve the presented host key fingerprint; activates the target |
+| `/targets/{id}/mount-roots` | POST | admin | replace the host folders launches on the target may mount or snapshot (`mount_roots`, at most 16; empty refuses every mount) |
 | `/profiles` | GET, POST | viewer, editor | list; create from a preset, a document or the full example |
 | `/profiles/{id}` | GET, PATCH | viewer, admin | detail; change `require_approval` (admin only): `false` approves exactly one reviewed `version` and `digest`, `true` clears it |
 | `/profiles/{id}/versions` | GET, POST | viewer, editor | immutable versions; a new version names the latest as its parent |

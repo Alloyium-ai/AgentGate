@@ -120,6 +120,7 @@ var codeHints = map[string]string{
 	"authentication_required":   "Run agentgate login URL to store an API token for this service.",
 	"invalid_token":             "The token is unknown, expired or revoked (a password reset or a disabled account revokes every token): run agentgate login URL again.",
 	"token_roles_revoked":       "Your roles changed: create a new token with agentgate token create.",
+	"mount_root_not_allowed":    "An administrator allows the host folder with agentgate target mount-roots TARGET --root PATH (every mount still needs approval).",
 	"token_scope":               "API tokens cannot call this endpoint; it needs a password sign-in (agentgate token ...) or the UI.",
 	"session_required":          "This needs a password sign-in: agentgate token create signs in for you.",
 	"csrf_failed":               "Use the service's public URL exactly as configured (settings.json public_url).",

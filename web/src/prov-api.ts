@@ -28,6 +28,9 @@ export type Target = {
   revision: number;
   kernel_verified: boolean;
   retiring_since?: string;
+  // The host folders launches on this target may mount or snapshot; none
+  // (the default) refuses every mount.
+  mount_roots: string[];
 };
 export type Enrollment = {
   token: string;

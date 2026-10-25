@@ -3,7 +3,7 @@
 package control
 
 // SchemaVersion is the database user_version this build writes.
-const SchemaVersion = 8
+const SchemaVersion = 9
 
 // provisioningSchema adds targets, profiles, launches, jobs, secrets metadata
 // and API tokens. Every statement is idempotent. Bindings that the contract
@@ -135,4 +135,11 @@ DROP TRIGGER IF EXISTS profile_approved_version_exists;
 CREATE TRIGGER profile_approved_version_exists BEFORE UPDATE OF approved_version_id,approved_digest ON profiles WHEN NEW.approved_digest<>'' AND NOT EXISTS (SELECT 1 FROM profile_versions v WHERE v.id=NEW.approved_version_id AND v.profile_id=NEW.id AND v.digest=NEW.approved_digest) BEGIN SELECT RAISE(ABORT,'approved profile version must exist'); END;
 DROP TRIGGER IF EXISTS profile_approved_pair;
 CREATE TRIGGER profile_approved_pair BEFORE UPDATE OF approved_version_id,approved_digest,approved_by,approved_at ON profiles WHEN (NEW.approved_digest='') <> (NEW.approved_version_id='') OR (NEW.approved_digest<>'' AND (NEW.approved_by='' OR NEW.approved_at='')) BEGIN SELECT RAISE(ABORT,'an approved profile version names its digest, administrator and time'); END;`},
+	// Version 9: the host folders a target's launches may mount or snapshot
+	// (a JSON list of roots). The default, an empty list, allows none.
+	{version: 9, columns: []struct{ table, column, decl string }{
+		{"targets", "mount_roots", "TEXT NOT NULL DEFAULT '[]'"},
+	}, statements: `
+DROP TRIGGER IF EXISTS target_mount_roots_json;
+CREATE TRIGGER target_mount_roots_json BEFORE UPDATE OF mount_roots ON targets WHEN json_valid(NEW.mount_roots)=0 OR json_type(NEW.mount_roots)<>'array' BEGIN SELECT RAISE(ABORT,'mount roots are a JSON list'); END;`},
 }

@@ -2,26 +2,26 @@
   "jobs": [
     {
       "attempts": 1,
-      "created_at": "2026-10-25T01:58:03.229084559Z",
-      "deadline": "2026-10-25T03:03:03.121Z",
+      "created_at": "2026-10-25T02:07:43.156878140Z",
+      "deadline": "2026-10-25T03:12:43.018Z",
       "event_seq": 3,
-      "id": "ac3d2fdd3bbfaa368996cce55ee01e90",
-      "key_id": "ed25519:2f146d9736b073971b8c94afb474659c",
-      "launch_id": "2863680d3100b9f798cb0636233ea4d6",
-      "policy_digest": "2889f3b5ac0349a1969b019f1f8e4034ea8de377a79aa853b59ee95d4130ad24",
+      "id": "06f8ef7ae613324f8a8746bd3b38d1a7",
+      "key_id": "ed25519:d84158bb2095b4600f1d6e7ef05debfa",
+      "launch_id": "d3056e663a4b2184351c205fdd1c0371",
+      "policy_digest": "6db8852902c92de939b95682d8d9bff8eef415d9350eef20fdbef46f1e6fde82",
       "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
       "state": "delivered",
-      "target_id": "c58de5aaa7a9b49afe9203e70f4d301e",
+      "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
       "type": "launch"
     }
   ],
   "launch": {
     "approval_required": true,
-    "created_at": "2026-10-25T01:58:03.223566272Z",
+    "created_at": "2026-10-25T02:07:43.148685762Z",
     "decided_by": "oidc:app",
     "decision_reason": "Reviewed the broker rules",
-    "expires_at": "2026-10-25T02:58:03.121Z",
-    "id": "2863680d3100b9f798cb0636233ea4d6",
+    "expires_at": "2026-10-25T03:07:43.018Z",
+    "id": "d3056e663a4b2184351c205fdd1c0371",
     "kernel_verified": false,
     "lifetime_seconds": 3600,
     "mode": "session",
@@ -30,17 +30,17 @@
       "approval": "required",
       "approval_reasons": [
         "brokered secrets docs-api, wild-api",
-        "live host folder repo",
+        "live host folder repo (/srv/repos/app)",
         "public web access",
         "secret wild-api has wildcard broker rules",
         "signals beyond the defaults: SIGALRM, SIGCHLD, SIGPIPE, SIGWINCH",
         "the profile requires approval"
       ],
       "broker": {
-        "address": "172.30.47.26",
+        "address": "172.30.138.82",
         "port": 8443,
-        "subnet": "172.30.47.24/29",
-        "target_address": "172.30.47.27"
+        "subnet": "172.30.138.80/29",
+        "target_address": "172.30.138.83"
       },
       "command": [
         "agent",
@@ -62,13 +62,13 @@
       ],
       "notices": [
         "WARNING: secret wild-api uses wildcard rules: the broker forwards every method on every path of api.wild.example with the credential",
-        "the agent reaches its secrets only through the broker at 172.30.47.26:8443; the taskboard TCP endpoint is not allowed in this launch",
+        "the agent reaches its secrets only through the broker at 172.30.138.82:8443; the taskboard TCP endpoint is not allowed in this launch",
         "kernel_verified is false: this enforcement has not been verified on a BPF LSM kernel",
         "the target does not advertise bpf-lsm; the host fails closed if it cannot enforce the policy"
       ],
       "permissions": {
         "anonymous_execute": false,
-        "broker": "172.30.47.26:8443",
+        "broker": "172.30.138.82:8443",
         "deny": [
           "/etc/shadow",
           "/etc/gshadow",
@@ -124,17 +124,17 @@
           "/tmp"
         ]
       },
-      "policy_digest": "2889f3b5ac0349a1969b019f1f8e4034ea8de377a79aa853b59ee95d4130ad24",
+      "policy_digest": "6db8852902c92de939b95682d8d9bff8eef415d9350eef20fdbef46f1e6fde82",
       "profile": {
         "digest": "e51c290b9ee93aeee99c246e06387a843fcf85363c26abd0133eca5c39badf9a",
-        "id": "a68248290c1892d6a3262fe1ac50ef92",
+        "id": "9c8cd7c4cd583134e47f7fd8315a2d21",
         "name": "python-dev",
         "version": 2,
-        "version_id": "3af28dd0699f8eaa2e006f5c00aaa4d2"
+        "version_id": "ca5c9d322bf6e4eca90a1de69a924fcc"
       },
       "secrets": [
         {
-          "base_url": "http://172.30.47.26:8443/docs-api",
+          "base_url": "http://172.30.138.82:8443/docs-api",
           "env": "DOCS_BASE_URL",
           "extra_headers": {
             "docs-version": "2"
@@ -159,16 +159,16 @@
             }
           ],
           "scheme": "Basic",
-          "secret_id": "6c37a53f06d5cb3f5ae0214a8e93dea3",
+          "secret_id": "b26c30b8788329c15a8b46cbab345511",
           "upstreams": [
             "api.docs.example"
           ],
           "username": "agent",
-          "value_fingerprint": "sfp1_01e75c1fd18e399ee73fc04f2f0095c1",
+          "value_fingerprint": "sfp1_bbc6fdace494f201387d5c4028046cfe",
           "wildcard_rules": false
         },
         {
-          "base_url": "http://172.30.47.26:8443/wild-api",
+          "base_url": "http://172.30.138.82:8443/wild-api",
           "env": "WILD_BASE_URL",
           "extra_headers": {},
           "header": "x-api-key",
@@ -189,24 +189,24 @@
             }
           ],
           "scheme": "",
-          "secret_id": "0b003feaac600b8d4bc625e7220d6050",
+          "secret_id": "85005ce7886d086a96a2ef1b5ea7c33a",
           "upstreams": [
             "api.wild.example"
           ],
-          "value_fingerprint": "sfp1_780d37b59712f5d07d860eec65ceefa8",
+          "value_fingerprint": "sfp1_bcc5495998f6a19b18b5026f0498f547",
           "wildcard_rules": true
         }
       ],
       "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
       "target": {
-        "id": "c58de5aaa7a9b49afe9203e70f4d301e",
+        "id": "20d17ce2f7345e6ffd66ecf45c7ab377",
         "name": "local"
       },
       "workdir": "/var/lib/agentgate/workspace"
     },
     "policy": {
       "broker": {
-        "address": "172.30.47.26",
+        "address": "172.30.138.82",
         "port": 8443,
         "protocol": "tcp"
       },
@@ -287,9 +287,9 @@
         ]
       }
     },
-    "policy_digest": "2889f3b5ac0349a1969b019f1f8e4034ea8de377a79aa853b59ee95d4130ad24",
-    "profile_version_id": "3af28dd0699f8eaa2e006f5c00aaa4d2",
-    "queued_at": "2026-10-25T01:58:03.228363566Z",
+    "policy_digest": "6db8852902c92de939b95682d8d9bff8eef415d9350eef20fdbef46f1e6fde82",
+    "profile_version_id": "ca5c9d322bf6e4eca90a1de69a924fcc",
+    "queued_at": "2026-10-25T02:07:43.156295858Z",
     "requested_by": "oidc:lin",
     "revision": 6,
     "spec": {
@@ -338,9 +338,9 @@
       "version": "agentgate.launch.v1"
     },
     "spec_digest": "b643fa51fd1c43b652e20139417fd4fdb864ddce23499afb352d6213f049a36b",
-    "started_at": "2026-10-25T01:58:03.235317163Z",
+    "started_at": "2026-10-25T02:07:43.162385928Z",
     "state": "running",
-    "target_id": "c58de5aaa7a9b49afe9203e70f4d301e",
-    "updated_at": "2026-10-25T01:58:03.235317163Z"
+    "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377",
+    "updated_at": "2026-10-25T02:07:43.162385928Z"
   }
 }

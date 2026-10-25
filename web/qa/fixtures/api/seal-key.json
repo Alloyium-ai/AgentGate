@@ -1,21 +1,21 @@
 {
-  "host_key_fingerprint": "SHA256:4n2WJzrcypfbod1UEpsWrSTwECrcqXDbBJNF9ewo0WE",
-  "host_key_id": "ed25519:e27d96273adcca97dba1dd54129b16ad",
-  "host_public_key": "GZfMpf_1KGLIM3V4q1EBB4tSAHb0_8PzlscMloAA_GI",
-  "not_after": "2026-11-24T01:58:03Z",
+  "host_key_fingerprint": "SHA256:DVwJeuxOSU9q2OQ3QNBl+bY+kjCOEiw5bJw5wpbI63Y",
+  "host_key_id": "ed25519:0d5c097aec4e494f6ad8e43740d065f9",
+  "host_public_key": "zKyE9gggmJQSE-jSF4lWTiW5DUrdu9jlk_map8Xu_kI",
+  "not_after": "2026-11-24T02:07:43Z",
   "record": {
     "record": {
       "format": "agentgate.sealkey.v1",
-      "host_key": "SHA256:4n2WJzrcypfbod1UEpsWrSTwECrcqXDbBJNF9ewo0WE",
-      "key_id": "275633462121d123c514175a6ec98f5a2f04d9cea55a8d14c479706f70090d53",
-      "not_after": "2026-11-24T01:58:03Z",
-      "not_before": "2026-10-25T01:58:03Z",
-      "public_key": "-gXWt0nFNUXRVRNlGGiQOLo8GcsiiSSRxaqBV77m5H8",
+      "host_key": "SHA256:DVwJeuxOSU9q2OQ3QNBl+bY+kjCOEiw5bJw5wpbI63Y",
+      "key_id": "08143bf6833807bcfec4aa4f0a943dd502e1dc639e8328f17ee4da283a310e5f",
+      "not_after": "2026-11-24T02:07:43Z",
+      "not_before": "2026-10-25T02:07:43Z",
+      "public_key": "7nExWMxarQQkbUljwC-z66QvJMlqv7Lvp343Fyq-uhw",
       "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
-      "target_id": "c58de5aaa7a9b49afe9203e70f4d301e"
+      "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377"
     },
-    "signature": "Ovf9tkkR_kS4oBccKqkpUI6hkFMob7xmB_Fot2Zsei62x3L0mO9Qrx79S-phOfjVhtRTRYhIFE-XqRXn_oUwCQ"
+    "signature": "7oRHEdDxviMcfDtLBa3udn55UEgd_Z_2YT1xYAdLkFhPB0NDCAyUkXyuQBc4arvVMYn4GM6Qs0menZYerWzzCQ"
   },
-  "seal_key_id": "275633462121d123c514175a6ec98f5a2f04d9cea55a8d14c479706f70090d53",
-  "target_id": "c58de5aaa7a9b49afe9203e70f4d301e"
+  "seal_key_id": "08143bf6833807bcfec4aa4f0a943dd502e1dc639e8328f17ee4da283a310e5f",
+  "target_id": "20d17ce2f7345e6ffd66ecf45c7ab377"
 }

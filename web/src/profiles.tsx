@@ -776,7 +776,7 @@ export function ProfileDetail({ id: profileRef, selected, actor, epoch, navigate
           {prof.require_approval
             ? "Every launch of this profile waits for a second person with the approver role. The requester can never approve their own launch."
             : prof.approved_version
-              ? `A launcher may start version ${prof.approved_version} alone, the version an administrator reviewed, unless the launch needs approval for another reason (inline access, live host folders, brokered secrets, public web, or the spec asks for it). Every other version, including newer ones, needs a second person.`
+              ? `A launcher may start version ${prof.approved_version} alone, the version an administrator reviewed, unless the launch needs approval for another reason (inline access, any host folder, brokered secrets, public web, or the spec asks for it). Every other version, including newer ones, needs a second person.`
               : "No version is approved for launches without a second person, so every launch needs approval."}
         </p>
         {!prof.require_approval && prof.approved_version && (

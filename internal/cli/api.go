@@ -41,6 +41,9 @@ type Target struct {
 	Revision         int             `json:"revision"`
 	KernelVerified   bool            `json:"kernel_verified"`
 	RetiringSince    string          `json:"retiring_since,omitempty"`
+	// MountRoots are the host folders launches on the target may mount;
+	// none refuses every mount.
+	MountRoots []string `json:"mount_roots"`
 }
 
 // Enrollment is a one-time host enrollment token.

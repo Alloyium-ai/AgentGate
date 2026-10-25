@@ -299,6 +299,9 @@ func TestEndToEndAgainstTheRealService(t *testing.T) {
 		args := append([]string{"launch", "--name", "repo-fixer", "--mode", "session", "--lifetime", "1h", "--profile", "dev", "--image", image, "--mount", "/srv/repos/app:repo:ro"}, flags...)
 		return append(args, "--", "agent", "--print", "fix the tests")
 	}
+	must(run("", launchArgs("--dry-run")...), ExitRejected, "mount_root_not_allowed", "agentgate target mount-roots")
+	must(run("", "target", "mount-roots", "local", "--root", "/srv/repos", "--reason", "Launches may mount the repositories"), 0, "at or below /srv/repos")
+	must(run("", "target", "status", "local"), 0, "/srv/repos")
 	must(run("", launchArgs("--dry-run")...), 0, "dry run: nothing was created", "/srv/data", "mount repo", "live host folder repo", "kernel_verified is false")
 	var dry PlanResult
 	if err := json.Unmarshal([]byte(must(run("", launchArgs("--dry-run", "--json")...), 0).stdout), &dry); err != nil || dry.Plan.PolicyDigest == "" || dry.Plan.Approval != "required" || len(dry.Plan.Mounts) != 1 {

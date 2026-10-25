@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"alloyium.local/kernel-poc/internal/hostproto"
@@ -47,10 +48,14 @@ type Target struct {
 	// RetiringSince is set while a retired target's host still has to
 	// confirm the removal of its secrets; the target is then "retiring".
 	RetiringSince string `json:"retiring_since,omitempty"`
-	hostKey       string
-	sealKey       string
-	lastSequence  uint64
-	lastSeenMS    int64
+	// MountRoots are the host folders launches on this target may mount
+	// (live or as a snapshot): a source must be a root or below one. An
+	// administrator sets them; the default, none, refuses every mount.
+	MountRoots   []string `json:"mount_roots"`
+	hostKey      string
+	sealKey      string
+	lastSequence uint64
+	lastSeenMS   int64
 }
 
 // TargetInput creates or renames a target.
@@ -59,7 +64,7 @@ type TargetInput struct {
 	Reason string `json:"reason"`
 }
 
-const targetColumns = "id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision,seal_key,retiring"
+const targetColumns = "id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision,seal_key,retiring,mount_roots"
 
 // TargetRetiring is the API state of an active target whose retirement
 // waits for its host to confirm the removal of its secrets.
@@ -67,11 +72,14 @@ const TargetRetiring = "retiring"
 
 func (s *Store) scanTarget(row rowScanner) (Target, error) {
 	var t Target
-	var caps string
+	var caps, roots string
 	var retiring string
-	err := row.Scan(&t.ID, &t.Name, &t.State, &caps, &t.Hostname, &t.AgentVersion, &t.hostKey, &t.HostKeyID, &t.EncryptionKey, &t.JobKeyID, &t.lastSequence, &t.lastSeenMS, &t.HeartbeatSeconds, &t.Created, &t.CreatedBy, &t.Updated, &t.Revision, &t.sealKey, &retiring)
+	err := row.Scan(&t.ID, &t.Name, &t.State, &caps, &t.Hostname, &t.AgentVersion, &t.hostKey, &t.HostKeyID, &t.EncryptionKey, &t.JobKeyID, &t.lastSequence, &t.lastSeenMS, &t.HeartbeatSeconds, &t.Created, &t.CreatedBy, &t.Updated, &t.Revision, &t.sealKey, &retiring, &roots)
 	if err != nil {
 		return t, err
+	}
+	if err = json.Unmarshal([]byte(roots), &t.MountRoots); err != nil || t.MountRoots == nil {
+		t.MountRoots = []string{}
 	}
 	t.HostPublicKey = t.hostKey
 	if t.sealKey != "" {
@@ -158,7 +166,7 @@ func (s *Store) CreateTarget(op Operation, in TargetInput) (any, error) {
 			return nil, fail(409, "target_limit", "Retire a target before adding another.")
 		}
 		id, now := newID(), stamp()
-		if _, err := tx.Exec("INSERT INTO targets VALUES(?,?,'pending','[]','','','','','','',0,0,?,?,?,?,1,'','')", id, in.Name, int(s.Provisioning.pollInterval()/time.Second), now, operation.Actor.Subject, now); err != nil {
+		if _, err := tx.Exec("INSERT INTO targets(id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision,seal_key,retiring) VALUES(?,?,'pending','[]','','','','','','',0,0,?,?,?,?,1,'','')", id, in.Name, int(s.Provisioning.pollInterval()/time.Second), now, operation.Actor.Subject, now); err != nil {
 			return nil, fail(409, "target_exists", "A live target already uses this name.")
 		}
 		enrollment, err := s.issueEnrollment(tx, id, operation.Actor)
@@ -214,6 +222,44 @@ func (s *Store) RenameTarget(op Operation, ref string, in TargetInput) (any, err
 		operation.Resource, operation.Before = "target:"+t.ID, map[string]string{"name": t.Name}
 		if _, err = tx.Exec("UPDATE targets SET name=?,updated=?,revision=revision+1 WHERE id=?", in.Name, stamp(), t.ID); err != nil {
 			return nil, fail(409, "target_exists", "A live target already uses this name.")
+		}
+		return s.targetBy(tx, t.ID)
+	})
+}
+
+// TargetMountRootsInput replaces a target's mount root allowlist.
+type TargetMountRootsInput struct {
+	MountRoots []string `json:"mount_roots"`
+	Reason     string   `json:"reason"`
+}
+
+// SetTargetMountRoots replaces the host folders launches on a target may
+// mount or snapshot. Administrators only; an empty list refuses every mount.
+// A root is a canonical absolute path outside the protected trees, credential
+// stores and home directories (hostproto.CheckMountSource), and every mount
+// still needs a second human's approval.
+func (s *Store) SetTargetMountRoots(op Operation, ref string, in TargetMountRootsInput) (any, error) {
+	op.Action, op.Resource, op.Reason = "target.mount_roots.changed", "target:"+ref, safeReason(in.Reason)
+	return s.Mutation(op, "targets:admin", true, func(tx *sql.Tx, operation *Operation) (any, error) {
+		if err := reasonValid(in.Reason); err != nil {
+			return nil, err
+		}
+		if in.MountRoots == nil {
+			in.MountRoots = []string{}
+		}
+		if err := hostproto.CheckMountRoots(in.MountRoots); err != nil {
+			return nil, fail(422, "invalid_mount_roots", strings.TrimPrefix(err.Error(), "hostproto: ")+".")
+		}
+		t, err := s.targetBy(tx, ref)
+		if err != nil {
+			return nil, err
+		}
+		if t.State == "retired" || t.State == TargetRetiring {
+			return nil, fail(409, "target_retired", "A retired or retiring target cannot change.")
+		}
+		operation.Resource, operation.Before = "target:"+t.ID, map[string]any{"mount_roots": t.MountRoots}
+		if _, err = tx.Exec("UPDATE targets SET mount_roots=?,updated=?,revision=revision+1 WHERE id=?", jsonText(in.MountRoots), stamp(), t.ID); err != nil {
+			return nil, err
 		}
 		return s.targetBy(tx, t.ID)
 	})

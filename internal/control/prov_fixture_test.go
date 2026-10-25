@@ -228,6 +228,15 @@ func (f *provFixture) enrolledTarget(caps ...string) (*fakeHost, Target) {
 	return h, must(f.s.TargetDetail("local"))
 }
 
+// mountRoots lets launches on target mount or snapshot the given host folders.
+func (f *provFixture) mountRoots(target string, roots ...string) {
+	f.t.Helper()
+	if roots == nil {
+		roots = []string{}
+	}
+	must(f.s.SetTargetMountRoots(f.admin(), target, TargetMountRootsInput{MountRoots: roots, Reason: "Allow the synthetic host folders"}))
+}
+
 // profile creates a locked-down (no web) profile. Approval false needs an admin.
 func (f *provFixture) profile(name string, requireApproval bool) Profile {
 	return f.profileFrom(name, "locked-down", requireApproval)

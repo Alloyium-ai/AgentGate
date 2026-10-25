@@ -192,6 +192,8 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	// The secret flow as an administrator drives it: target, seal key,
 	// POST /secrets with broker settings, the host's receipt.
 	admin := f.token(f.admin(), "admin")
+	w.record("target-mount-roots.json", map[string]any{"request": map[string]any{"mount_roots": []string{"/srv/repos"}, "reason": "Launches may mount the repositories"},
+		"response": w.call("POST", "/api/v1/targets/"+target.ID+"/mount-roots", admin, map[string]any{"mount_roots": []string{"/srv/repos"}, "reason": "Launches may mount the repositories"}, 200)})
 	w.record("target.json", w.call("GET", "/api/v1/targets/"+target.ID, admin, nil, 200))
 	w.record("seal-key.json", w.call("GET", "/api/v1/targets/"+target.ID+"/seal-key", admin, nil, 200))
 	create := map[string]any{"name": "docs-api", "target": target.ID, "upstreams": []string{"api.docs.example"}, "header": "Authorization", "scheme": "Basic", "username": "agent",

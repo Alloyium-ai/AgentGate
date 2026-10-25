@@ -258,6 +258,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `target status NAME` | `GET /targets/{id}` | state, host key, pin and the next step |
 | `target approve-key NAME [--host-key-id ID]` | `POST /targets/{id}/approve-key` | type the fingerprint the host printed; pins exactly what you typed, and only when the service's answer names the same target and the same key (constant-time compare); an answer with another key or target is exit 13 `host_key_mismatch` and nothing is pinned |
 | `target pin NAME --host-key-id ID [--replace]` | `GET /targets/{id}` | pins the key you typed, only when the service reports that same key for the target (exit 13 otherwise) |
+| `target mount-roots NAME --root PATH... \| --clear` | `POST /targets/{id}/mount-roots` | administrators; the host folders launches on the target may mount or snapshot (a source at or below a root); none, the default, refuses every mount; every mount still needs approval |
 | `target rename NAME NEW` | `PATCH /targets/{id}` | |
 | `target retire NAME [--yes] [--force]` | `DELETE /targets/{id}` | confirms; the host removes the target's secrets first (the target is `retiring` until it confirms), then the host key is revoked; `--force` finishes without the host (values may remain on it) |
 | `profile ls`, `profile show NAME [--version N]`, `profile versions NAME` | `GET /profiles...` | |

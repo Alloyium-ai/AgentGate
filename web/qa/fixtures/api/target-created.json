@@ -1,26 +1,27 @@
 {
   "enrollment": {
     "enroll_path": "/api/v1/hostd/enroll",
-    "expires_at": "2026-10-25T02:13:03Z",
+    "expires_at": "2026-10-25T02:22:43Z",
     "single_use": true,
     "token": "agtenr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   },
   "target": {
     "agent_version": "",
     "capabilities": [],
-    "created_at": "2026-10-25T01:58:03.282303251Z",
+    "created_at": "2026-10-25T02:07:43.237208649Z",
     "created_by": "oidc:ada",
     "encryption_key": "",
     "heartbeat_seconds": 10,
     "host_key_id": "",
     "hostname": "",
-    "id": "2e7aff8cfc900a96ba566c7c1616381a",
+    "id": "8f08891ef729e7794c60a3f2997e21ad",
     "job_key_id": "",
     "kernel_verified": false,
+    "mount_roots": [],
     "name": "new-host",
     "online": false,
     "revision": 1,
     "state": "pending",
-    "updated_at": "2026-10-25T01:58:03.282303251Z"
+    "updated_at": "2026-10-25T02:07:43.237208649Z"
   }
 }

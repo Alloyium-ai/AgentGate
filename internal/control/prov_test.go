@@ -224,14 +224,18 @@ func TestApprovalRulesAndSelfApproval(t *testing.T) {
 	}
 	m = specMap("dev")
 	m["mounts"] = []any{map[string]any{"name": "repo", "source": "/srv/repos/app", "mode": "read-only"}}
+	if _, err := f.s.CreateLaunch(f.launcher(), specBytes(t, m)); errCode(err) != "mount_root_not_allowed" {
+		t.Fatalf("a mount outside the target's mount roots: %v", err)
+	}
+	f.mountRoots("local", "/srv/repos")
 	l3, plan3 := f.launch(f.launcher(), m)
 	if l3.State != StateApprovalPending || len(plan3.Mounts) != 1 {
 		t.Fatal("a live mount launched without approval")
 	}
 	m["mounts"] = []any{map[string]any{"name": "repo", "source": "/srv/repos/app", "mode": "snapshot"}}
-	l4, _ := f.launch(f.launcher(), m)
-	if l4.State != StateQueued {
-		t.Fatal("a snapshot mount on a reviewed profile needed approval")
+	l4, plan4 := f.launch(f.launcher(), m)
+	if l4.State != StateApprovalPending || !hasReason(plan4, "snapshot of host folder repo (/srv/repos/app)") {
+		t.Fatalf("a snapshot of a host folder launched without approval: %s %v", l4.State, plan4.ApprovalReasons)
 	}
 	m = specMap("dev")
 	full, _ := access.FullExample()

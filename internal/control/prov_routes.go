@@ -213,6 +213,12 @@ func (s *Server) provisioningWrite(r *http.Request, c call, tail []string) (any,
 			return deny(err)
 		}
 		return s.Store.ApproveTargetKey(op, tail[1], in)
+	case area == "targets" && n == 3 && tail[2] == "mount-roots" && method == "POST":
+		var in TargetMountRootsInput
+		if err := decode(&in); err != nil {
+			return deny(err)
+		}
+		return s.Store.SetTargetMountRoots(op, tail[1], in)
 	case area == "targets" && n == 2 && method == "PATCH":
 		var in TargetInput
 		if err := decode(&in); err != nil {

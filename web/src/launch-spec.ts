@@ -26,6 +26,9 @@ export const PROTECTED_MOUNT_TREES = [
   "/proc", "/sys", "/dev", "/run", "/var/run", "/etc", "/root", "/boot", "/usr", "/bin",
   "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/var/lib/docker", "/var/lib/containerd",
   "/var/lib/cloud", "/var/lib/kubelet", "/snap", "/var/lib/agentgate",
+  "/var/lib/containers", "/var/lib/rancher", "/var/lib/systemd", "/var/lib/private", "/var/lib/libvirt", "/var/lib/lxd",
+  "/var/lib/incus", "/var/lib/sss", "/var/lib/polkit-1", "/var/lib/sudo", "/var/backups", "/var/log", "/var/mail",
+  "/var/spool", "/lost+found",
 ];
 export const CREDENTIAL_COMPONENTS = [
   ".ssh", ".gnupg", ".aws", ".azure", ".config", ".docker", ".kube", ".netrc",
@@ -246,18 +249,32 @@ export const specJSON = (spec: LaunchSpec) => JSON.stringify(spec, null, 2);
 
 // Approval reasons the operator can predict from the form. The plan is the
 // authority; this only explains in advance why a second human may be needed.
-export function predictApproval(form: LaunchForm, profileRequiresApproval?: boolean, publicWeb?: boolean): string[] {
+// profileReason is why the profile itself needs approval, if it does (see
+// profileApprovalReason).
+export function predictApproval(form: LaunchForm, profileReason?: string, publicWeb?: boolean): string[] {
   const reasons: string[] = [];
   if (form.approval === "required") reasons.push("you asked for approval");
   if (form.access.kind === "inline") reasons.push("an inline access document is not a reviewed profile");
-  else if (profileRequiresApproval) reasons.push("the profile requires approval");
+  else if (profileReason) reasons.push(profileReason);
   for (const m of form.mounts) {
     if (m.mode === "read-write") reasons.push(`read-write host folder ${m.name}`);
     if (m.mode === "read-only") reasons.push(`live host folder ${m.name}`);
+    if (m.mode === "snapshot") reasons.push(`snapshot of host folder ${m.name}`);
   }
   if (form.secrets.length) reasons.push(`brokered secrets ${form.secrets.map((s) => s.ref).join(", ")}`);
   if (publicWeb) reasons.push("public web access");
   return reasons;
+}
+
+// profileApprovalReason is the service's rule for a profile: it needs a second
+// human unless the launched version's digest is the one an administrator
+// approved for launches without approval.
+export function profileApprovalReason(profile?: { require_approval: boolean; approved_digest?: string; approved_version?: number }, version?: { number: number; digest: string }): string | undefined {
+  if (!profile || !version) return undefined;
+  if (profile.require_approval) return "the profile requires approval";
+  if (!profile.approved_digest) return "no version of the profile is approved for launches without approval";
+  if (profile.approved_digest !== version.digest) return `version ${version.number} is not the administrator-approved version ${profile.approved_version}`;
+  return undefined;
 }
 
 // ---- strict import -------------------------------------------------------------

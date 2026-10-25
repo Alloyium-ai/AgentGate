@@ -76,6 +76,24 @@ type or paste the one from the host's own console.`,
 				return e.targetPin(ctx, args[0], *keyID, *replace)
 			}
 		}})
+	register(&command{name: "target mount-roots", args: "NAME", summary: "Set the host folders launches on a target may mount or snapshot (admin).",
+		help: `  --root PATH   a folder launches may mount at or below (repeatable, at most 16)
+  --clear       refuse every host folder (the default for a new target)
+  --reason TEXT
+Every mount still needs a second human's approval. Protected trees (system, container and VM state,
+backups, logs, mail, spools), credential stores and home directories are never allowed.`,
+		setup: func(fs *flag.FlagSet) runner {
+			var roots multiFlag
+			fs.Var(&roots, "root", "")
+			clear := fs.Bool("clear", false, "")
+			reason := fs.String("reason", "", "")
+			return func(ctx context.Context, e *env, args, _ []string) error {
+				if len(args) != 1 || (len(roots) == 0) == !*clear {
+					return usageError("target mount-roots takes one target name and either --root PATH (repeatable) or --clear")
+				}
+				return e.targetMountRoots(ctx, args[0], []string(roots), *reason)
+			}
+		}})
 	register(&command{name: "target rename", args: "NAME NEW-NAME", summary: "Rename a target (admin).", help: "  --reason TEXT",
 		setup: func(fs *flag.FlagSet) runner {
 			reason := fs.String("reason", "", "")
@@ -268,6 +286,7 @@ func (e *env) targetStatus(ctx context.Context, ref string) error {
 		{"name", t.Name}, {"id", t.ID}, {"state", e.p.state(t.State)}, {"online", online}, {"last seen", seen},
 		{"hostname", t.Hostname}, {"agent version", t.AgentVersion}, {"capabilities", joinOr(t.Capabilities, "none")},
 		{"host key", joinOr([]string{t.HostKeyID}, "none")}, {"local pin", pin}, {"job key", t.JobKeyID},
+		{"mount roots", joinOr(t.MountRoots, "none (every host folder mount is refused)")},
 		{"heartbeat", fmt.Sprintf("every %ds", t.HeartbeatSeconds)}, {"kernel verified", fmt.Sprint(t.KernelVerified)},
 	})
 	if next := targetNext(t, pin); next != "" {
@@ -411,6 +430,32 @@ func (e *env) targetPin(ctx context.Context, ref, keyID string, replace bool) er
 	}
 	e.p.line("Pinned host key %s for target %s.", keyID, t.Name)
 	return nil
+}
+
+func (e *env) targetMountRoots(ctx context.Context, ref string, roots []string, reason string) error {
+	c, err := e.authed()
+	if err != nil {
+		return err
+	}
+	if roots == nil {
+		roots = []string{}
+	}
+	if reason, err = defaultReason(reason, "Set the mount roots of target "+ref+" with the agentgate CLI"); err != nil {
+		return err
+	}
+	var t Target
+	raw, err := c.mutate(ctx, "POST", apiPrefix+"/targets/"+pathEscape(ref)+"/mount-roots", map[string]any{"mount_roots": roots, "reason": reason}, true, &t)
+	if err != nil {
+		return err
+	}
+	return e.emit(raw, func() error {
+		if len(t.MountRoots) == 0 {
+			e.p.line("Target %s: launches may mount no host folder.", t.Name)
+		} else {
+			e.p.line("Target %s: launches may mount host folders at or below %s (each mount needs approval).", t.Name, strings.Join(t.MountRoots, ", "))
+		}
+		return nil
+	})
 }
 
 func (e *env) targetRename(ctx context.Context, ref, name, reason string) error {
