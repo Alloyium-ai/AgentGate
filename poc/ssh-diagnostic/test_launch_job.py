@@ -230,11 +230,12 @@ class InputTest(unittest.TestCase):
             value = job(mounts=resolved)
             value['spec']['mounts'] = requested
             return value
-        # The source is the service's resolution of the request; count, names and modes must match.
-        accepted = check_job(raw(pair([repo], [dict(repo, source='/srv/resolved/app')])), CAPS)
-        self.assertEqual(accepted['mounts'][0]['source'], '/srv/resolved/app')
+        # The job mounts exactly what the spec (and so the approval) names: count, and in order name, mode and source.
+        accepted = check_job(raw(pair([repo, docs], [repo, docs])), CAPS)
+        self.assertEqual([m['source'] for m in accepted['mounts']], ['/srv/repos/app', '/srv/docs'])
         self.assertEqual(check_job(raw(pair(None, [])), CAPS)['mounts'], [])
-        for requested, resolved in (([], [repo]), ([repo], []), ([repo], [dict(repo, mode='read-write')]),
+        for requested, resolved in (([repo], [dict(repo, source='/srv/resolved/app')]), ([repo], [dict(repo, source='/srv/repos/app/sub')]),
+                                    ([], [repo]), ([repo], []), ([repo], [dict(repo, mode='read-write')]),
                                     ([repo], [dict(repo, name='other')]), ([repo, docs], [docs, repo]),
                                     ([repo, docs], [repo]), ([dict(repo, extra=1)], [repo]), ('repo', [repo]),
                                     ([repo] * 9, [repo])):

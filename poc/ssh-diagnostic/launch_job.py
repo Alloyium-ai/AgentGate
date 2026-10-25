@@ -174,9 +174,10 @@ def optional(value, empty):
 def same_mounts(requested, mounts):
     """The job's resolved mounts must be exactly the spec's requested mounts.
 
-    Same count and, in order, name for name the same mode (agentgate-hostd's
-    sameMounts applies the same rule). The source path is the service's
-    resolution of the request; check_mounts and mounts.py validate it.
+    Same count and, in order, name for name the same mode and the same
+    source (agentgate-hostd's sameMounts applies the same rule): the host
+    mounts only the folder the signed spec, and so the approval, names.
+    check_mounts and mounts.py validate the source itself.
     """
     if not isinstance(requested, list) or len(requested) > MAX_MOUNTS:
         raise JobError('spec mounts must be a list of at most %d entries' % MAX_MOUNTS)
@@ -185,7 +186,7 @@ def same_mounts(requested, mounts):
     for index, (want, got) in enumerate(zip(requested, mounts), 1):
         if not isinstance(want, dict) or set(want) != {'name', 'source', 'mode'}:
             raise JobError('each spec mount needs exactly name, source and mode')
-        if want['name'] != got['name'] or want['mode'] != got['mode']:
+        if want['name'] != got['name'] or want['mode'] != got['mode'] or want['source'] != got['source']:
             raise JobError('the launch job mount %d (%s, %s) differs from its spec' % (index, got['name'], got['mode']))
 
 

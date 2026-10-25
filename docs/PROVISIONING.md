@@ -260,8 +260,8 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
   jobs never reopen the outbox. A job result is recorded once (trigger-enforced).
 - **Spec binding on the host:** `agentgate-hostd` and `launch_job.py` refuse a launch whose resolved `secrets` differ
   from `spec.secrets` (refs and variables, in order: `secret_binding_differs`) or whose resolved `mounts` differ from
-  `spec.mounts` in count or, in order, in name or mode (`mount_binding_differs`). A mount's `source` is the service's
-  resolution of the request and is validated on the host separately.
+  `spec.mounts` in count or, in order, in name, mode or source (`mount_binding_differs`): the host mounts only the
+  folders the signed spec, and so the approval, names, and then checks each against its own rules and mount roots.
 - **Host mount roots** (`internal/hostd/mountroots.go`, `poc/ssh-diagnostic/mounts.py`): the host folders a host's
   own operator allows launches to mount or snapshot, in `/etc/agentgate/mount-roots.json`
   (`{"version":"agentgate.hostd-mount-roots.v1","roots":[...]}`, root-owned, mode 0644, in a root-owned directory that

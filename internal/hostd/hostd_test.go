@@ -720,7 +720,7 @@ func TestLaunchesThatCannotRunAreRejectedBeforeAnything(t *testing.T) {
 
 // TestResolvedMountsMustBeTheRequestedMounts mirrors the secret binding: the
 // job's resolved mounts must equal the spec's requested mounts in count, and
-// name for name in mode. Only the source is the service's resolution.
+// name for name in mode and source.
 func TestResolvedMountsMustBeTheRequestedMounts(t *testing.T) {
 	h := newHarness(t)
 	repo := hostproto.LaunchMount{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: hostproto.MountRoot + "/repo"}
@@ -743,7 +743,9 @@ func TestResolvedMountsMustBeTheRequestedMounts(t *testing.T) {
 	}
 	resolvedElsewhere := repo
 	resolvedElsewhere.Source = "/srv/resolved/app"
-	if code, err := prepare(requested(repo, docs), []hostproto.LaunchMount{resolvedElsewhere, docs}); err != nil {
+	below := repo
+	below.Source = "/srv/repos/app/sub"
+	if code, err := prepare(requested(repo, docs), []hostproto.LaunchMount{repo, docs}); err != nil {
 		t.Fatalf("matching mounts refused: %s %v", code, err)
 	}
 	readWrite, other := repo, repo
@@ -760,6 +762,8 @@ func TestResolvedMountsMustBeTheRequestedMounts(t *testing.T) {
 		"other mode":        {requested(repo), []hostproto.LaunchMount{readWrite}},
 		"other name":        {requested(repo), []hostproto.LaunchMount{other}},
 		"reordered":         {requested(repo, docs), []hostproto.LaunchMount{docs, repo}},
+		"other source":      {requested(repo, docs), []hostproto.LaunchMount{resolvedElsewhere, docs}},
+		"source below":      {requested(repo), []hostproto.LaunchMount{below}},
 		"fewer":             {requested(repo, docs), []hostproto.LaunchMount{repo}},
 	}
 	for name, c := range cases {
@@ -1339,6 +1343,19 @@ print(json.dumps({'mode': launch['mode'], 'lifetime': launch['lifetime_seconds']
 	refusal.Stdin = bytes.NewReader(tamperedRaw)
 	if out, err := refusal.CombinedOutput(); err == nil || !bytes.Contains(out, []byte("differs from its spec")) {
 		t.Fatalf("launch_job.py accepted a resolved mount whose mode differs from its spec: %s", out)
+	}
+	// A launcher job whose resolved mount source is not the spec's: both sides refuse it.
+	var moved launcherJob
+	_ = json.Unmarshal(raw, &moved)
+	moved.Mounts[0].Source = "/srv/elsewhere"
+	movedRaw, _ := json.Marshal(moved)
+	if sameMounts(tamperedSpec.Mounts[:1], []hostproto.LaunchMount{{Name: "repo", Source: "/srv/elsewhere", Mode: tamperedSpec.Mounts[0].Mode}}) == nil {
+		t.Fatal("Go accepted a resolved mount whose source differs from its spec")
+	}
+	refusal = exec.Command(python, "-I", "-c", script, "../../poc/ssh-diagnostic")
+	refusal.Stdin = bytes.NewReader(movedRaw)
+	if out, err := refusal.CombinedOutput(); err == nil || !bytes.Contains(out, []byte("differs from its spec")) {
+		t.Fatalf("launch_job.py accepted a resolved mount whose source differs from its spec: %s", out)
 	}
 	// A launch with a secret: the Go broker plan and the Python broker check agree.
 	spec := specWithSecret("oneshot", 30)
