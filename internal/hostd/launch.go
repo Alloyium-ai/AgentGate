@@ -76,6 +76,23 @@ func sameSecrets(spec []hostproto.SpecSecret, job []hostproto.LaunchSecret) erro
 	return nil
 }
 
+// sameMounts requires the job's resolved mounts to be exactly the spec's
+// requested mounts: the same count, and name for name, in the same order, the
+// same mode. The source path is the service's resolution of the request and is
+// checked separately (checkMountSources, the runtime's mount validation); a
+// resolved mount the spec does not name, or one with another mode, is refused.
+func sameMounts(spec []hostproto.SpecMount, job []hostproto.LaunchMount) error {
+	if len(spec) != len(job) {
+		return fmt.Errorf("the launch job resolves %d mounts but its spec requests %d", len(job), len(spec))
+	}
+	for i := range spec {
+		if spec[i].Name != job[i].Name || spec[i].Mode != job[i].Mode {
+			return fmt.Errorf("the launch job's mount %d (%s, %s) differs from its spec (%s, %s)", i+1, job[i].Name, job[i].Mode, spec[i].Name, spec[i].Mode)
+		}
+	}
+	return nil
+}
+
 // secretLike is the contract's rule for environment names that must never
 // carry a value: *_KEY, *_TOKEN, *_SECRET, *PASSWORD* (and close variants).
 func secretLike(name string) bool {
@@ -106,6 +123,9 @@ func prepareLaunch(job hostproto.Job, p hostproto.LaunchPayload, caps []string, 
 	}
 	if err := sameSecrets(spec.Secrets, p.Secrets); err != nil {
 		return nil, "secret_binding_differs", err
+	}
+	if err := sameMounts(spec.Mounts, p.Mounts); err != nil {
+		return nil, "mount_binding_differs", err
 	}
 	if err := pocpolicy.ValidateLifetime(spec.Mode, spec.LifetimeSeconds); err != nil {
 		return nil, "invalid_lifetime", err

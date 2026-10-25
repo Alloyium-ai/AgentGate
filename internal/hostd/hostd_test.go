@@ -398,11 +398,26 @@ func testLaunchSecret() hostproto.LaunchSecret {
 		Header: "x-api-key", Rules: []hostproto.BrokerRule{{Methods: []string{"POST"}, Path: "/v1/messages", Match: "exact"}}}
 }
 
+// withSpecMounts makes a spec without mounts request exactly the resolved
+// mounts, as the service does; a spec that names its own mounts is kept.
+func withSpecMounts(spec []byte, mounts []hostproto.LaunchMount) []byte {
+	if len(mounts) == 0 || !bytes.Contains(spec, []byte(`"mounts":[]`)) {
+		return spec
+	}
+	requested := make([]hostproto.SpecMount, 0, len(mounts))
+	for _, m := range mounts {
+		requested = append(requested, hostproto.SpecMount{Name: m.Name, Source: m.Source, Mode: m.Mode})
+	}
+	raw, _ := json.Marshal(requested)
+	return bytes.Replace(spec, []byte(`"mounts":[]`), append([]byte(`"mounts":`), raw...), 1)
+}
+
 func (h *harness) launchJob(spec []byte, mounts []hostproto.LaunchMount, secrets []hostproto.LaunchSecret) hostproto.Job {
 	policy := policyBytes(h.t)
 	if mounts == nil {
 		mounts = []hostproto.LaunchMount{}
 	}
+	spec = withSpecMounts(spec, mounts)
 	if secrets == nil {
 		secrets = []hostproto.LaunchSecret{}
 	}
@@ -676,6 +691,67 @@ func TestLaunchesThatCannotRunAreRejectedBeforeAnything(t *testing.T) {
 		if len(results) != 1 || results[0].Status != hostproto.ResultRejected || results[0].Reason != reason || results[0].EvidenceMissing != "not_started" {
 			t.Errorf("%s: %+v", reason, results)
 		}
+	}
+}
+
+// TestResolvedMountsMustBeTheRequestedMounts mirrors the secret binding: the
+// job's resolved mounts must equal the spec's requested mounts in count, and
+// name for name in mode. Only the source is the service's resolution.
+func TestResolvedMountsMustBeTheRequestedMounts(t *testing.T) {
+	h := newHarness(t)
+	repo := hostproto.LaunchMount{Name: "repo", Source: "/srv/repos/app", Mode: "read-only", Path: hostproto.MountRoot + "/repo"}
+	docs := hostproto.LaunchMount{Name: "docs", Source: "/srv/docs", Mode: "snapshot", Path: hostproto.MountRoot + "/docs"}
+	requested := func(mounts ...hostproto.LaunchMount) []byte {
+		list := []hostproto.SpecMount{}
+		for _, m := range mounts {
+			list = append(list, hostproto.SpecMount{Name: m.Name, Source: m.Source, Mode: m.Mode})
+		}
+		raw, _ := json.Marshal(list)
+		return bytes.Replace(specBytes("oneshot", 30, "{}"), []byte(`"mounts":[]`), append([]byte(`"mounts":`), raw...), 1)
+	}
+	caps := []string{hostproto.CapabilityLiveMounts, hostproto.CapabilitySnapshots}
+	prepare := func(spec []byte, resolved []hostproto.LaunchMount) (string, error) {
+		job := h.launchJob(spec, resolved, nil)
+		var payload hostproto.LaunchPayload
+		_ = json.Unmarshal(job.Payload, &payload)
+		_, code, err := prepareLaunch(job, payload, caps, h.clock.now(), testTarget, nil)
+		return code, err
+	}
+	resolvedElsewhere := repo
+	resolvedElsewhere.Source = "/srv/resolved/app"
+	if code, err := prepare(requested(repo, docs), []hostproto.LaunchMount{resolvedElsewhere, docs}); err != nil {
+		t.Fatalf("matching mounts refused: %s %v", code, err)
+	}
+	readWrite, other := repo, repo
+	readWrite.Mode = "read-write"
+	other.Name, other.Path = "other", hostproto.MountRoot+"/other"
+	// "mounts":null keeps withSpecMounts from filling in the request.
+	unrequested := bytes.Replace(specBytes("oneshot", 30, "{}"), []byte(`"mounts":[]`), []byte(`"mounts":null`), 1)
+	cases := map[string]struct {
+		spec     []byte
+		resolved []hostproto.LaunchMount
+	}{
+		"unrequested mount": {unrequested, []hostproto.LaunchMount{repo}},
+		"missing mount":     {requested(repo), []hostproto.LaunchMount{}},
+		"other mode":        {requested(repo), []hostproto.LaunchMount{readWrite}},
+		"other name":        {requested(repo), []hostproto.LaunchMount{other}},
+		"reordered":         {requested(repo, docs), []hostproto.LaunchMount{docs, repo}},
+		"fewer":             {requested(repo, docs), []hostproto.LaunchMount{repo}},
+	}
+	for name, c := range cases {
+		if code, err := prepare(c.spec, c.resolved); err == nil || code != "mount_binding_differs" {
+			t.Fatalf("%s: %s %v", name, code, err)
+		}
+	}
+	// The daemon rejects such a job before anything runs.
+	job := h.launchJob(requested(repo), []hostproto.LaunchMount{readWrite}, nil)
+	h.service.send(t, job)
+	h.cycle()
+	if h.runtime.called("run") != 0 {
+		t.Fatal("a launch whose mounts differ from its spec ran")
+	}
+	if r := h.service.results(job.ID); len(r) != 1 || r[0].Status != hostproto.ResultRejected || r[0].Reason != "mount_binding_differs" {
+		t.Fatalf("result %+v", r)
 	}
 }
 
@@ -1220,6 +1296,25 @@ print(json.dumps({'mode': launch['mode'], 'lifetime': launch['lifetime_seconds']
 	out := run(raw)
 	if !bytes.Contains(out, []byte(`"mode": "session"`)) || !bytes.Contains(out, []byte(`"mode": "snapshot"`)) || !bytes.Contains(out, []byte(`"broker": null`)) {
 		t.Fatalf("python view %s", out)
+	}
+	// A launcher job whose spec requests another mode than it resolves: both sides refuse it.
+	var tampered launcherJob
+	if err := json.Unmarshal(raw, &tampered); err != nil || len(tampered.Mounts) != 1 || tampered.Mounts[0].Mode != "snapshot" {
+		t.Fatalf("launcher job mounts %+v: %v", tampered.Mounts, err)
+	}
+	tampered.Spec = bytes.Replace(tampered.Spec, []byte(`"mode":"snapshot"`), []byte(`"mode":"read-only"`), 1)
+	var tamperedSpec hostproto.LaunchSpec
+	if err := json.Unmarshal(tampered.Spec, &tamperedSpec); err != nil || len(tamperedSpec.Mounts) != 1 || tamperedSpec.Mounts[0].Mode != "read-only" {
+		t.Fatalf("spec mounts %+v: %v", tamperedSpec.Mounts, err)
+	}
+	if sameMounts(tamperedSpec.Mounts, payload.Mounts) == nil {
+		t.Fatal("Go accepted a resolved mount whose mode differs from its spec")
+	}
+	tamperedRaw, _ := json.Marshal(tampered)
+	refusal := exec.Command(python, "-I", "-c", script, "../../poc/ssh-diagnostic")
+	refusal.Stdin = bytes.NewReader(tamperedRaw)
+	if out, err := refusal.CombinedOutput(); err == nil || !bytes.Contains(out, []byte("differs from its spec")) {
+		t.Fatalf("launch_job.py accepted a resolved mount whose mode differs from its spec: %s", out)
 	}
 	// A launch with a secret: the Go broker plan and the Python broker check agree.
 	spec := specWithSecret("oneshot", 30)

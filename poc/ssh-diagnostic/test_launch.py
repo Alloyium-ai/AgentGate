@@ -49,6 +49,9 @@ def spec(**changes):
 
 
 def job(launch_id='launch-1', grace=1, log_limit=1 << 20, upload=4096, mounts=None, lifetime=None, **spec_changes):
+    if mounts and 'mounts' not in spec_changes:
+        # The service resolves exactly the requested mounts (launch_job.same_mounts).
+        spec_changes['mounts'] = copy.deepcopy(mounts)
     launch_spec = spec(**spec_changes)
     lifetime = launch_spec['lifetime_seconds'] if lifetime is None else lifetime
     policy = dict(copy.deepcopy(FULL_POLICY), mode=launch_spec['mode'], duration_seconds=lifetime)

@@ -222,6 +222,25 @@ class InputTest(unittest.TestCase):
             with self.subTest(mounts=mounts):
                 self.refuse(job(mounts=mounts))
 
+    def test_resolved_mounts_must_be_exactly_the_requested_mounts(self):
+        repo = {'name': 'repo', 'source': '/srv/repos/app', 'mode': 'read-only'}
+        docs = {'name': 'docs', 'source': '/srv/docs', 'mode': 'snapshot'}
+
+        def pair(requested, resolved):
+            value = job(mounts=resolved)
+            value['spec']['mounts'] = requested
+            return value
+        # The source is the service's resolution of the request; count, names and modes must match.
+        accepted = check_job(raw(pair([repo], [dict(repo, source='/srv/resolved/app')])), CAPS)
+        self.assertEqual(accepted['mounts'][0]['source'], '/srv/resolved/app')
+        self.assertEqual(check_job(raw(pair(None, [])), CAPS)['mounts'], [])
+        for requested, resolved in (([], [repo]), ([repo], []), ([repo], [dict(repo, mode='read-write')]),
+                                    ([repo], [dict(repo, name='other')]), ([repo, docs], [docs, repo]),
+                                    ([repo, docs], [repo]), ([dict(repo, extra=1)], [repo]), ('repo', [repo]),
+                                    ([repo] * 9, [repo])):
+            with self.subTest(requested=requested, resolved=resolved):
+                self.refuse(pair(requested, resolved))
+
     def test_workdir_stays_in_the_workspace_or_a_mount(self):
         for workdir, ok in (('/var/lib/agentgate/workspace', True), ('/var/lib/agentgate/workspace/src', True),
                             ('/var/lib/agentgate/mounts/repo', True), ('/var/lib/agentgate/mounts/other', False),

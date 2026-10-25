@@ -171,6 +171,24 @@ def optional(value, empty):
     return empty if value in (None, '', [], {}) else value
 
 
+def same_mounts(requested, mounts):
+    """The job's resolved mounts must be exactly the spec's requested mounts.
+
+    Same count and, in order, name for name the same mode (agentgate-hostd's
+    sameMounts applies the same rule). The source path is the service's
+    resolution of the request; check_mounts and mounts.py validate it.
+    """
+    if not isinstance(requested, list) or len(requested) > MAX_MOUNTS:
+        raise JobError('spec mounts must be a list of at most %d entries' % MAX_MOUNTS)
+    if len(requested) != len(mounts):
+        raise JobError('the launch job resolves %d mounts but its spec requests %d' % (len(mounts), len(requested)))
+    for index, (want, got) in enumerate(zip(requested, mounts), 1):
+        if not isinstance(want, dict) or set(want) != {'name', 'source', 'mode'}:
+            raise JobError('each spec mount needs exactly name, source and mode')
+        if want['name'] != got['name'] or want['mode'] != got['mode']:
+            raise JobError('the launch job mount %d (%s, %s) differs from its spec' % (index, got['name'], got['mode']))
+
+
 def check_spec(spec, capabilities, mounts):
     """Validate the launch spec; mounts are the job's resolved mounts (already checked)."""
     if not isinstance(spec, dict):
@@ -195,8 +213,7 @@ def check_spec(spec, capabilities, mounts):
         text(spec['approval'], 'approval', None, 32)
     if not isinstance(spec['access'], dict) or not spec['access']:
         raise JobError('access must name a profile version or embed a document')
-    if not isinstance(optional(spec.get('mounts'), []), list):
-        raise JobError('spec mounts must be a list')
+    same_mounts(optional(spec.get('mounts'), []), mounts)
     secrets = optional(spec.get('secrets'), [])
     if not isinstance(secrets, list) or len(secrets) > MAX_SECRETS:
         raise JobError('secrets must be a list of at most %d references' % MAX_SECRETS)
