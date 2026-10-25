@@ -247,6 +247,9 @@ func TestEndToEndAgainstTheRealService(t *testing.T) {
 	must(run("", "grant", "dev", "read", "/srv/data", "--reason", "Read the data set"), 0, "version 1 -> 2", "+ filesystem.read_only[] /srv/data")
 	must(run("", "grant", "dev", "mount", "repo"), 0, "version 2 -> 3")
 	must(run("", "grant", "dev", "read", "/srv/data"), 0, "no change")
+	must(run("", "grant", "dev", "device", "/dev/tty", "--dry-run"), 0, "device: added /dev/tty", "+ filesystem.devices[] /dev/tty", "nothing was stored")
+	must(run("", "grant", "dev", "device", "/dev/tty"), 0, "version 3 -> 4", "+ filesystem.devices[] /dev/tty")
+	must(run("", "grant", "dev", "device", "/dev/sda"), ExitRejected, "grant_usage")
 
 	// The plan: exactly what the agent may do, without creating anything.
 	image := "agentgate-coding@sha256:" + strings.Repeat("c", 64)

@@ -271,7 +271,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/profiles/{id}` | GET, PATCH | viewer, admin | detail; change `require_approval` (admin only) |
 | `/profiles/{id}/versions` | GET, POST | viewer, editor | immutable versions; a new version names the latest as its parent |
 | `/profiles/{id}/versions/{n}` | GET | viewer | one version with its document and digest |
-| `/profiles/{id}/versions/{n}/grants` | POST | editor | 1 to 16 typed edits (read, write, exec, deny, allow-web, deny-web, dns, signal, anon-exec, mount, unmount, preset, revoke) on the latest version, producing a new version or a no-op; `"dry_run": true` answers the same (document, `from_digest`, `digest`, `changes`) and stores nothing |
+| `/profiles/{id}/versions/{n}/grants` | POST | editor | 1 to 16 typed edits (read, write, exec, deny, allow-web, deny-web, dns, signal, anon-exec, mount, unmount, device, preset, revoke) on the latest version, producing a new version or a no-op; `"dry_run": true` answers the same (document, `from_digest`, `digest`, `changes`) and stores nothing |
 | `/access-presets` | GET | viewer | presets, edit actions and revoke kinds |
 | `/launches` | GET, POST | viewer, launcher | list newest first with filters `state` (a state, `active` or `ended`), `target`, `name` (substring), `requester`, `mine`, pages of `limit` (1 to 200, default 100) and an opaque `cursor` (`next_cursor` of the previous page, bound to the same filters); create from a spec (validates, returns the plan) |
 | `/launches/summary` | GET | viewer | counts by state of every launch, and up to 8 launches waiting for this actor's decision and 8 expiring within 30 minutes, with their totals |
@@ -322,7 +322,7 @@ agentgate target pin NAME --host-key-id ID | rename NAME NEW | retire NAME
 agentgate profile ls | show NAME | new NAME [--preset P | --file DOC] | versions NAME | approval NAME required|auto
 agentgate preset ls
 agentgate grant PROFILE read|write|exec|deny PATH | web [allow|deny] PROTO... | dns IP... | signal SIG...
-                        | anon-exec | mount NAME [--mode read-only|read-write] | unmount NAME | preset NAME
+                        | anon-exec | mount NAME [--mode read-only|read-write] | unmount NAME | device DEVICE | preset NAME
                         | revoke KIND VALUE...        [--dry-run] [--upgrade]
 agentgate launch -f spec.json | --name N --target T --mode oneshot|session --lifetime D --profile P[@V]
                  --image I --mount SRC:NAME[:ro|snapshot|rw] --secret REF[:ENV] --env K=V -- CMD...

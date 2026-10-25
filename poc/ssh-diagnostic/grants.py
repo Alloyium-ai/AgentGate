@@ -59,7 +59,9 @@ EXIT_CODES = {
     CONFLICT: 'the request conflicts with the current policy (the message names the entry)',
 }
 # Changes that need the version two filesystem and process sections.
-V2_ACTIONS = {'read', 'write', 'exec', 'deny', 'signal', 'anon-exec', 'mount', 'preset'}
+V2_ACTIONS = {'read', 'write', 'exec', 'deny', 'signal', 'anon-exec', 'mount', 'device', 'preset'}
+# The only character devices a policy may allow (pocpolicy and the validator).
+DEVICES = ('/dev/null', '/dev/zero', '/dev/full', '/dev/random', '/dev/urandom', '/dev/tty')
 
 
 class GrantError(Exception):
@@ -900,6 +902,26 @@ def op_anon_exec(ctx, document, args, enable=True):
                   document, message='executable anonymous memory: ' + ('on (weakens W^X)' if enable else 'off'))
 
 
+def device_path(value):
+    if value not in DEVICES:
+        raise GrantError(USAGE, 'a device is one of %s: %r' % (', '.join(DEVICES), value))
+    return value
+
+
+def op_device(ctx, document, args):
+    path = device_path(args.path)
+    document = needs_v2(ctx, clone(document), args, 'device')
+    fs = document['filesystem']
+    denied = covering(fs['deny'], path)
+    if denied:
+        raise GrantError(CONFLICT, '%s is denied by the deny entry %s; run "grant revoke deny %s" first' %
+                         (path, denied, denied))
+    if path in fs['devices']:
+        return Change('device', ['device', path], document, message='device %s is already allowed' % path)
+    fs['devices'].append(path)
+    return Change('device', ['device', path], document, message='device: added ' + path)
+
+
 def apply_mount_entries(ctx, document):
     """Re-add the access entry each existing mount had, after a preset."""
     fs = document['filesystem']
@@ -934,6 +956,16 @@ def op_revoke(ctx, document, args):
         return change
     if kind == 'anon-exec':
         return op_anon_exec(ctx, document, args, enable=False)
+    if kind == 'device':
+        if len(values) != 1:
+            raise GrantError(USAGE, 'revoke device takes exactly one of %s' % ', '.join(DEVICES))
+        path = device_path(values[0])
+        if document.get('version') != V2:
+            return Change('revoke', ['revoke', kind, path], document, message='device: not granted (version one policy)')
+        if path not in document['filesystem']['devices']:
+            return Change('revoke', ['revoke', kind, path], document, message='device: %s was not granted' % path)
+        document['filesystem']['devices'].remove(path)
+        return Change('revoke', ['revoke', kind, path], document, message='device: removed ' + path)
     if not values:
         raise GrantError(USAGE, 'revoke %s needs a value' % kind)
     if kind == 'dns':
@@ -1156,8 +1188,9 @@ def parser(prog):
     mode.add_argument('--read-only', dest='read_write', action='store_false', default=False)
     mode.add_argument('--read-write', dest='read_write', action='store_true')
     add('unmount', 'remove a host folder and its access entry').add_argument('name', metavar='NAME')
-    revoke = add('revoke', 'undo a grant: web, dns, read, write, exec, deny, signal, anon-exec, or mount')
-    revoke.add_argument('kind', choices=('web', 'dns', 'read', 'write', 'exec', 'deny', 'signal', 'anon-exec', 'mount'))
+    add('device', 'allow a character device: ' + ', '.join(DEVICES)).add_argument('path', metavar='DEVICE')
+    revoke = add('revoke', 'undo a grant: web, dns, read, write, exec, deny, signal, anon-exec, mount, or device')
+    revoke.add_argument('kind', choices=('web', 'dns', 'read', 'write', 'exec', 'deny', 'signal', 'anon-exec', 'mount', 'device'))
     revoke.add_argument('values', nargs='*', metavar='VALUE')
     add('preset', 'apply a preset').add_argument('name', metavar='NAME')
     add('rollback', 'restore the policy as it was before the last N recorded changes').add_argument(
@@ -1563,6 +1596,7 @@ def dispatch(args, prog, out):
         'deny': lambda document: op_path(ctx, document, args, 'deny'),
         'signal': lambda document: op_signal(ctx, document, args),
         'anon-exec': lambda document: op_anon_exec(ctx, document, args),
+        'device': lambda document: op_device(ctx, document, args),
         'preset': lambda document: op_preset(ctx, document, args),
         'revoke': lambda document: op_revoke(ctx, document, args),
     }

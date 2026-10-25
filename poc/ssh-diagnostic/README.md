@@ -138,7 +138,8 @@ With the appliance, the instance's own validator runs in the same bounded contai
 | `anon-exec` | Executable anonymous memory (JIT, libffi closures). Weakens write-xor-execute. |
 | `mount HOST_PATH [--as NAME] [--read-only\|--read-write]` | Share a host folder at `/var/lib/agentgate/mounts/NAME`; see [Host folders](#host-folders). |
 | `unmount NAME` | Remove the folder and its access entry. |
-| `revoke KIND VALUE...` | Undo a grant. `KIND` is `web`, `dns`, `read`, `write`, `exec`, `deny`, `signal`, `anon-exec`, or `mount`. |
+| `device DEVICE` | Allow one character device: `/dev/null`, `/dev/zero`, `/dev/full`, `/dev/random`, `/dev/urandom`, or `/dev/tty` (`filesystem.devices`); refused inside a `deny` tree. |
+| `revoke KIND VALUE...` | Undo a grant. `KIND` is `web`, `dns`, `read`, `write`, `exec`, `deny`, `signal`, `anon-exec`, `mount`, or `device`. |
 | `preset NAME` | Replace the web, filesystem, and process sections with a preset. |
 | `history [--json]` / `rollback [N]` | List changes; restore the policy as it was before the last `N` changes (default 1). |
 | `sync` | Appliance only: apply the local policy to the running appliance (after a stopped-time change or a failed transfer). |

@@ -237,7 +237,7 @@ func TestProfileAndGrantCommands(t *testing.T) {
 		}
 	}
 	edits := map[string]access.Edit{}
-	for _, c := range [][]string{{"web", "https", "quic"}, {"web", "deny", "quic"}, {"dns", "1.1.1.1"}, {"signal", "TERM"}, {"anon-exec"}, {"mount", "repo", "--mode", "read-write"}, {"unmount", "repo"}, {"revoke", "web", "quic"}, {"preset", "python-dev"}} {
+	for _, c := range [][]string{{"web", "https", "quic"}, {"web", "deny", "quic"}, {"dns", "1.1.1.1"}, {"signal", "TERM"}, {"anon-exec"}, {"mount", "repo", "--mode", "read-write"}, {"unmount", "repo"}, {"revoke", "web", "quic"}, {"preset", "python-dev"}, {"device", "/dev/urandom"}, {"revoke", "device", "/dev/tty"}} {
 		args := append([]string{"grant", "dev"}, c...)
 		before := len(h.api.requestsTo("POST /api/v1/profiles/{id}/versions/{n}/grants"))
 		if r = h.run("", args...); r.code != 0 {
@@ -258,6 +258,12 @@ func TestProfileAndGrantCommands(t *testing.T) {
 		t.Errorf("%+v", e)
 	}
 	if e := edits["mount repo --mode read-write"]; e.Mode != "read-write" || e.Values[0] != "repo" {
+		t.Errorf("%+v", e)
+	}
+	if e := edits["device /dev/urandom"]; e.Action != "device" || e.Values[0] != "/dev/urandom" {
+		t.Errorf("%+v", e)
+	}
+	if e := edits["revoke device /dev/tty"]; e.Action != "revoke" || e.Kind != "device" || e.Values[0] != "/dev/tty" {
 		t.Errorf("%+v", e)
 	}
 	if e := edits["revoke web quic"]; e.Kind != "web" || e.Values[0] != "quic" {

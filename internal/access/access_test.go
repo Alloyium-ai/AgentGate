@@ -162,3 +162,29 @@ func TestPresetsBuildValidDocuments(t *testing.T) {
 		t.Fatal("unexpected preset count")
 	}
 }
+
+func TestDeviceGrantsAllowOnlyTheSixDevices(t *testing.T) {
+	doc, err := FullExample()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Apply(doc, Edit{Action: ActionDevice, Values: []string{"/dev/tty"}})
+	if err != nil || !r.Changed || r.Document.Filesystem.Devices[len(r.Document.Filesystem.Devices)-1] != "/dev/tty" || r.Message != "device: added /dev/tty" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if again, err := Apply(r.Document, Edit{Action: ActionDevice, Values: []string{"/dev/tty"}}); err != nil || again.Changed {
+		t.Fatal("a repeated device grant changed the policy")
+	}
+	for _, bad := range []string{"/dev/sda", "/dev/mem", "/dev/../dev/null", "/dev/null/", "tty", ""} {
+		if _, err := Apply(doc, Edit{Action: ActionDevice, Values: []string{bad}}); !IsCode(err, CodeUsage) {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+	gone, err := Apply(r.Document, Edit{Action: ActionRevoke, Kind: "device", Values: []string{"/dev/tty"}})
+	if err != nil || !gone.Changed || contains(gone.Document.Filesystem.Devices, "/dev/tty") {
+		t.Fatalf("revoke device: %+v %v", gone, err)
+	}
+	if len(Devices) != 6 {
+		t.Fatal("the device allowlist changed")
+	}
+}

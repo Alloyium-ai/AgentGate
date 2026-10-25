@@ -211,6 +211,31 @@ class RoundTripTest(GrantTestCase):
                 self.assertEqual(self.grant(*argv)[0], grants.USAGE)
 
 
+class DeviceTest(GrantTestCase):
+    def test_only_the_six_devices_can_be_granted_and_revoked(self):
+        self.ok('device', '/dev/tty')
+        self.assertIn('/dev/tty', self.document()['filesystem']['devices'])
+        self.validated()
+        self.assertIn('unchanged=true', self.ok('device', '/dev/tty'))
+        raw = self.policy.read_bytes()
+        for bad in ('/dev/sda', '/dev/mem', 'tty', '/dev/null/'):
+            with self.subTest(device=bad):
+                code, _, err = self.grant('device', bad)
+                self.assertEqual(code, grants.USAGE, err)
+                self.assertEqual(self.policy.read_bytes(), raw)
+        self.ok('revoke', 'device', '/dev/tty')
+        self.assertNotIn('/dev/tty', self.document()['filesystem']['devices'])
+        self.assertIn('unchanged=true', self.ok('revoke', 'device', '/dev/tty'))
+
+    def test_a_denied_device_is_a_conflict(self):
+        for device in list(self.document()['filesystem']['devices']):
+            self.ok('revoke', 'device', device)
+        self.ok('deny', '/dev')
+        code, _, err = self.grant('device', '/dev/null')
+        self.assertEqual(code, grants.CONFLICT, err)
+        self.assertIn('/dev', err)
+
+
 class ValidatorTest(GrantTestCase):
     def test_rejections_are_verbatim_and_never_written(self):
         raw = self.policy.read_bytes()

@@ -80,7 +80,8 @@ func init() {
   mount NAME [--mode read-only|read-write]   allow the agent to use a spec mount NAME
   unmount NAME
   preset NAME                     merge a preset
-  revoke KIND [VALUE...]          remove a grant (KIND: web dns read write exec deny signal anon-exec mount)
+  device DEVICE                   allow /dev/null, /dev/zero, /dev/full, /dev/random, /dev/urandom or /dev/tty
+  revoke KIND [VALUE...]          remove a grant (KIND: web dns read write exec deny signal anon-exec mount device)
 Flags:
   --mode MODE     mount access mode (default read-only)
   --upgrade       allow upgrading a version one profile to version two
@@ -142,6 +143,8 @@ func parseGrant(action string, values []string, mode string, upgrade bool) (Gran
 		}
 	case "unmount":
 		err = need(1, 1, "one mount name")
+	case "device":
+		err = need(1, 1, "one device: /dev/null, /dev/zero, /dev/full, /dev/random, /dev/urandom or /dev/tty")
 	case "preset":
 		err = need(1, 1, "one preset name")
 	case "revoke":
@@ -150,7 +153,7 @@ func parseGrant(action string, values []string, mode string, upgrade bool) (Gran
 		}
 		edit.Kind, edit.Values = values[0], values[1:]
 	default:
-		return edit, usageError("unknown grant action %q (read, write, exec, deny, web, dns, signal, anon-exec, mount, unmount, preset, revoke)", action)
+		return edit, usageError("unknown grant action %q (read, write, exec, deny, web, dns, signal, anon-exec, mount, unmount, device, preset, revoke)", action)
 	}
 	if len(edit.Values) == 0 {
 		edit.Values = nil

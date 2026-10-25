@@ -12,6 +12,8 @@ export type Row = { area: string; permission: string; value: string; meaning: st
 export type DiffRow = { area: string; field: string; change: "added" | "removed" | "changed"; before?: string; after?: string };
 
 export const MOUNT_ROOT = "/var/lib/agentgate/mounts";
+// DEVICES are the only character devices a policy may allow (pocpolicy).
+export const DEVICES = ["/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"];
 export const SIGNALS = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGKILL", "SIGUSR1", "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGWINCH"];
 const WEB: Record<string, { protocol: string; port: number; label: string }> = {
   http: { protocol: "tcp", port: 80, label: "HTTP (TCP 80)" },
@@ -211,6 +213,8 @@ export function describeEdit(e: GrantEdit): { text: string; risk: Risk } {
         : { text: `Add host folder ${one} at ${MOUNT_ROOT}/${one}, read-only.`, risk: "medium" };
     case "unmount":
       return { text: `Remove host folder ${one}.`, risk: "protective" };
+    case "device":
+      return { text: `Let the agent open the character device ${one}.`, risk: "low" };
     case "preset":
       return { text: `Replace the web, filesystem and process sections with the preset ${one}.`, risk: "medium" };
     case "revoke":
@@ -221,6 +225,8 @@ export function describeEdit(e: GrantEdit): { text: string; risk: Risk } {
           return { text: "Turn off executable anonymous memory.", risk: "protective" };
         case "mount":
           return { text: `Remove host folder ${one}.`, risk: "protective" };
+        case "device":
+          return { text: `Stop the agent opening the character device ${one}.`, risk: "protective" };
         case "dns":
           return { text: `Remove the DNS resolver ${v.join(", ")}.`, risk: "protective" };
         case "signal":
@@ -260,6 +266,8 @@ export function editIssue(e: GrantEdit): string | undefined {
     case "mount":
     case "unmount":
       return v.length !== 1 || !/^[a-z0-9][a-z0-9_-]{0,31}$/.test(v[0]) ? "A host folder name is 1 to 32 of a-z 0-9 _ -, starting with a letter or digit." : undefined;
+    case "device":
+      return v.length !== 1 || !DEVICES.includes(v[0]) ? `A device is one of ${DEVICES.join(", ")}.` : undefined;
   }
   return undefined;
 }

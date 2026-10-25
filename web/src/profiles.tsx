@@ -11,7 +11,7 @@ import { Actor, ApiError, api, when } from "./api";
 import { Empty, ErrorBox, Loading, Modal, SectionTitle } from "./components";
 import { GrantEdit, GrantResult, Items, Preset, Profile, ProfileVersion, permissions, roleText, useResource } from "./prov-api";
 import { AccessSummary, ConfirmDialog, DiffTable, Digest, Gate, KernelNotice, LiveRegion, RiskBadge, ServerMessages } from "./prov-components";
-import { EXPLAIN, MOUNT_ROOT, SIGNALS, WEB_PROTOCOLS, describeEdit, diffDocuments, editIssue, mountsOf, webLabel, webOf } from "./access-model";
+import { DEVICES, EXPLAIN, MOUNT_ROOT, SIGNALS, WEB_PROTOCOLS, describeEdit, diffDocuments, editIssue, mountsOf, webLabel, webOf } from "./access-model";
 import { ClientPager, useClientPages } from "./prov-paging";
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -201,6 +201,58 @@ export function Profiles({ actor, epoch, navigate }: { actor: Actor; epoch: numb
 }
 
 // ---- typed editor --------------------------------------------------------------
+
+// DeviceList stages device grants: only the six character devices the policy
+// format allows can be added, one at a time.
+function DeviceList({ devices, onAdd, onRemove }: { devices: string[]; onAdd: (d: string) => void; onRemove: (d: string) => void }) {
+  const [value, setValue] = useState("");
+  const left = DEVICES.filter((d) => !devices.includes(d));
+  return (
+    <div className="grant-list">
+      <div className="grant-list-head">
+        <h4>Devices</h4>
+        <RiskBadge risk={EXPLAIN.devices.risk} />
+      </div>
+      <p className="form-note">{EXPLAIN.devices.plain} Only {DEVICES.join(", ")} can be allowed.</p>
+      <ul>
+        {devices.length ? (
+          devices.map((d) => (
+            <li key={d}>
+              <code className="verbatim">{d}</code>
+              <button type="button" className="icon-button" aria-label={`Remove device ${d}`} onClick={() => onRemove(d)}>
+                <Trash2 size={15} />
+              </button>
+            </li>
+          ))
+        ) : (
+          <li className="muted">none</li>
+        )}
+      </ul>
+      <div className="inline-add">
+        <label>
+          Allow a device
+          <select value={value} onChange={(e) => setValue(e.target.value)}>
+            <option value="">Choose</option>
+            {left.map((d) => (
+              <option key={d}>{d}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!value}
+          onClick={() => {
+            onAdd(value);
+            setValue("");
+          }}
+        >
+          Stage device
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function PathList({ title, kind, explain, paths, readOnly, onAdd, onRemove }: { title: string; kind: string; explain: { plain: string; risk: any }; paths: string[]; readOnly?: string; onAdd?: (p: string) => void; onRemove?: (p: string) => void }) {
   const [value, setValue] = useState("");
@@ -424,7 +476,7 @@ function AccessEditor({ profile, latest, actor, onApplied }: { profile: Profile;
             <PathList title="Write" kind="write" explain={EXPLAIN.write} paths={fs.scratch.filter(notMount)} onAdd={(x) => stage({ action: "write", values: [x] })} onRemove={(x) => stage({ action: "revoke", kind: "write", values: [x] })} />
             <PathList title="Read" kind="read" explain={EXPLAIN.read} paths={fs.read_only.filter(notMount)} onAdd={(x) => stage({ action: "read", values: [x] })} onRemove={(x) => stage({ action: "revoke", kind: "read", values: [x] })} />
             <PathList title="Execute" kind="exec" explain={EXPLAIN.exec} paths={fs.execute} onAdd={(x) => stage({ action: "exec", values: [x] })} onRemove={(x) => stage({ action: "revoke", kind: "exec", values: [x] })} />
-            <PathList title="Devices" kind="devices" explain={EXPLAIN.devices} paths={fs.devices} readOnly="The grants API has no device action. Change devices with a new version from a document (Advanced)." />
+            <DeviceList devices={fs.devices} onAdd={(d) => stage({ action: "device", values: [d] })} onRemove={(d) => stage({ action: "revoke", kind: "device", values: [d] })} />
             <PathList title="Deny" kind="deny" explain={EXPLAIN.deny} paths={fs.deny} onAdd={(x) => stage({ action: "deny", values: [x] })} onRemove={(x) => stage({ action: "revoke", kind: "deny", values: [x] })} />
           </>
         ) : (
@@ -668,7 +720,7 @@ function DocumentVersion({ profile, latest, onClose, onDone }: { profile: Profil
       }}
     >
       <p className="form-note">
-        For changes the typed editor cannot make (for example devices) or to import a document the CLI produced. The service validates the whole document
+        For changes the typed editor cannot make or to import a document the CLI produced. The service validates the whole document
         with the policy validator; a version two profile cannot return to version one.
       </p>
       <label>

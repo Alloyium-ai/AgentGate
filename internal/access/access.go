@@ -61,14 +61,17 @@ const (
 	ActionAnonExec = "anon-exec"
 	ActionMount    = "mount"
 	ActionUnmount  = "unmount"
+	ActionDevice   = "device"
 	ActionPreset   = "preset"
 	ActionRevoke   = "revoke"
 )
 
 // Actions lists every action, and RevokeKinds every kind revoke accepts.
 var (
-	Actions     = []string{ActionRead, ActionWrite, ActionExec, ActionDeny, ActionAllowWeb, ActionDenyWeb, ActionDNS, ActionSignal, ActionAnonExec, ActionMount, ActionUnmount, ActionPreset, ActionRevoke}
-	RevokeKinds = []string{"web", "dns", "read", "write", "exec", "deny", "signal", "anon-exec", "mount"}
+	Actions     = []string{ActionRead, ActionWrite, ActionExec, ActionDeny, ActionAllowWeb, ActionDenyWeb, ActionDNS, ActionSignal, ActionAnonExec, ActionMount, ActionUnmount, ActionDevice, ActionPreset, ActionRevoke}
+	RevokeKinds = []string{"web", "dns", "read", "write", "exec", "deny", "signal", "anon-exec", "mount", "device"}
+	// Devices are the only character devices a policy may allow.
+	Devices = []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"}
 )
 
 // Edit is one typed change.
@@ -80,6 +83,7 @@ var (
 //	anon-exec              no values
 //	mount                  Values = [NAME or /var/lib/agentgate/mounts/NAME], Mode read-only|read-write
 //	unmount                Values = [NAME]
+//	device                 Values = [one of Devices]
 //	preset                 Values = [PRESET]
 //	revoke                 Kind = one of RevokeKinds, Values as for the grant
 type Edit struct {
@@ -489,6 +493,37 @@ func (e *editor) unmount(d pocpolicy.Document) (pocpolicy.Document, string, erro
 	return d, "host folder " + p + " removed", nil
 }
 
+// devicePath accepts exactly one of the six allowed device paths.
+func devicePath(values []string) (string, error) {
+	if len(values) != 1 {
+		return "", usage("device takes exactly one of %s", strings.Join(Devices, ", "))
+	}
+	if !contains(Devices, values[0]) {
+		return "", usage("a device is one of %s: %q", strings.Join(Devices, ", "), values[0])
+	}
+	return values[0], nil
+}
+
+func (e *editor) device(d pocpolicy.Document) (pocpolicy.Document, string, error) {
+	p, err := devicePath(e.edit.Values)
+	if err != nil {
+		return d, "", err
+	}
+	d, err = e.needsV2(clone(d), ActionDevice)
+	if err != nil {
+		return d, "", err
+	}
+	fs := d.Filesystem
+	if denied := covering(fs.Deny, p); denied != "" {
+		return d, "", conflict("%s is denied by the deny entry %s; revoke deny %s first", p, denied, denied)
+	}
+	if contains(fs.Devices, p) {
+		return d, "device " + p + " is already allowed", nil
+	}
+	fs.Devices = append(fs.Devices, p)
+	return d, "device: added " + p, nil
+}
+
 func (e *editor) preset(d pocpolicy.Document) (pocpolicy.Document, string, error) {
 	if len(e.edit.Values) != 1 {
 		return d, "", usage("preset takes exactly one NAME")
@@ -530,6 +565,20 @@ func (e *editor) revoke(d pocpolicy.Document) (pocpolicy.Document, string, error
 		return e.anonExec(d, false)
 	case "mount":
 		return e.unmount(d)
+	case "device":
+		p, err := devicePath(values)
+		if err != nil {
+			return d, "", err
+		}
+		d = clone(d)
+		if d.Version != pocpolicy.VersionV2 {
+			return d, "device: not granted (version one policy)", nil
+		}
+		if !contains(d.Filesystem.Devices, p) {
+			return d, "device: " + p + " was not granted", nil
+		}
+		d.Filesystem.Devices = remove(d.Filesystem.Devices, p)
+		return d, "device: removed " + p, nil
 	}
 	if !contains(RevokeKinds, kind) {
 		return d, "", usage("revoke kind must be one of %s", strings.Join(RevokeKinds, ", "))
@@ -668,6 +717,8 @@ func Apply(d pocpolicy.Document, e Edit) (Result, error) {
 		out, message, err = ed.mount(d)
 	case ActionUnmount:
 		out, message, err = ed.unmount(d)
+	case ActionDevice:
+		out, message, err = ed.device(d)
 	case ActionPreset:
 		out, message, err = ed.preset(d)
 	case ActionRevoke:

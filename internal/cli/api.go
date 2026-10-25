@@ -95,7 +95,7 @@ type GrantEdit struct {
 
 // grantRevokeKinds and maxGrantValues repeat the service's bounds for usage
 // messages before anything is sent (a test compares them with internal/access).
-var grantRevokeKinds = []string{"web", "dns", "read", "write", "exec", "deny", "signal", "anon-exec", "mount"}
+var grantRevokeKinds = []string{"web", "dns", "read", "write", "exec", "deny", "signal", "anon-exec", "mount", "device"}
 
 const maxGrantValues = 16
 

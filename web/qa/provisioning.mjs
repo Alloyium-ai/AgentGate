@@ -128,8 +128,13 @@ function applyEdits(doc, edits) {
         (e.mode === "read-write" ? fs.scratch : fs.read_only).push("/var/lib/agentgate/mounts/" + v[0]);
         messages.push(`host folder: /var/lib/agentgate/mounts/${v[0]} (${e.mode || "read-only"})`);
         break;
+      case "device":
+        if (!fs.devices.includes(v[0])) fs.devices.push(v[0]);
+        messages.push("device: added " + v[0]);
+        break;
       case "revoke":
         if (e.kind === "read") fs.read_only = fs.read_only.filter((x) => x !== v[0]);
+        if (e.kind === "device") fs.devices = fs.devices.filter((x) => x !== v[0]);
         messages.push(`${e.kind}: removed ${v[0] || ""}`);
         break;
       default:
@@ -655,14 +660,19 @@ try {
     await read.getByRole("textbox").fill("/srv/data");
     await read.getByRole("button", { name: "Stage read" }).click();
     await text("Let the agent read /srv/data").waitFor();
+    await pick("Allow a device").selectOption("/dev/tty");
+    await page.getByRole("button", { name: "Stage device" }).click();
+    await text("Let the agent open the character device /dev/tty.").waitFor();
     await page.locator(".access-editor").getByRole("textbox", { name: "Reason", exact: true }).fill("Read the data set");
     await page.getByRole("button", { name: "Preview (dry run)" }).click();
     await text("Dry run: the service's result (nothing was stored)").waitFor();
     await page.locator(".preview").getByRole("cell", { name: "/srv/data" }).waitFor();
     await page.locator(".preview").getByText("read-only: added /srv/data").waitFor();
     await page.locator(".preview").getByText("Version 1 would become version 2.").waitFor();
+    await page.locator(".preview").getByRole("cell", { name: "/dev/tty" }).waitFor();
     const preview = requests.filter((r) => r.path.endsWith("/grants")).at(-1);
     assert.equal(JSON.parse(preview.body).dry_run, true, "the preview asks the service for a dry run");
+    assert.deepEqual(JSON.parse(preview.body).edits[1], { action: "device", values: ["/dev/tty"] });
     assert.equal(versions[profiles[0].id].length, 1, "a dry run created nothing");
     await checkLabels("access editor");
     await page.getByRole("button", { name: "Apply as version 2" }).click();

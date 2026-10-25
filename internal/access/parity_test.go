@@ -64,6 +64,11 @@ def run(document, edit):
     if action == 'preset':
         args.name = values[0]
         return grants.op_preset(ctx, document, args).document
+    if action == 'device':
+        if len(values) != 1:
+            raise grants.GrantError(grants.USAGE, 'one device')
+        args.path = values[0]
+        return grants.op_device(ctx, document, args).document
     if action == 'mount':
         name = grants.mountlib.name_from_path(values[0])
         return grants.mount_policy(ctx, document, args, grants.mountlib.mount_path(name), edit.get('mode', 'read-only') == 'read-only')
@@ -161,6 +166,31 @@ func parityCases(t *testing.T) []parityCase {
 		{v1, []Edit{
 			{Action: "preset", Values: []string{"python-dev"}, UpgradeToV2: true},
 			{Action: "write", Values: []string{"/tmp/cache"}},
+		}},
+		{full, []Edit{
+			{Action: "device", Values: []string{"/dev/tty"}},
+			{Action: "device", Values: []string{"/dev/tty"}},
+			{Action: "device", Values: []string{"/dev/sda"}},
+			{Action: "device", Values: []string{"null"}},
+			{Action: "device", Values: []string{"/dev/full", "/dev/tty"}},
+			{Action: "device"},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/zero"}},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/zero"}},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/sda"}},
+			{Action: "deny", Values: []string{"/dev"}},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/null"}},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/random"}},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/urandom"}},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/tty"}},
+			{Action: "deny", Values: []string{"/dev"}},
+			{Action: "device", Values: []string{"/dev/null"}},
+			{Action: "revoke", Kind: "deny", Values: []string{"/dev"}},
+			{Action: "device", Values: []string{"/dev/full"}},
+		}},
+		{v1, []Edit{
+			{Action: "device", Values: []string{"/dev/null"}},
+			{Action: "revoke", Kind: "device", Values: []string{"/dev/null"}},
+			{Action: "device", Values: []string{"/dev/full"}, UpgradeToV2: true},
 		}},
 	}
 }

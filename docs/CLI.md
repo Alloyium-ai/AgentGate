@@ -285,6 +285,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `grant P anon-exec` | `anon-exec` |
 | `grant P mount NAME [--mode read-only\|read-write]` | `mount` (access for a spec mount at `/var/lib/agentgate/mounts/NAME`) |
 | `grant P unmount NAME` | `unmount` |
+| `grant P device DEVICE` | `device` (one of `/dev/null`, `/dev/zero`, `/dev/full`, `/dev/random`, `/dev/urandom`, `/dev/tty`) |
 | `grant P preset NAME` | `preset` |
 | `grant P revoke KIND [VALUE...]` | `revoke` with `kind` |
 

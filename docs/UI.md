@@ -53,7 +53,7 @@ what was requested; it never presents a permission as proven behavior.
    means, and its risk (*High risk*, *Medium risk*, *Low risk*, *Restricts access*). **Show policy JSON** shows the stored
    document read-only.
 4. **Change access** is a typed editor, never raw JSON. Sections: Network (public web per protocol, DNS resolvers),
-   Files (workspace, write, read, execute, devices, deny), Mounts (host folder name and read-only or read-write),
+   Files (workspace, write, read, execute, devices from the six the policy allows, deny), Mounts (host folder name and read-only or read-write),
    Processes (signals) and Memory (executable anonymous memory), plus *Replace with a preset*. Each control stages one
    typed grant edit (at most 16) with a plain-language description and risk, for example "Let the agent run programs
    from /opt/tool. It must not overlap a writable folder." Paths are pre-checked like `access.ContainerPath`.
@@ -68,7 +68,7 @@ what was requested; it never presents a permission as proven behavior.
    opposite edit as another version.
 7. **Launch approval** (administrator) switches whether launches of the profile need a second person, with an
    explanation of what changes. **Advanced: new version from a document** stores a whole document as the next version
-   (for devices, which have no grant action, or a document the CLI produced).
+   (for a document the CLI produced).
 
 ### Store a secret (administrator)
 

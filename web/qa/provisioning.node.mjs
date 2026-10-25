@@ -202,6 +202,17 @@ test("the service's grant change list equals the UI's diff (real service answers
   assert.deepEqual(rowsOf(M.diffDocuments(applied.parent.document, applied.response.version.document)), rowsOf(applied.response.changes));
 });
 
+test("device grants are described, pre-checked and use the service's six devices", (t) => {
+  assert.equal(M.describeEdit({ action: "device", values: ["/dev/tty"] }).risk, "low");
+  assert.equal(M.describeEdit({ action: "revoke", kind: "device", values: ["/dev/tty"] }).risk, "protective");
+  assert.equal(M.editIssue({ action: "device", values: ["/dev/urandom"] }), undefined);
+  assert.ok(M.editIssue({ action: "device", values: ["/dev/sda"] }));
+  const go = repo("internal/access/access.go");
+  if (!go) return t.skip("Go sources not present");
+  const devices = [...go.match(/Devices = \[\]string\{([^}]+)\}/)[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(devices, M.DEVICES);
+});
+
 test("typed edits are described with their risk and pre-checked", () => {
   assert.equal(M.describeEdit({ action: "exec", values: ["/opt/tool"] }).risk, "medium");
   assert.match(M.describeEdit({ action: "write", values: ["/data"] }).text, /never be executable/);
