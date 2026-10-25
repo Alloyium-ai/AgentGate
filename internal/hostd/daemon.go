@@ -129,7 +129,7 @@ func newDaemon(cfg Config, stateDir string, id Identity, keys Keys, service Serv
 	if err != nil {
 		return nil, err
 	}
-	outbox, err := openOutbox(stateDir)
+	outbox, err := openOutbox(stateDir, now, true)
 	if err != nil {
 		return nil, err
 	}
@@ -577,6 +577,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		if err := d.Ledger.Prune(ledgerRetention, func(id string) bool { return d.Outbox.Known(id) && !d.Outbox.Completed(id) }); err != nil {
 			d.logf("ledger prune: %v", err)
+		}
+		if err := d.Outbox.Compact(); err != nil {
+			d.logf("outbox compaction: %v", err)
 		}
 		select {
 		case <-ctx.Done():

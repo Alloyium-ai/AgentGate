@@ -258,7 +258,11 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
 - **Idempotence:** every job id runs at most once on the host. A repeated job whose result is not yet queued gets
   its recorded result queued again; once the service has acknowledged a job as `completed`, the host answers a
   repeat with nothing (no ledger entry and no event), even after it pruned the job's ledger entry, so re-delivered
-  jobs never reopen the outbox. A job result is recorded once (trigger-enforced).
+  jobs never reopen the outbox. A completed job keeps its outbox directory for 50 hours (twice the 25-hour maximum
+  job lifetime), then its id moves into an append-only completed-id set (`STATE/outbox/completed-ids/00`..`ff`,
+  16 bytes per job, fsynced before the directory is removed) that answers "completed" for ever; at start the host
+  agent loads only unfinished and recently completed jobs, and repairs a compaction a crash interrupted. A job result
+  is recorded once (trigger-enforced).
 - **Spec binding on the host:** `agentgate-hostd` and `launch_job.py` refuse a launch whose resolved `secrets` differ
   from `spec.secrets` (refs and variables, in order: `secret_binding_differs`) or whose resolved `mounts` differ from
   `spec.mounts` in count or, in order, in name, mode or source (`mount_binding_differs`): the host mounts only the

@@ -102,7 +102,7 @@ func StatusWith(stateDir, rootsFile string) (StatusReport, error) {
 			}
 		}
 	}
-	if outbox, outboxErr := openOutbox(stateDir); outboxErr == nil {
+	if outbox, outboxErr := openOutbox(stateDir, nil, false); outboxErr == nil {
 		report.OutboxBytes = outbox.Bytes()
 		report.OutboxJobs = append(report.OutboxJobs, outbox.Pending()...)
 	}
