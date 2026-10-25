@@ -10,8 +10,9 @@
 # non-ELF file or an unroutable address can never be the cause of a negative):
 #   - read a world-readable file inside a deny tree (denied) vs a sibling in a
 #     read_only tree (allowed);
-#   - write into a read_only tree on that writable folder (denied) vs the
-#     workspace (allowed);
+#   - write to an existing file of a read_only tree on that writable folder
+#     (denied; a new name would be decided as a create) vs the workspace
+#     (allowed);
 #   - exec the same real ELF (/bin/true) from a non-execute writable tree
 #     (denied) vs from an execute tree (allowed);
 #   - mknod(2) a plain regular file in a writable tree (denied) vs open(O_CREAT)
@@ -26,8 +27,9 @@
 #     random canary written to that store never appears in the agent's output.
 # verify_kernel.py judges the outcomes, every guard negative requiring EPERM or
 # EACCES, not a generic failure. The driver then cross-checks the launch
-# receipt's host block: every operation the guard was meant to deny must have
-# recorded at least one denial there, and the rendered denial paths must be
+# receipt's host block: every negative must have left its own denial record
+# there, of its operation and, where the hook resolves one, its exact path
+# (verify_kernel.EXPECTED_HOST_DENIALS), and the rendered denial paths must be
 # container-absolute (a host-side overlay path would mean bpf_d_path rendered
 # the wrong mount and the selectors silently stopped matching). It writes a
 # JSON result to $1 and exits non-zero if any expectation fails.
@@ -121,7 +123,7 @@ attempt("allow-exec-tree", lambda: subprocess.run(["/bin/true"], check=True))
 attempt("allow-read-sibling", lambda: open(ro + "/data").read())
 # Filesystem negatives, each on the writable bind: only the guard can deny them.
 attempt("deny-read-tree", lambda: open(blocked + "/secret").read())
-attempt("deny-write-readonly", lambda: open(ro + "/new", "w").write("x"))
+attempt("deny-write-readonly", lambda: open(ro + "/data", "r+").write("x"))
 attempt("deny-exec-nontree", lambda: subprocess.run([elf], check=True))
 attempt("deny-mknod-regular", lambda: os.mknod(work + "/node", 0o600 | stat.S_IFREG))
 attempt("deny-mkfifo", lambda: os.mkfifo(work + "/fifo"))
@@ -205,8 +207,8 @@ python3 "$LAUNCH" receipt "$LAUNCH_ID" >"$WORK/receipt.json" 2>>"$WORK/run.err" 
 python3 "$LAUNCH" logs "$LAUNCH_ID" stdout 0 1048576 >"$WORK/stdout.log" 2>/dev/null || true
 
 # Judge the outcomes (verify_kernel.py), then cross-check the receipt: every
-# operation the guard was meant to deny recorded a denial, each rendered denial
-# path is container-absolute, and at least one denial was recorded at all.
+# negative left its own denial record (operation and path), each rendered
+# denial path is container-absolute, and at least one denial was recorded.
 python3 -I "$KIT/verify_kernel.py" judge "$CANARY" <"$WORK/stdout.log" >"$WORK/judged.json" || true
 python3 -I - "$KIT" "$WORK" "$RESULT" "$MOUNT" <<'PY'
 import json, pathlib, sys
@@ -239,8 +241,8 @@ try:
 except (OSError, ValueError) as error:
     ok = False
     probes.append({"name": "receipt-readable", "errno": str(error), "ok": False})
-# Every operation the guard was meant to deny must have recorded a denial.
-for probe in verify_kernel.required_denials({}, host):
+# Every negative must match its own recorded denial.
+for probe in verify_kernel.required_denials({}, host, mount):
     probes.append(probe)
     ok = ok and probe['ok']
 probes.append({"name": "denials-container-absolute", "errno": "recorded=%d" % recorded, "ok": container_absolute and recorded >= 1,

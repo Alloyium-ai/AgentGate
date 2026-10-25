@@ -714,8 +714,9 @@ EPERM/EACCES, not a generic error:
 
 - read a world-readable file inside a `deny` tree is denied, while a sibling in
   a `read_only` tree is read;
-- a write into a `read_only` tree on the writable folder is denied, while a
-  write into the workspace succeeds (not EROFS from the read-only rootfs);
+- opening an existing file of a `read_only` tree on the writable folder for
+  writing is denied, while a write into the workspace succeeds (not EROFS from
+  the read-only rootfs; a new name there would be decided as a create);
 - exec of a real ELF (`/bin/true`) copied into a non-execute tree is denied,
   while exec of the same ELF from an `execute` tree succeeds (not ENOEXEC);
 - `mknod(2)` of a plain regular file in a writable tree is denied, while
@@ -731,12 +732,17 @@ EPERM/EACCES, not a generic error:
 - the broker's secret path and the host's secret store never open, and a random
   canary written to that store never appears in the agent's output.
 
-The driver then cross-checks the launch receipt's host block: every operation
-the guard was meant to deny (read, write, execute, create, hardlink, ptrace)
-must have recorded at least one denial, and each rendered denial path must be
-container-absolute. A probe that reports EACCES while the host evidence shows no
-denial for that operation — the guard silently off, the error from elsewhere —
-fails the stage, as does a host-side overlay path.
+The driver then cross-checks the launch receipt's host block: every negative
+must match its own denial record, each record used once
+(`verify_kernel.EXPECTED_HOST_DENIALS`). Where the hook resolves a path the
+record must name exactly the probe's path (read of `$MOUNT/blocked/secret`,
+write of `$MOUNT/ro/data`, execute of `$MOUNT/elf/true`); the hooks that resolve
+none (`path_mknod` for mknod, mkfifo and the AF_UNIX bind, `path_link`, ptrace)
+need one path-less record of their operation per probe, so the three create
+probes need three. Each rendered denial path must also be container-absolute.
+A probe that reports EACCES without its own record (the guard silently off, the
+error from elsewhere, or a denial of some other path such as Python writing
+`__pycache__` under `/usr`) fails the stage, as does a host-side overlay path.
 
 **What it cannot prove.** The probe exercises the main allow/deny selectors
 once each; it is not exhaustive over paths or operations. It does not cover the

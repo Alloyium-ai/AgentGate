@@ -341,8 +341,11 @@ struct inode;struct mnt_idmap;struct iattr;
 //   5. the syscall in progress (task_pt_regs(current)->orig_ax) is x86-64
 //      open (2), creat (85), openat (257) or openat2 (437). mknod (133) and
 //      mknodat (259) never match, whatever nameidata holds; a 32-bit or x32
-//      task, io_uring and kernel-initiated opens (a core dump) do not match
-//      either and are denied.
+//      task and io_uring do not match either and are denied. A kernel open
+//      made in a task's own context is not excluded: a core dump written while
+//      orig_ax still holds an open-family number (a fatal signal delivered as
+//      such a syscall returns) can pass 1 to 5, and then file_open still
+//      decides CREATE on the core file's path like any open(O_CREAT).
 // Conditions 2 to 4 are internal; 5 is the syscall ABI and bounds a change to
 // them: a kernel that left nameidata published during mknod(2) still cannot
 // pass 5. Re-verify 1 to 5, FMODE_CREATED (0x100000) and the sleepable hook set
