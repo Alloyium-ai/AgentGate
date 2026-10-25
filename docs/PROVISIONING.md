@@ -79,7 +79,9 @@ Rules every implementation enforces (`internal/control/prov_launchspec.go`; JSON
   or another mount, and that is at or below one of the target's **mount roots**: the host folders an administrator
   lists for the target (`POST /targets/{id}/mount-roots`, audited as `target.mount_roots.changed`, at most 16 roots
   that pass the same source rules). A new target has none, so every mount is refused (`422 mount_root_not_allowed`)
-  until its administrator lists roots. Every mount brings host data into the sandbox and needs a second human's
+  until its administrator lists roots. The roots are checked when the launch is planned and again when it is queued:
+  a launch approved after its root was removed is not queued (`409 mount_root_not_allowed`, or
+  `mount_root_not_on_host` for the host's own list) and stays waiting until it is rejected or the root is listed again. Every mount brings host data into the sandbox and needs a second human's
   approval, a snapshot as much as a live folder; the reason names the mount and its source. A writable mount is never
   executable (`internal/access` refuses the overlap). The host re-checks every source rule and applies **its own
   operator's mount roots** as well (see [Host mount roots](#host-mount-roots)): a host that reports its roots makes the

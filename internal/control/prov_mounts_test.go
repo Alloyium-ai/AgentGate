@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"alloyium.local/kernel-poc/internal/hostproto"
 )
 
 // reviewHostPaths are the host folders of the review repro
@@ -165,5 +167,55 @@ func TestHostReportedMountRootsAndClockSkew(t *testing.T) {
 	}
 	if tg = must(f.s.TargetDetail("local")); strings.Join(*tg.HostMountRoots, ",") != "/srv,/opt/data" {
 		t.Fatalf("a refused heartbeat changed the host roots: %v", tg.HostMountRoots)
+	}
+}
+
+// A root removed after a launch was planned blocks its approval: the launch
+// is not queued and no snapshot or launch job reaches the host (review
+// finding 5). It can still be rejected, and listing the root again unblocks it.
+func TestRemovingAMountRootBlocksLaunchesWaitingForApproval(t *testing.T) {
+	f := newProv(t)
+	h, _ := f.enrolledTarget()
+	f.profile("safe", false)
+	f.mountRoots("local", "/srv")
+	m := specMap("safe")
+	m["mounts"] = []any{map[string]any{"name": "data", "source": "/srv/data", "mode": "snapshot"}}
+	l, plan := f.launch(f.launcher(), m)
+	other, _ := f.launch(f.launcher(), m)
+	if plan.Approval != "required" || l.State != StateApprovalPending {
+		t.Fatalf("approval %s state %s", plan.Approval, l.State)
+	}
+	f.mountRoots("local", "/opt")
+	if _, err := f.s.DecideLaunch(f.approver(), l.ID, true, DecisionInput{Reason: "Approve the older plan"}); errCode(err) != "mount_root_not_allowed" {
+		t.Fatalf("approval after the root was removed: %v", err)
+	}
+	if got := f.state(l.ID); got.State != StateApprovalPending || got.DecidedBy != "" {
+		t.Fatalf("a refused approval changed the launch: %s by %q", got.State, got.DecidedBy)
+	}
+	for _, j := range h.poll() {
+		if j.Type == hostproto.JobSnapshotMount || j.Type == hostproto.JobLaunch {
+			t.Fatalf("a %s job was queued for a launch whose root was removed", j.Type)
+		}
+	}
+	var denied int
+	f.s.DB.QueryRow("SELECT count(*) FROM audit WHERE action='launch.approved' AND result='denied' AND after_json LIKE '%mount_root_not_allowed%'").Scan(&denied)
+	if denied != 1 {
+		t.Fatalf("the refused approval was not audited: %d", denied)
+	}
+	if got := must(f.s.DecideLaunch(f.approver(), other.ID, false, DecisionInput{Reason: "Its folder is no longer allowed"})).(launchRow); got.State != StateRejected {
+		t.Fatalf("reject: %s", got.State)
+	}
+	// The host's own roots are applied the same way.
+	f.mountRoots("local", "/srv")
+	roots := []string{"/opt"}
+	h.mountRoots = &roots
+	h.poll()
+	if _, err := f.s.DecideLaunch(f.approver(), l.ID, true, DecisionInput{Reason: "Approve again"}); errCode(err) != "mount_root_not_on_host" {
+		t.Fatalf("approval outside the host's roots: %v", err)
+	}
+	roots = []string{"/srv/data"}
+	h.poll()
+	if got := must(f.s.DecideLaunch(f.approver(), l.ID, true, DecisionInput{Reason: "The roots allow it again"})).(launchRow); got.State != StateQueued {
+		t.Fatalf("approval inside both lists: %s", got.State)
 	}
 }

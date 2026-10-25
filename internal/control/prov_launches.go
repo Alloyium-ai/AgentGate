@@ -680,6 +680,19 @@ func (s *Store) queueLaunch(tx *sql.Tx, l *launchRow, plan LaunchPlan, canonical
 	if err != nil || target.State != "active" {
 		return fail(409, "target_unavailable", "The launch target is no longer enrolled and active.")
 	}
+	// The mount roots may have changed since the launch was planned: an
+	// administrator who removed a root (or a host whose operator did) stops
+	// every launch not yet queued from mounting below it.
+	for _, m := range plan.Mounts {
+		if !hostproto.MountUnderRoots(m.Source, target.MountRoots) {
+			return fail(409, "mount_root_not_allowed", "Mount "+m.Name+": "+m.Source+" is no longer inside a host folder target "+target.Name+" allows (mount roots: "+joinOr(target.MountRoots)+
+				"); the launch cannot be queued. Reject it, or list the root again with POST /targets/{id}/mount-roots.")
+		}
+		if target.HostMountRoots != nil && !hostproto.MountUnderRoots(m.Source, *target.HostMountRoots) {
+			return fail(409, "mount_root_not_on_host", "Mount "+m.Name+": "+m.Source+" is no longer inside a host folder the host of target "+target.Name+" allows (its own mount roots: "+joinOr(*target.HostMountRoots)+
+				"); the launch cannot be queued. Reject it, or have the host's operator list the root again.")
+		}
+	}
 	for _, sec := range plan.Secrets {
 		stored, err := scanSecret(tx.QueryRow("SELECT "+secretColumns+" FROM secrets WHERE id=?", sec.SecretID))
 		if err != nil || stored.State != "stored" {
