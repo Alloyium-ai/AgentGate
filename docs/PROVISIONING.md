@@ -584,6 +584,25 @@ sudo -E agentgate up --compose-file compose.yaml --admin-user ada --target local
   (`deploy/Caddyfile.public`, still `tls internal`; give hosts the CA with `--ca-file`, or use your own
   certificate).
 
+- **Client addresses behind the TLS front (deployment requirement).** The service limits requests per client address
+  (1200 a minute for the API, 120 sign-in requests and 10 password attempts a minute) and samples the audit rows of
+  anonymous denials per client address (at most 20 a minute; one `audit.denials.suppressed` row counts the rest).
+  Behind a reverse proxy every request has the proxy's address, so the service must be told which peers are proxies:
+  `trusted_proxies` in `settings.json` lists their CIDR networks (default empty: no proxy is trusted and every
+  request is keyed by its TCP peer). The shipped `compose.yaml` pins the internal network to `10.231.207.0/28` and the
+  shipped `settings.json` trusts exactly that network; `Caddyfile` and `deploy/Caddyfile.public` replace any
+  client-sent `X-Forwarded-For` with the real client address (`header_up X-Forwarded-For {remote_host}`). A request
+  from a trusted proxy is keyed by the rightmost `X-Forwarded-For` entry that is not itself a trusted proxy (the
+  entries to its left are whatever the client sent); one without a well-formed `X-Forwarded-For` (at most 16 IP
+  addresses) is refused with `400 invalid_forwarded_for`. IPv6 clients are keyed by their `/64`. Change the subnet in
+  `compose.yaml` and `settings.json` together if `10.231.207.0/28` is taken on the machine; with another proxy, list
+  its addresses. Do not list a network that untrusted clients can reach the service from directly.
+- **Host requests are not limited by client address.** `POST /api/v1/hostd/{poll,resync,jobs/{id}/events}` first
+  verifies the request's signature against its target's enrolled key (one row read and one Ed25519 verification on a
+  bounded body), and only then is the request limited per host (1200 a minute); only failed verifications count
+  against the client address (120 a minute, then `429` without an audit row). A flood of unauthenticated requests,
+  from anywhere, therefore cannot refuse an honest host's polls and fail its running launches `lost_host`.
+
 Then check everything from any machine with the CLI: `agentgate doctor --target NAME` reports the service, clock
 skew, token, target state, host key approval and local pin, heartbeat age, `bpf-lsm` and `brokered-secrets`, each
 with the exact fix.

@@ -37,7 +37,14 @@ services:
       control: {condition: service_healthy}
     networks: [control]
 networks:
-  control: {}
+  # A fixed subnet, so settings.json can name exactly the TLS front as the
+  # one trusted proxy (trusted_proxies): the service then limits and samples
+  # requests by the client address Caddy forwards, not by Caddy's own.
+  # Change both together if this range is taken on the machine.
+  control:
+    ipam:
+      config:
+        - subnet: 10.231.207.0/28
 volumes:
   state: {}
   trust: {}

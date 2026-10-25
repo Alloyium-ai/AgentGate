@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,10 +26,18 @@ type Server struct {
 	Store                    *Store
 	Auth                     *Auth
 	Spool, Web, FixtureLabel string
-	mu                       sync.Mutex
-	clients                  map[chan int64]bool
-	limits                   map[string]*bucket
-	inflight                 chan struct{}
+	// TrustedProxies are the networks of the reverse proxies in front of the
+	// service (settings trusted_proxies). A request whose peer is one of
+	// them is keyed by the client address it forwarded in X-Forwarded-For;
+	// every other request by its peer. Empty trusts no proxy.
+	TrustedProxies []netip.Prefix
+	mu             sync.Mutex
+	clients        map[chan int64]bool
+	limits         map[string]*bucket
+	// hostLimits holds the per-host buckets of authenticated host requests,
+	// apart from limits, so no flood of other keys can crowd them out.
+	hostLimits map[string]*bucket
+	inflight   chan struct{}
 	// StreamWriteTimeout, StreamHeartbeat and StreamLifetime bound the launch
 	// log stream; zero means the defaults (20 s, 15 s and 5 minutes).
 	StreamWriteTimeout, StreamHeartbeat, StreamLifetime time.Duration
@@ -49,7 +58,7 @@ type call struct {
 var safeMeta = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,100}$`)
 
 func NewServer(s *Store, a *Auth, spool, web string) *Server {
-	app := &Server{Store: s, Auth: a, Spool: spool, Web: web, clients: map[chan int64]bool{}, limits: map[string]*bucket{}, inflight: make(chan struct{}, 32)}
+	app := &Server{Store: s, Auth: a, Spool: spool, Web: web, clients: map[chan int64]bool{}, limits: map[string]*bucket{}, hostLimits: map[string]*bucket{}, inflight: make(chan struct{}, 32)}
 	s.Changed = app.changed
 	return app
 }
@@ -119,9 +128,13 @@ func (s *Server) authRoute(name string) http.HandlerFunc {
 			s.problem(w, r, fail(503, "request_capacity", "The sign-in capacity is full."), Operation{}, false)
 			return
 		}
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		host, ferr := s.clientIP(r)
+		if ferr != nil {
+			s.problem(w, r, ferr, Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "auth.denied", Resource: "session", Reason: "Malformed forwarding header", RequestID: r.Header.Get("X-Request-ID"), Source: host}, true)
+			return
+		}
 		if s.limited("auth:" + host) {
-			s.problem(w, r, fail(429, "rate_limited", "The sign-in request rate exceeds its limit."), Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "auth.denied", Resource: "session", Reason: "Sign-in rate limit", RequestID: r.Header.Get("X-Request-ID")}, true)
+			s.problem(w, r, fail(429, "rate_limited", "The sign-in request rate exceeds its limit."), Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "auth.denied", Resource: "session", Reason: "Sign-in rate limit", RequestID: r.Header.Get("X-Request-ID"), Source: host}, true)
 			return
 		}
 		switch name {
@@ -144,7 +157,7 @@ func (s *Server) authRoute(name string) http.HandlerFunc {
 			}
 		}
 		if err != nil {
-			op := Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "auth.denied", Resource: "session", Reason: "SSO or session request denied", RequestID: r.Header.Get("X-Request-ID")}
+			op := Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "auth.denied", Resource: "session", Reason: "SSO or session request denied", RequestID: r.Header.Get("X-Request-ID"), Source: host}
 			var denied *callbackDenial
 			if name == "callback" && errors.As(err, &denied) {
 				op.Actor = denied.Actor
@@ -166,23 +179,6 @@ func (s *Server) authRoute(name string) http.HandlerFunc {
 func (s *Server) limited(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
-	b := s.limits[key]
-	if b == nil || now.After(b.Reset) {
-		if len(s.limits) >= 2048 {
-			for k, v := range s.limits {
-				if now.After(v.Reset) {
-					delete(s.limits, k)
-				}
-			}
-			if len(s.limits) >= 2048 {
-				return true
-			}
-		}
-		b = &bucket{Reset: now.Add(time.Minute)}
-		s.limits[key] = b
-	}
-	b.Count++
 	ceiling := 120
 	if strings.HasPrefix(key, "password:") || strings.HasPrefix(key, "enroll:") {
 		ceiling = 10
@@ -190,12 +186,125 @@ func (s *Server) limited(key string) bool {
 	if strings.HasPrefix(key, "ip:") {
 		ceiling = 1200
 	}
+	return take(s.limits, key, ceiling, 2048)
+}
+
+// limitedHost is the per-host bucket of authenticated host requests: a host
+// polls every heartbeat and uploads job events, so its ceiling is generous,
+// and it lives apart from the client address buckets.
+func (s *Server) limitedHost(hostID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return take(s.hostLimits, "host:"+hostID, 1200, 1024)
+}
+
+// take counts one request against key's one-minute bucket in m (at most size
+// buckets; a full map refuses new keys) and reports whether it is over ceiling.
+func take(m map[string]*bucket, key string, ceiling, size int) bool {
+	now := time.Now()
+	b := m[key]
+	if b == nil || now.After(b.Reset) {
+		if len(m) >= size {
+			for k, v := range m {
+				if now.After(v.Reset) {
+					delete(m, k)
+				}
+			}
+			if len(m) >= size {
+				return true
+			}
+		}
+		b = &bucket{Reset: now.Add(time.Minute)}
+		m[key] = b
+	}
+	b.Count++
 	return b.Count > ceiling
+}
+
+// clientIP is the address a request is limited and its anonymous denials
+// sampled by. Without a trusted proxy it is the TCP peer. When the peer is
+// a trusted proxy, it is the rightmost X-Forwarded-For entry that is not
+// itself a trusted proxy: the proxies append the address they received from,
+// so entries to its left are whatever the client chose to send. A trusted
+// proxy that sends no X-Forwarded-For, or a malformed one, is refused. An
+// IPv6 client is keyed by its /64. The peer is returned with an error.
+func (s *Server) clientIP(r *http.Request) (string, error) {
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return host, nil
+	}
+	peer = peer.Unmap()
+	if !s.trusted(peer) {
+		return clientKey(peer), nil
+	}
+	values := r.Header.Values("X-Forwarded-For")
+	entries := []string{}
+	for _, v := range values {
+		for _, part := range strings.Split(v, ",") {
+			entries = append(entries, strings.TrimSpace(part))
+		}
+	}
+	if len(entries) == 0 || len(entries) > 16 {
+		return clientKey(peer), fail(400, "invalid_forwarded_for", "A request through a trusted proxy needs one X-Forwarded-For list of at most 16 addresses.")
+	}
+	addrs := make([]netip.Addr, len(entries))
+	for i, e := range entries {
+		a, err := netip.ParseAddr(e)
+		if err != nil || a.Zone() != "" {
+			return clientKey(peer), fail(400, "invalid_forwarded_for", "X-Forwarded-For holds an entry that is not an IP address.")
+		}
+		addrs[i] = a.Unmap()
+	}
+	for i := len(addrs) - 1; i >= 0; i-- {
+		if !s.trusted(addrs[i]) {
+			return clientKey(addrs[i]), nil
+		}
+	}
+	return clientKey(addrs[0]), nil
+}
+
+func (s *Server) trusted(a netip.Addr) bool {
+	for _, p := range s.TrustedProxies {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func clientKey(a netip.Addr) string {
+	if a.Is6() {
+		p, _ := a.Prefix(64)
+		return p.String()
+	}
+	return a.String()
+}
+
+// ParseTrustedProxies reads the trusted_proxies setting: at most 16
+// canonical CIDR networks.
+func ParseTrustedProxies(values []string) ([]netip.Prefix, error) {
+	if len(values) > 16 {
+		return nil, errors.New("trusted_proxies holds at most 16 networks")
+	}
+	out := []netip.Prefix{}
+	for _, v := range values {
+		p, err := netip.ParsePrefix(v)
+		if err != nil || p.Masked() != p || p.String() != v {
+			return nil, errors.New("trusted_proxies entries are canonical CIDR networks such as 10.231.207.0/28")
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 func (s *Server) prepare(r *http.Request) (call, error) {
 	var c call
 	c.Operation = Operation{Actor: Actor{Subject: "anonymous", Kind: "unknown"}, Action: "api.denied", Resource: "api", Reason: "API authorization or validation denied", RequestID: r.Header.Get("X-Request-ID")}
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	host, err := s.clientIP(r)
+	c.Operation.Source = host
+	if err != nil {
+		return c, err
+	}
 	if s.limited("ip:" + host) {
 		return c, fail(429, "rate_limited", "The request rate exceeds this node's limit.")
 	}
@@ -208,7 +317,6 @@ func (s *Server) prepare(r *http.Request) (call, error) {
 
 	}
 	var nonce string
-	var err error
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Alloyium-Proof ") {
 		c.Actor, nonce, err = s.Auth.Machine(r, c.Body)
 	} else if _, ok := bearerToken(r); ok {

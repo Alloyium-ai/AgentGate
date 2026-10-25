@@ -15,6 +15,7 @@ type AuditAction struct {
 // fails when code emits an action that is not listed.
 var AuditCatalog = []AuditAction{
 	{"api.denied", "api", "An API request failed authentication, authorization or validation."},
+	{"audit.denials.suppressed", "api", "More than 20 anonymous denials came from one source within a minute; this row counts the ones not recorded individually."},
 	{"schema.migrated", "database", "The database schema moved to a new version."},
 	{"jobkey.activated", "jobkey:<key id>", "A job signing key became the active key."},
 	{"jobkey.retired", "jobkey:<key id>", "A job signing key was retired; its targets need re-enrollment and its queued jobs were cancelled."},

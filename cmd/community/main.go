@@ -271,6 +271,9 @@ func serve(store *control.Store, config *localconfig.Store, record localconfig.R
 	}
 	auth.BindCommunityConfig(config, record)
 	app := control.NewServer(store, auth, spool, location("AGENTGATE_WEB_DIR", "/opt/agentgate/web"))
+	if app.TrustedProxies, err = control.ParseTrustedProxies(record.Settings.TrustedProxies); err != nil {
+		return err
+	}
 	if err = control.CheckWeb(app.Web); err != nil {
 		return err
 	}

@@ -70,6 +70,9 @@ type Store struct {
 	// host sent that did not verify, so it is audited once, not every poll.
 	// Guarded by mu (host requests hold it).
 	rejectedSealKeys map[string]string
+	// denials samples anonymous denial audit rows per source and minute
+	// (denial_sampling.go). Guarded by mu.
+	denials map[string]*denialWindow
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -291,6 +294,13 @@ func (s *Store) Denied(op Operation, cause error) error {
 	defer tx.Rollback()
 	if err = retainDeniedNonce(tx, op); err != nil {
 		return err
+	}
+	write, err := s.sampleDenial(tx, op)
+	if err != nil {
+		return err
+	}
+	if !write {
+		return tx.Commit()
 	}
 	_, code, _ := errorResult(cause)
 	op.After = map[string]string{"error_code": code}

@@ -195,6 +195,47 @@ func (s *Store) verifiedHost(tx *sql.Tx, env hostproto.Envelope, domain string, 
 	return t, nil
 }
 
+// PreauthenticateHost checks that a signed host request verifies with the
+// key its target enrolled, before any of the request's work, and returns the
+// target id to limit it by. It reads one row and verifies one signature,
+// takes no store lock and records nothing; the request itself then runs the
+// full check (state, timestamp, nonce, sequence) under the lock.
+func (s *Store) PreauthenticateHost(raw []byte, domain string) (string, error) {
+	env, err := hostproto.DecodeEnvelope(raw)
+	if err != nil {
+		return "", fail(422, "invalid_envelope", "Supply one signed hostproto envelope.")
+	}
+	var hostID string
+	switch domain {
+	case hostproto.DomainPoll:
+		var p hostproto.PollRequest
+		err, hostID = hostproto.UnverifiedPayload(env, &p), p.HostID
+	case hostproto.DomainEvents:
+		var p hostproto.EventsRequest
+		err, hostID = hostproto.UnverifiedPayload(env, &p), p.HostID
+	case hostproto.DomainResync:
+		var p hostproto.ResyncRequest
+		err, hostID = hostproto.UnverifiedPayload(env, &p), p.HostID
+	default:
+		return "", fail(404, "not_found", "The host endpoint does not exist.")
+	}
+	if err != nil || !hexID.MatchString(hostID) {
+		return "", fail(422, "invalid_request", "The request payload does not match the protocol.")
+	}
+	var key string
+	if err = s.DB.QueryRow("SELECT host_key FROM targets WHERE id=? AND state<>'retired' AND host_key<>''", hostID).Scan(&key); err != nil {
+		return "", fail(401, "unknown_host", "The host is not enrolled.")
+	}
+	pub, err := hostproto.DecodeKey(key)
+	if err != nil {
+		return "", fail(401, "unknown_host", "The host key is unusable.")
+	}
+	if _, err = hostproto.Verify(env, domain, ed25519.PublicKey(pub)); err != nil {
+		return "", fail(401, "invalid_signature", "The request is not signed by the enrolled host key.")
+	}
+	return hostID, nil
+}
+
 // hostRequest runs one authenticated host request. Failures before the
 // signature verifies are audited as anonymous denials. After it verifies,
 // the nonce and sequence advance even when the request is then refused, so

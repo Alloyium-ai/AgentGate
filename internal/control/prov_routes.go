@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -558,9 +557,20 @@ func (s *Server) hostd(w http.ResponseWriter, r *http.Request) {
 		s.hostProblem(w, r, fail(503, "request_capacity", "The request capacity is full."))
 		return
 	}
-	host, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if s.limited("ip:" + host) {
-		s.hostProblem(w, r, fail(429, "rate_limited", "The request rate exceeds this node's limit."))
+	// Host requests are not limited by the shared client address bucket: an
+	// unauthenticated flood from the same address (behind a proxy, every
+	// client's) must never starve an honest host's signed polls, or its
+	// running launches would fail lost_host. Each signed request is first
+	// checked against the host's enrolled key (one row read and one Ed25519
+	// verification; the body and the concurrent requests are bounded), and
+	// then limited per host. Only failed checks count against the client
+	// address (and are refused once over its limit), and their audit rows
+	// are sampled.
+	host, ferr := s.clientIP(r)
+	id := r.Header.Get("X-Request-ID")
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/hostd/")
+	if ferr != nil {
+		s.hostProblem(w, r, ferr)
 		return
 	}
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
@@ -572,12 +582,30 @@ func (s *Server) hostd(w http.ResponseWriter, r *http.Request) {
 		s.hostProblem(w, r, fail(413, "body_too_large", "The host request exceeds the one MiB limit."))
 		return
 	}
-	id := r.Header.Get("X-Request-ID")
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/hostd/")
+	if domain := hostDomain(path); domain != "" {
+		hostID, perr := s.Store.PreauthenticateHost(body, domain)
+		if perr != nil {
+			if s.limited("hostfail:" + host) {
+				s.hostProblem(w, r, fail(429, "rate_limited", "Too many host requests from this address failed authentication."))
+				return
+			}
+			op := hostOp(id, map[string]string{hostproto.DomainPoll: "hostd.poll.denied", hostproto.DomainResync: "hostd.resync.denied", hostproto.DomainEvents: "hostd.events.denied"}[domain], "target")
+			op.Source = host
+			if e := s.Store.Denied(op, perr); e != nil {
+				perr = e
+			}
+			s.hostProblem(w, r, perr)
+			return
+		}
+		if s.limitedHost(hostID) {
+			s.hostProblem(w, r, fail(429, "rate_limited", "The request rate of this host exceeds its limit."))
+			return
+		}
+	}
 	var value any
 	switch {
 	case path == "enroll":
-		if s.limited("enroll:" + host) {
+		if s.limited("ip:"+host) || s.limited("enroll:"+host) {
 			s.hostProblem(w, r, fail(429, "rate_limited", "The enrollment rate exceeds its limit."))
 			return
 		}
@@ -603,6 +631,20 @@ func (s *Server) hostd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, 200, value)
+}
+
+// hostDomain is the signing domain of a host endpoint that authenticates
+// with an enrolled key ("" for enrollment, which binds a new key).
+func hostDomain(path string) string {
+	switch {
+	case path == "poll":
+		return hostproto.DomainPoll
+	case path == "resync":
+		return hostproto.DomainResync
+	case strings.HasPrefix(path, "jobs/") && strings.HasSuffix(path, "/events") && strings.Count(path, "/") == 2:
+		return hostproto.DomainEvents
+	}
+	return ""
 }
 
 func (s *Server) hostProblem(w http.ResponseWriter, r *http.Request, err error) {

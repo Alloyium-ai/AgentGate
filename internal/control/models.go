@@ -117,6 +117,10 @@ type Operation struct {
 	Actor                                                                                                 Actor
 	Action, Resource, Version, Run, Reason, RequestID, CorrelationID, Idempotency, BodyDigest, ProofNonce string
 	Before, After                                                                                         any
+	// Source is the client address the request came from (behind a trusted
+	// proxy, the address it forwarded). It keys the sampling of anonymous
+	// denial audit rows; it is never stored in an ordinary audit row.
+	Source string
 }
 type Page[T any] struct {
 	Items []T    `json:"items"`

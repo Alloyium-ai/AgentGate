@@ -142,7 +142,11 @@ func (s *Store) Sweep() (SweepResult, error) {
 		}
 		out.ApprovalTimeout++
 	}
-	if out == (SweepResult{}) {
+	pending := len(s.denials)
+	if err = s.flushDenials(tx); err != nil {
+		return out, err
+	}
+	if out == (SweepResult{}) && pending == len(s.denials) {
 		return out, nil
 	}
 	var last int64
