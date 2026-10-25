@@ -498,8 +498,11 @@ value the service relayed for that exact secret id and only under its sealed pol
 verbatim at `GET /api/v1/secrets/{id}/receipt` (and in the secret object as `receipt`). It cannot check the tag; the
 sealing client does, with `Sealed.VerifyReceipt`.
 
-**Broker endpoint in a launch.** For a launch with secrets the service chooses the launch's `/29` deterministically
-from the launch id inside `172.30.0.0/16` (8191 blocks, block 0 unused): broker `.2`, target `.3`, port 8443. It puts
+**Broker endpoint in a launch.** For a launch with secrets the service allocates the launch's `/29` inside
+`172.30.0.0/16` (8191 blocks per target, block 0 unused) when the launch is created: the block the launch id hashes
+to, else the next free one in order, recorded in `broker_allocations` until the host confirms the teardown (its
+receipt), the launch ends without reaching the host, or the target is retired; an exhausted pool is refused with `409
+broker_pool_exhausted`. Broker `.2`, target `.3`, port 8443. It puts
 the endpoint in the signed launch policy with `WithBroker` (so the policy digest and the approval cover it), names it in
 the plan (`plan.broker`) and in each secret's `base_url`, and refuses an access document that names a broker itself.
 A launch with secrets always needs approval and a target that advertises `brokered-secrets`. A dry run shows an
@@ -636,5 +639,8 @@ the sealed digest or its own, is refused by the host and no broker starts; a dat
 settings makes every plan and launch fail with `secret_policy_mismatch`; changing a policy needs a new envelope), a broker that fails to start (the launch aborts and nothing remains), and a host crash
 mid-launch (the restarted host removes the broker and reports it). `prov_broker_test.go` covers the seal key record
 checks, the envelope and injection refusals, a secret without rules (`secret_rules_missing`), the wildcard warning,
-the endpoint derivation, receipt matching and the schema 6 migration. `internal/hostd` adds the Docker recipe against a recorder, overlap refusals, start and stop failures, recovery, and
+the endpoint derivation, receipt matching and the schema 6 migration; `prov_broker_pool_test.go` covers the
+allocation order and wrap, concurrent launches on one target, an exhausted pool, release only after the host's
+receipt (or for a launch that never reached the host), a silent host keeping its block until a late receipt, and the
+schema 10 migration of existing launches. `internal/hostd` adds the Docker recipe against a recorder, overlap refusals, start and stop failures, recovery, and
 the Go and Python launcher-job drift test.

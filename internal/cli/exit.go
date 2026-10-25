@@ -160,6 +160,7 @@ var codeHints = map[string]string{
 	"persistence_unavailable":   "The service could not commit: retry shortly; if it persists, check the service logs.",
 	"key_approval_pending":      "An administrator must approve the host key: agentgate target approve-key NAME --host-key-id ID.",
 	"launch_limit":              "Too many launches are active: stop some first.",
+	"broker_pool_exhausted":     "Every broker network of the target is held by a launch whose host has not confirmed its teardown: stop launches on the target, or wait for its host to report, then launch again.",
 	"token_limit":               "Revoke an unused token first: agentgate token ls, agentgate token revoke ID.",
 	"grant_conflict":            "The edit contradicts another entry: revoke the conflicting entry first (agentgate grant NAME revoke KIND VALUE).",
 	"grant_usage":               "Check the value: agentgate grant --help lists each action's arguments.",

@@ -367,6 +367,9 @@ func (s *Store) finishRetirement(tx *sql.Tx, targetID string) error {
 	if _, err := tx.Exec("UPDATE secrets SET state='deleted',updated=?,revision=revision+1 WHERE target_id=? AND state<>'deleted'", now, targetID); err != nil {
 		return err
 	}
+	if err := releaseTargetBrokers(tx, targetID); err != nil {
+		return err
+	}
 	_, err := tx.Exec("UPDATE targets SET state='retired',updated=?,revision=revision+1 WHERE id=?", now, targetID)
 	return err
 }

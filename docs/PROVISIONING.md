@@ -460,8 +460,15 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
   private range never carries the credential.
 - Request and response sizes, header sizes and counts, the request rate, concurrency and every timeout are capped; the
   broker exits at the launch deadline. It never logs headers, bodies, queries or secrets.
-- **Network layout.** The service assigns each launch with secrets its own `/29` inside `172.30.0.0/16`, derived from
-  the launch id: `.1` the Docker gateway, `.2` the broker on port 8443, `.3` the target. The effective policy carries
+- **Network layout.** The service assigns each launch with secrets its own `/29` inside `172.30.0.0/16` when the
+  launch is created: `.1` the Docker gateway, `.2` the broker on port 8443, `.3` the target. It records the block in
+  `broker_allocations` (schema 10), so no two launches on one target hold the same block: a launch first takes the
+  block its id hashes to, else the next free one in order (wrapping), and is refused with `409 broker_pool_exhausted`
+  when all 8191 blocks of the target are held. A block is released when the launch ends with the host's receipt (the
+  host tears its broker down before it reports), when it ends without having reached its host (rejected, cancelled,
+  expired before collection, refused by the host before it started), when a late receipt arrives, or when the target
+  is retired; a launch whose host went silent (`lost_host`) keeps its block until then. A dry run shows the block its
+  example id prefers and holds nothing. The effective policy carries
   `broker: {address: .2, protocol: "tcp", port: 8443}` (`pocpolicy`, mutually exclusive with `taskboard`), so the policy
   digest and the approval cover the endpoint, and the guard allows that one exact endpoint and nothing else private:
   not the gateway, not the other addresses of the `/29`, not another port. The target keeps its own network and joins

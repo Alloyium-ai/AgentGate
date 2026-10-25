@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -614,22 +613,13 @@ type PlanBroker struct {
 	TargetAddress string `json:"target_address"`
 }
 
-// brokerEndpoint derives the launch's broker /29 from its launch id: the
-// service, not the host, chooses it, so the signed policy, the plan and the
-// approval cover the exact endpoint. The host refuses one outside its pool or
-// overlapping a network it already has.
+// brokerEndpoint is the endpoint a launch id prefers (its hashed block): a
+// dry run's example. A created launch's endpoint comes from allocateBroker.
+// The service, not the host, chooses it, so the signed policy, the plan and
+// the approval cover the exact endpoint. The host refuses one outside its
+// pool or overlapping a network it already has.
 func brokerEndpoint(launchID string) PlanBroker {
-	sum := digest([]byte("agentgate.broker-network.v1\x00" + launchID))
-	n, _ := strconv.ParseUint(sum[:8], 16, 32)
-	// 8192 blocks of 8 addresses; block 0 is never used.
-	block := uint32(n%8191) + 1
-	base := netip.MustParsePrefix(brokerPoolText).Addr().As4()
-	v := uint32(base[0])<<24 | uint32(base[1])<<16 | block*8
-	addr := func(i uint32) netip.Addr {
-		x := v + i
-		return netip.AddrFrom4([4]byte{byte(x >> 24), byte(x >> 16), byte(x >> 8), byte(x)})
-	}
-	return PlanBroker{Address: addr(2).String(), Port: brokerPort, Subnet: netip.PrefixFrom(addr(0), 29).String(), TargetAddress: addr(3).String()}
+	return brokerEndpointOf(brokerPreferredBlock(launchID))
 }
 
 // brokerBaseURL is the URL a route's agent variable receives.

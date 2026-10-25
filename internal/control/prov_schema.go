@@ -2,8 +2,10 @@
 // Copyright (c) 2026 Dan Metcalf
 package control
 
+import "database/sql"
+
 // SchemaVersion is the database user_version this build writes.
-const SchemaVersion = 9
+const SchemaVersion = 10
 
 // provisioningSchema adds targets, profiles, launches, jobs, secrets metadata
 // and API tokens. Every statement is idempotent. Bindings that the contract
@@ -117,6 +119,8 @@ type migration struct {
 	version    int
 	columns    []struct{ table, column, decl string }
 	statements string
+	// after runs once the statements have, in the same transaction.
+	after func(tx *sql.Tx) error
 }
 
 // laterMigrations run in order from the database's version to SchemaVersion.
@@ -142,4 +146,16 @@ CREATE TRIGGER profile_approved_pair BEFORE UPDATE OF approved_version_id,approv
 	}, statements: `
 DROP TRIGGER IF EXISTS target_mount_roots_json;
 CREATE TRIGGER target_mount_roots_json BEFORE UPDATE OF mount_roots ON targets WHEN json_valid(NEW.mount_roots)=0 OR json_type(NEW.mount_roots)<>'array' BEGIN SELECT RAISE(ABORT,'mount roots are a JSON list'); END;`},
+	// Version 10: the broker /29 each launch with secrets holds on its target
+	// (prov_broker_pool.go). A block is held by at most one launch of a
+	// target until released; the launches created before this version are
+	// recorded from their plans.
+	{version: 10, statements: `
+CREATE TABLE IF NOT EXISTS broker_allocations(launch_id TEXT PRIMARY KEY,target_id TEXT NOT NULL,block INTEGER NOT NULL CHECK(block BETWEEN 1 AND 8191),allocated TEXT NOT NULL,released TEXT NOT NULL DEFAULT '');
+CREATE UNIQUE INDEX IF NOT EXISTS broker_allocations_held ON broker_allocations(target_id,block) WHERE released='';
+CREATE INDEX IF NOT EXISTS broker_allocations_target ON broker_allocations(target_id,released);
+DROP TRIGGER IF EXISTS broker_allocation_binding;
+CREATE TRIGGER broker_allocation_binding BEFORE UPDATE OF launch_id,target_id,block,allocated ON broker_allocations BEGIN SELECT RAISE(ABORT,'immutable broker allocation'); END;
+DROP TRIGGER IF EXISTS broker_allocation_release_once;
+CREATE TRIGGER broker_allocation_release_once BEFORE UPDATE OF released ON broker_allocations WHEN OLD.released<>'' BEGIN SELECT RAISE(ABORT,'a broker allocation is released once'); END;`, after: backfillBrokerAllocations},
 }

@@ -212,6 +212,11 @@ func (s *Store) migrate() error {
 		if _, err = tx.Exec(step.statements + fmt.Sprintf(" PRAGMA user_version=%d;", step.version)); err != nil {
 			return err
 		}
+		if step.after != nil {
+			if err = step.after(tx); err != nil {
+				return err
+			}
+		}
 		if _, err = appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "schema.migrated", Resource: "database", Reason: fmt.Sprintf("Migrate schema to version %d", step.version), RequestID: fmt.Sprintf("migration-%d", step.version)}, "committed"); err != nil {
 			return err
 		}

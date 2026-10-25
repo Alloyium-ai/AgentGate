@@ -877,6 +877,12 @@ func (s *Store) finishLaunch(tx *sql.Tx, l *launchRow, job *JobRecord, r hostpro
 		if err := appendLaunchEvent(tx, l, "receipt", actor.Subject, "The host attached the evidence receipt", map[string]string{"job_id": job.ID, "receipt_digest": digest([]byte(receipt))}); err != nil {
 			return err
 		}
+		// The host reported the launch over: its broker network is gone.
+		if TerminalState(l.State) {
+			if err := releaseBroker(tx, l.ID); err != nil {
+				return err
+			}
+		}
 		_, err := appendAudit(tx, Operation{Actor: actor, Action: "launch.receipt.attached", Resource: "launch:" + l.ID, Run: l.ID, Reason: "Attach a late evidence receipt", RequestID: "hostd-" + newID(), After: map[string]string{"receipt_digest": digest([]byte(receipt)), "spec_digest": l.SpecDigest, "policy_digest": l.PolicyDigest}}, "committed")
 		return err
 	}

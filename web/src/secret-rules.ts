@@ -78,6 +78,8 @@ export function refusalHelp(code: string): string | undefined {
       return "The secret is not stored on this target (or is being removed). Pick a secret listed for the target, or ask an administrator to store it there.";
     case "secret_scope":
       return "The secret is not scoped to this profile or to you. Use a reviewed profile and a secret whose scope includes you, or ask an administrator to widen the scope.";
+    case "broker_pool_exhausted":
+      return "Every broker network of the target is held by a launch whose host has not confirmed its teardown. Stop launches on the target, or wait for its host to report, then launch again.";
     case "secret_policy_mismatch":
       return "The secret's stored broker settings are not the policy sealed with its value (or it was sealed before policies were), so no launch may use it. An administrator stores it again with a new envelope.";
   }

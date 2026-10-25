@@ -306,6 +306,13 @@ func (s *Store) transitionLaunch(tx *sql.Tx, l *launchRow, t transition) error {
 	if _, err = appendAudit(tx, audit, "committed"); err != nil {
 		return err
 	}
+	// A launch that ended with the host's receipt, or never reached its host,
+	// has no broker network left there: its block may be reused.
+	if TerminalState(t.To) && brokerReleasable(receipt, missing) {
+		if err = releaseBroker(tx, l.ID); err != nil {
+			return err
+		}
+	}
 	l.State, l.Updated, l.StartedAt, l.EndedAt, l.TerminalReason, l.StopReason, l.EvidenceMissing, l.receipt = t.To, now, started, ended, terminalReason, stopReason, missing, receipt
 	if receipt != "" {
 		l.Receipt = json.RawMessage(receipt)
@@ -478,7 +485,15 @@ func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical [
 	}
 	var endpoint *PlanBroker
 	if len(spec.Secrets) > 0 {
+		// A dry run shows the endpoint its id prefers; a created launch
+		// reserves a block of its target's pool until its host confirms the
+		// teardown.
 		b := brokerEndpoint(launchID)
+		if !strings.HasPrefix(launchID, "dry-run:") {
+			if b, err = s.allocateBroker(tx, target.ID, launchID); err != nil {
+				return r, err
+			}
+		}
 		endpoint = &b
 	}
 	for _, sec := range spec.Secrets {
