@@ -112,6 +112,10 @@ type fakeHost struct {
 	// sealKey is the host's signed seal key (HostKeyFromECDH of enc), sent
 	// in every heartbeat like agentgate-hostd does.
 	sealKey *secretseal.HostKey
+	// mountRoots are the host's own roots its heartbeat reports (nil: an
+	// older host that reports none); skew offsets the host's clock.
+	mountRoots *[]string
+	skew       time.Duration
 }
 
 func newHost(f *provFixture, caps ...string) *fakeHost {
@@ -164,14 +168,14 @@ func (h *fakeHost) sealRecord() json.RawMessage {
 
 func (h *fakeHost) header() hostproto.Header {
 	h.seq++
-	return hostproto.Header{HostID: h.id, Nonce: nonce(), TimestampMS: h.f.now().UnixMilli(), Sequence: h.seq}
+	return hostproto.Header{HostID: h.id, Nonce: nonce(), TimestampMS: h.f.now().Add(h.skew).UnixMilli(), Sequence: h.seq}
 }
 
 func (h *fakeHost) pollRaw(running ...string) []byte {
 	if running == nil {
 		running = []string{}
 	}
-	return h.seal(hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: h.caps, RunningLaunches: running, AgentVersion: "0.1.0", SealKey: h.sealRecord()}, MaxJobs: 16})
+	return h.seal(hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: h.caps, RunningLaunches: running, AgentVersion: "0.1.0", SealKey: h.sealRecord(), MountRoots: h.mountRoots}, MaxJobs: 16})
 }
 
 // poll returns the verified, checked jobs.

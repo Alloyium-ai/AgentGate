@@ -5,6 +5,7 @@ package cli
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 
 	"alloyium.local/kernel-poc/internal/hostproto"
 )
@@ -44,6 +45,30 @@ type Target struct {
 	// MountRoots are the host folders launches on the target may mount;
 	// none refuses every mount.
 	MountRoots []string `json:"mount_roots"`
+	// HostMountRoots are the roots the host's own operator allows (nil: the
+	// host does not report them); MountRootsNotOnHost the service's roots
+	// outside them, where the host refuses every mount.
+	HostMountRoots      *[]string `json:"host_mount_roots,omitempty"`
+	MountRootsNotOnHost []string  `json:"mount_roots_not_on_host,omitempty"`
+	// HostClockSkewMS is the host's clock minus the service's at its last
+	// heartbeat (nil: no heartbeat yet).
+	HostClockSkewMS     *int64 `json:"host_clock_skew_ms,omitempty"`
+	HostClockMeasuredAt string `json:"host_clock_measured_at,omitempty"`
+}
+
+// hostRootsText describes the mount roots the target's host allows.
+func (t Target) hostRootsText() string {
+	switch {
+	case t.HostMountRoots == nil:
+		return "not reported by the host"
+	case len(*t.HostMountRoots) == 0:
+		return "none (the host refuses every host folder; agentgate-hostd mount-roots --root PATH on the host)"
+	}
+	text := strings.Join(*t.HostMountRoots, ", ")
+	if len(t.MountRootsNotOnHost) > 0 {
+		text += "; MISMATCH: the host refuses mounts in " + strings.Join(t.MountRootsNotOnHost, ", ")
+	}
+	return text
 }
 
 // Enrollment is a one-time host enrollment token.

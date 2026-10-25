@@ -442,6 +442,33 @@ export function TargetDetail({ id, actor, epoch, navigate }: { id: string; actor
             <strong>{target.mount_roots?.length ? target.mount_roots.join(", ") : "none: every host folder mount is refused"}</strong>
           </div>
           <div>
+            <span>Mount roots the host allows (set on the host)</span>
+            <strong>
+              {target.host_mount_roots === undefined
+                ? "not reported by this host"
+                : target.host_mount_roots.length
+                  ? target.host_mount_roots.join(", ")
+                  : "none: the host refuses every host folder"}
+            </strong>
+          </div>
+          {!!target.mount_roots_not_on_host?.length && (
+            <div role="status">
+              <span>Mismatch</span>
+              <strong>
+                The host does not allow {target.mount_roots_not_on_host.join(", ")}: launches there are refused at planning. Its operator changes the host's list with
+                agentgate-hostd mount-roots on the host; this service cannot.
+              </strong>
+            </div>
+          )}
+          <div>
+            <span>Host clock</span>
+            <strong>
+              {target.host_clock_skew_ms === undefined
+                ? "no heartbeat yet"
+                : `${target.host_clock_skew_ms >= 0 ? "+" : ""}${(target.host_clock_skew_ms / 1000).toFixed(1)} s against the service${Math.abs(target.host_clock_skew_ms) > 30000 ? " (fix the host's time: beyond 60 s every host request fails)" : ""}`}
+            </strong>
+          </div>
+          <div>
             <span>Target id</span>
             <code>{target.id}</code> <CopyButton text={target.id} label="Copy id" className="icon-copy" />
           </div>

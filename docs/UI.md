@@ -43,6 +43,10 @@ what was requested; it never presents a permission as proven behavior.
    the service queues one removal per secret, the host collects only those, and its last confirmation retires the
    target and revokes its host key. **Retire without the host's confirmation…** (for a host that is gone) finishes it
    at once and marks those secrets *removal unconfirmed* on the Secrets page.
+4. **Mount roots…** (administrators) sets the host folders launches on the target may mount. The target page also
+   shows the roots the host itself allows (its operator sets them on the host with `agentgate-hostd mount-roots`; the
+   service cannot), says which of the service's roots the host refuses, and shows the host's clock against the
+   service's at its last heartbeat.
 
 ### Define access (editor)
 
@@ -248,6 +252,7 @@ signed-in person with a role.
 | Add target | `target add NAME` | `POST /targets` |
 | Approve host key | `target approve-key NAME` | `POST /targets/{id}/approve-key` |
 | New enrollment token, Rename, Retire | `target enroll`, `target rename`, `target retire` | `POST …/enrollment`, `PATCH`, `DELETE /targets/{id}` |
+| Mount roots… | `target mount-roots NAME --root PATH` | `POST /targets/{id}/mount-roots` |
 | Access profiles, versions, compare | `profile ls`, `profile show`, `profile versions` | `GET /profiles…` |
 | New profile | `profile new NAME --preset P` | `POST /profiles` |
 | Change access: preview / apply | `grant P ACTION … --dry-run` / `grant P ACTION …` | `POST /profiles/{id}/versions/{n}/grants` |

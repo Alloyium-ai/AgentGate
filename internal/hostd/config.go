@@ -136,6 +136,9 @@ func (c Config) Validate() error {
 	return checkArgv(c.Provisioner, "provisioner", false)
 }
 
+// SecretRootOf is the configured or default secret store root of cfg.
+func SecretRootOf(cfg Config) string { return cfg.secretRoot() }
+
 // secretRoot is the configured or default secret store root.
 func (c Config) secretRoot() string {
 	if c.SecretRoot == "" {

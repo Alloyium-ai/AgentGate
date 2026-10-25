@@ -208,3 +208,93 @@ while :; do sleep 0.1; done
 		t.Fatalf("states %v (graceful SIGTERM path not taken)", states)
 	}
 }
+
+func TestInstallWritesTheOperatorsMountRootsAndRestartsOnReconfiguration(t *testing.T) {
+	in, calls, root := fakeInstaller(t)
+	file := filepath.Join(root, "etc/agentgate/mount-roots.json")
+	o := InstallOptions{ServiceURL: "https://agentgate.example", Token: testToken, Runtime: RuntimeDockerHost}
+	// A bad root fails before the one-time token is spent.
+	bad := o
+	bad.SetMountRoots, bad.MountRoots = true, []string{"/var/lib/agentgate-hostd"}
+	if err := in.Install(context.Background(), bad); err == nil {
+		t.Fatal("a root over the host agent's state was accepted")
+	}
+	if _, err := loadIdentity(filepath.Join(root, "var/lib/agentgate-hostd")); err == nil {
+		t.Fatal("a refused install enrolled")
+	}
+	// No --mount-root: nothing is written, and the output says no folder may be mounted.
+	if err := in.Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an install without --mount-root wrote %s: %v", file, err)
+	}
+	if !strings.Contains(in.Out.(*bytes.Buffer).String(), "mount roots: none") {
+		t.Fatalf("output %s", in.Out)
+	}
+	o.Token, o.SetMountRoots, o.MountRoots = "", true, []string{"/srv/data", "/opt/projects"}
+	*calls = nil
+	if err := in.Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if roots, err := LoadMountRoots(file, nil); err != nil || strings.Join(roots, ",") != "/srv/data,/opt/projects" {
+		t.Fatalf("roots %v %v", roots, err)
+	}
+	for _, c := range *calls {
+		if strings.Contains(c, "restart") {
+			t.Fatalf("a mount root change restarted the daemon (it reads the file per job): %v", *calls)
+		}
+	}
+	// A later install without the flag keeps the operator's list.
+	o.SetMountRoots, o.MountRoots = false, nil
+	if err := in.Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if roots, _ := LoadMountRoots(file, nil); len(roots) != 2 {
+		t.Fatalf("an install without --mount-root changed the roots: %v", roots)
+	}
+	// Enabling the broker changes the configuration: the daemon restarts to apply it.
+	*calls = nil
+	o.Broker = &BrokerConfig{Image: "agentgate-broker@sha256:" + strings.Repeat("b", 64), UID: 10002, GID: 10002, EgressNetwork: "agentgate-egress"}
+	if err := in.Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(*calls, "|") != "systemctl daemon-reload|systemctl enable --now agentgate-hostd.service|systemctl restart agentgate-hostd.service" {
+		t.Fatalf("calls %v", *calls)
+	}
+	report, err := StatusWith(filepath.Join(root, "var/lib/agentgate-hostd"), file)
+	if err != nil || report.Broker == nil || report.Broker.Image != o.Broker.Image || strings.Join(report.MountRoots, ",") != "/srv/data,/opt/projects" || report.SecretRoot != DefaultSecretRoot {
+		t.Fatalf("status %+v %v", report, err)
+	}
+	// While a job is unfinished the daemon is not restarted under it.
+	ledger, err := openLedger(filepath.Join(root, "var/lib/agentgate-hostd"), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ledger.Begin(LedgerEntry{JobID: strings.Repeat("a", 32), Type: "launch", LaunchID: testLaunch}); err != nil {
+		t.Fatal(err)
+	}
+	*calls = nil
+	in.Out.(*bytes.Buffer).Reset()
+	o.Broker = nil
+	if err := in.Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 2 || !strings.Contains(in.Out.(*bytes.Buffer).String(), "was not restarted") {
+		t.Fatalf("calls %v, output %s", *calls, in.Out)
+	}
+	// An invalid hand edit is reported, never silently used.
+	if err := os.WriteFile(file, []byte(`{"version":"agentgate.hostd-mount-roots.v1","roots":["/etc"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in.Out.(*bytes.Buffer).Reset()
+	if err := in.Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(in.Out.(*bytes.Buffer).String(), "WARNING") {
+		t.Fatalf("output %s", in.Out)
+	}
+	if report, _ := StatusWith(filepath.Join(root, "var/lib/agentgate-hostd"), file); report.MountRootsError == "" || len(report.MountRoots) != 0 {
+		t.Fatalf("status of an invalid roots file %+v", report)
+	}
+}

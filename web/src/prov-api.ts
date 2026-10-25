@@ -31,6 +31,14 @@ export type Target = {
   // The host folders launches on this target may mount or snapshot; none
   // (the default) refuses every mount.
   mount_roots: string[];
+  // What the host itself allows (its operator's own list, from its last
+  // heartbeat; absent from a host that does not report it) and the service's
+  // roots outside it, where the host refuses mounts.
+  host_mount_roots?: string[];
+  mount_roots_not_on_host?: string[];
+  // The host's clock minus the service's at its last heartbeat.
+  host_clock_skew_ms?: number;
+  host_clock_measured_at?: string;
 };
 export type Enrollment = {
   token: string;

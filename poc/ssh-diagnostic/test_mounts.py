@@ -185,6 +185,135 @@ class PrepareTest(unittest.TestCase):
             self.prepare(V2_FILESYSTEM)
 
 
+class HostRootsTest(unittest.TestCase):
+    """The host operator's own mount roots: the launch path applies them on the host."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(os.path.realpath(directory.name))
+        self.root = self.base / 'srv' / 'data'
+        (self.root / 'repo' / 'sub').mkdir(parents=True)
+        (self.base / 'srv' / 'dataevil').mkdir()
+        (self.base / 'outside').mkdir()
+        self.etc = self.base / 'etc-agentgate'
+        self.etc.mkdir(mode=0o755)
+        self.file = self.etc / 'mount-roots.json'
+        self.empty_info = self.base / 'mountinfo'
+        self.empty_info.write_text('')
+
+    def write(self, body, mode=0o644):
+        self.file.write_text(body if isinstance(body, str) else json.dumps(body))
+        self.file.chmod(mode)
+
+    def load(self):
+        return mounts.load_host_roots(str(self.file), owner=os.geteuid())
+
+    def check(self, source, roots=None, mountinfo=None):
+        return mounts.check_host_roots(str(source), [str(self.root)] if roots is None else roots,
+                                       mountinfo=str(mountinfo or self.empty_info))
+
+    def test_missing_file_is_empty_and_empty_refuses(self):
+        self.assertEqual(mounts.load_host_roots(str(self.etc / 'absent.json'), owner=os.geteuid()), [])
+        with self.assertRaisesRegex(mounts.MountError, 'no mount roots'):
+            self.check(self.root / 'repo', roots=[])
+
+    def test_valid_file_loads(self):
+        self.write({'version': mounts.HOST_ROOTS_VERSION, 'roots': [str(self.root), '/opt/projects']})
+        self.assertEqual(self.load(), [str(self.root), '/opt/projects'])
+
+    def test_unsafe_or_malformed_files_are_refused(self):
+        version = mounts.HOST_ROOTS_VERSION
+        cases = {
+            'group writable': ({'version': version, 'roots': []}, 0o664),
+            'world writable': ({'version': version, 'roots': []}, 0o646),
+            'unknown field': ({'version': version, 'roots': [], 'x': 1}, 0o644),
+            'duplicate key': ('{"version":"%s","roots":[],"roots":[]}' % version, 0o644),
+            'wrong version': ({'version': 'x', 'roots': []}, 0o644),
+            'not a list': ({'version': version, 'roots': '/srv'}, 0o644),
+            'protected': ({'version': version, 'roots': ['/var/lib/docker/volumes']}, 0o644),
+            'secret store': ({'version': version, 'roots': ['/var/lib/agentgate/secrets']}, 0o644),
+            'host agent state': ({'version': version, 'roots': ['/var/lib/agentgate-hostd/x']}, 0o644),
+            'home': ({'version': version, 'roots': ['/home/alice']}, 0o644),
+            'credential store': ({'version': version, 'roots': ['/srv/x/.local/y']}, 0o644),
+            'dot dot': ({'version': version, 'roots': ['/srv/data/../../etc']}, 0o644),
+            'relative': ({'version': version, 'roots': ['srv/data']}, 0o644),
+            'root': ({'version': version, 'roots': ['/']}, 0o644),
+            'twice': ({'version': version, 'roots': ['/srv/a', '/srv/a']}, 0o644),
+        }
+        for name, (body, mode) in cases.items():
+            with self.subTest(name=name):
+                self.write(body, mode)
+                with self.assertRaises(mounts.MountError):
+                    self.load()
+        self.file.unlink()
+        (self.etc / 'real.json').write_text(json.dumps({'version': version, 'roots': []}))
+        self.file.symlink_to(self.etc / 'real.json')
+        with self.assertRaises(mounts.MountError):
+            self.load()
+        self.file.unlink()
+        self.write({'version': version, 'roots': []})
+        self.etc.chmod(0o777)
+        self.addCleanup(self.etc.chmod, 0o755)
+        with self.assertRaisesRegex(mounts.MountError, 'directory'):
+            self.load()
+
+    def test_sources_inside_a_root_only(self):
+        self.assertEqual(self.check(self.root / 'repo' / 'sub'), str(self.root / 'repo' / 'sub'))
+        self.check(self.root)
+        (self.root / 'escape').symlink_to(self.base / 'outside')
+        (self.root / 'repo' / 'etc').symlink_to('/etc')
+        refused = {
+            'prefix confusion': self.base / 'srv' / 'dataevil',
+            'outside': self.base / 'outside',
+            'above the root': self.base / 'srv',
+            'symlink escape': self.root / 'escape',
+            'symlink to /etc': self.root / 'repo' / 'etc',
+            'missing': self.root / 'absent',
+        }
+        for name, source in refused.items():
+            with self.subTest(name=name), self.assertRaises(mounts.MountError):
+                self.check(source)
+        for source in (str(self.root) + '/../dataevil', str(self.root) + '/repo/', 'srv/data'):
+            with self.subTest(source=source), self.assertRaises(mounts.MountError):
+                mounts.check_host_roots(source, [str(self.root)], mountinfo=str(self.empty_info))
+        (self.base / 'linked').symlink_to(self.root)
+        with self.assertRaisesRegex(mounts.MountError, 'symbolic link'):
+            self.check(self.base / 'linked' / 'repo', roots=[str(self.base / 'linked')])
+
+    def test_mount_points_inside_a_root_are_refused(self):
+        source = self.root / 'repo'
+        cases = {str(self.root): True, str(self.base / 'srv'): True, str(self.root / 'other'): True,
+                 str(source): False, str(source / 'sub'): False}
+        for point, allowed in cases.items():
+            info = self.base / 'info'
+            info.write_text('40 22 8:1 / %s rw - ext4 /dev/sda1 rw\n' % point.replace(' ', '\\040'))
+            with self.subTest(point=point):
+                if allowed:
+                    self.check(source, mountinfo=info)
+                else:
+                    with self.assertRaisesRegex(mounts.MountError, 'mount point'):
+                        self.check(source, mountinfo=info)
+
+    def test_launch_prepare_applies_the_roots_to_binds(self):
+        instance = self.base / 'instance'
+        instance.mkdir(mode=0o700)
+        info = {'document': {'filesystem': V2_FILESYSTEM}}
+        real_submounts, real_roots = mounts.submounts, mounts.check_host_roots
+        entries = [{'name': 'repo', 'kind': 'bind', 'source': str(self.root / 'repo'), 'read_only': True}]
+        outside = [{'name': 'repo', 'kind': 'bind', 'source': str(self.base / 'srv' / 'dataevil'), 'read_only': True}]
+        with patch('settings.effective_policy', return_value=info), patch('settings.load_settings'), \
+             patch.object(mounts, 'submounts', lambda source, mountinfo=None: real_submounts(source, str(self.empty_info))), \
+             patch.object(mounts, 'check_host_roots', lambda source, roots: real_roots(source, roots, str(self.empty_info))):
+            self.assertEqual(len(mounts.prepare(instance, entries, host_roots=lambda: [str(self.root)])), 1)
+            with self.assertRaisesRegex(mounts.MountError, 'not inside'):
+                mounts.prepare(instance, outside, host_roots=lambda: [str(self.root)])
+            with self.assertRaisesRegex(mounts.MountError, 'no mount roots'):
+                mounts.prepare(instance, entries, host_roots=lambda: [])
+            # The SSH path's own mounts.json (written by the operator here) has no roots to apply.
+            self.assertEqual(len(mounts.prepare(instance, outside)), 1)
+
+
 class SnapshotTest(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

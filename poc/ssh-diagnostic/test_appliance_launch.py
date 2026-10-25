@@ -56,10 +56,18 @@ class GuestLaunchTest(unittest.TestCase):
         self.addCleanup(lambda: __import__('shutil').rmtree(folder, ignore_errors=True))
         (folder / 'a.txt').write_text('a')
         copies = []
-        with patch.object(cli, 'copy_guest', lambda state, binding, source, destination: copies.append(
-                (Path(source).stat().st_size, destination))), patch('pathlib.Path.home', return_value=Path('/nonexistent-home')):
-            cli.guest_launch(['--state', str(self.state), '--', 'snapshot', 'repo', str(folder), '--max-bytes', '1000'],
-                             runner=self.runner)
+        copy = lambda state, binding, source, destination: copies.append((Path(source).stat().st_size, destination))
+        argv = ['--state', str(self.state), '--', 'snapshot', 'repo', str(folder), '--max-bytes', '1000']
+        # The host operator's mount roots decide first: none, or one that does not hold the folder, copies nothing.
+        for roots in ([], [str(folder) + 'x'], [str(folder.parent / 'other')]):
+            with self.subTest(roots=roots), patch.object(cli, 'copy_guest', copy), \
+                 patch('mounts.load_host_roots', return_value=roots), \
+                 patch('pathlib.Path.home', return_value=Path('/nonexistent-home')), self.assertRaises(ValueError):
+                cli.guest_launch(argv, runner=self.runner)
+        self.assertEqual((copies, self.calls), ([], []))
+        with patch.object(cli, 'copy_guest', copy), patch('mounts.load_host_roots', return_value=[str(folder)]), \
+             patch('pathlib.Path.home', return_value=Path('/nonexistent-home')):
+            cli.guest_launch(argv, runner=self.runner)
         self.assertEqual(copies[0][1], cli.GUEST + '/.share-repo.tar')
         self.assertIn('install-snapshot', self.calls[0][-1])
         with self.assertRaises(ValueError):

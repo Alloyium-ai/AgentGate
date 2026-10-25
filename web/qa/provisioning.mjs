@@ -224,6 +224,8 @@ function plan(spec, actor) {
   for (const m of spec.mounts) {
     if (!(target.mount_roots || []).some((r) => m.source === r || m.source.startsWith(r + "/")))
       throw new Fail(422, "mount_root_not_allowed", `Mount ${m.name}: ${m.source} is not inside a host folder target ${target.name} allows (mount roots: ${(target.mount_roots || []).join(", ") || "none"}). An administrator lists the folders launches may mount with POST /targets/{id}/mount-roots.`);
+    if (target.host_mount_roots && !target.host_mount_roots.some((r) => m.source === r || m.source.startsWith(r + "/")))
+      throw new Fail(422, "mount_root_not_on_host", `Mount ${m.name}: ${m.source} is not inside a host folder the host of target ${target.name} allows (its own mount roots: ${target.host_mount_roots.join(", ") || "none"}). The host's operator lists them on the host with agentgate-hostd mount-roots --root PATH; this service cannot change them.`);
     reasons.push((m.mode === "read-write" ? "read-write host folder " : m.mode === "snapshot" ? "snapshot of host folder " : "live host folder ") + m.name + " (" + m.source + ")");
   }
   const planned = [];
@@ -294,6 +296,14 @@ const summary = (l) => {
 };
 const sse = (list, after) => "event: ready\ndata: {}\n\n" + list.filter((e) => e.seq > after).map((e) => `id: ${e.seq}\nevent: ${e.kind}\ndata: ${JSON.stringify(e)}\n\n`).join("");
 
+// The service's roots the host does not allow (internal/control Target.hostReport).
+function hostRootsMismatch(t) {
+  if (!t.host_mount_roots) return;
+  const missing = (t.mount_roots || []).filter((r) => !t.host_mount_roots.some((h) => r === h || r.startsWith(h + "/")));
+  if (missing.length) t.mount_roots_not_on_host = missing;
+  else delete t.mount_roots_not_on_host;
+}
+
 function api(method, path, query, input, headers) {
   const parts = path.split("/");
   const [area, id, sub] = parts;
@@ -354,13 +364,16 @@ function api(method, path, query, input, headers) {
       if (!Array.isArray(roots) || roots.length > 16 || new Set(roots).size !== roots.length || roots.some((r) => !/^\/[A-Za-z0-9._@+/-]+$/.test(r) || r === "/" || PROTECTED.some((p) => r === p || r.startsWith(p + "/") || p.startsWith(r + "/"))))
         throw new Fail(422, "invalid_mount_roots", "mount source must be a canonical absolute path of safe characters.");
       Object.assign(t, { mount_roots: roots, updated_at: now(), revision: t.revision + 1 });
+      hostRootsMismatch(t);
       return t;
     }
     if (method === "POST" && sub === "approve-key") {
       need("admin");
       if (t.state !== "awaiting_key_approval") throw new Fail(409, "no_pending_key", "The target has no host key waiting for approval.");
       if (input.host_key_id !== t.host_key_id) throw new Fail(409, "fingerprint_mismatch", "The fingerprint differs from the key the host presented. Do not approve; issue a new token.");
-      Object.assign(t, { state: "active", online: true, last_seen_at: now(), revision: t.revision + 1 });
+      // As if the host polled once: its own mount roots and its clock.
+      Object.assign(t, { state: "active", online: true, last_seen_at: now(), revision: t.revision + 1, host_mount_roots: ["/srv/repos/app"], host_clock_skew_ms: 1200, host_clock_measured_at: now() });
+      hostRootsMismatch(t);
       return t;
     }
     if (method === "DELETE") {
@@ -789,13 +802,17 @@ try {
     assert.equal(JSON.parse(pins)[findTarget("build-host").id], hostKeyID(host.hostPub), "approval pins the host key in this browser");
     await text("no — not yet verified on this host").waitFor();
     await text("none: every host folder mount is refused").waitFor();
+    await text("/srv/repos/app").waitFor();
+    await text("+1.2 s against the service").waitFor();
     await page.getByRole("button", { name: "Mount roots…" }).click();
     await page.getByLabel("Mount roots, one absolute path per line").fill("/srv/repos");
     await page.locator("dialog").getByRole("textbox", { name: "Reason", exact: true }).fill("Launches may mount the repositories");
     await page.getByRole("button", { name: "Save mount roots" }).click();
     await page.locator("dialog").waitFor({ state: "detached" });
-    await text("/srv/repos").waitFor();
+    await text("/srv/repos", { exact: true }).waitFor();
     assert.deepEqual(JSON.parse(requests.filter((r) => r.path.endsWith("/mount-roots")).at(-1).body).mount_roots, ["/srv/repos"]);
+    // The host allows only /srv/repos/app: the page names the mismatch and who can change it.
+    await text("The host does not allow /srv/repos: launches there are refused at planning.", { exact: false }).waitFor();
   });
 
   await step("create a profile from a preset, preview a grant with the service's dry run, apply it, and see validator errors verbatim", async () => {

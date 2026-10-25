@@ -213,6 +213,8 @@ def guest_snapshot(state, binding, args, runner):
         limits[rest[0]] = min(int(rest[1]), limits[rest[0]])
         rest = rest[2:]
     mounts.check_source_rules(source, forbidden=(str(state),), home=str(Path.home()))
+    # Only a folder inside this host operator's own mount roots is copied.
+    mounts.check_host_roots(source, mounts.load_host_roots())
     mounts.check_live_directory(source)
     with tempfile.TemporaryDirectory(dir=str(state)) as directory:
         archive = Path(directory) / 'share.tar'

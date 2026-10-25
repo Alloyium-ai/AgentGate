@@ -204,6 +204,13 @@ type Heartbeat struct {
 	// verbatim and serves it at GET /targets/{id}/seal-key; it cannot forge
 	// one, because clients verify the signature against a pinned fingerprint.
 	SealKey json.RawMessage `json:"seal_key,omitempty"`
+	// MountRoots are the host folders this host's own operator allows
+	// launches to mount or snapshot (agentgate-hostd mount-roots), as the host
+	// enforces them right now; empty refuses every host folder. The service
+	// shows them next to its own list for the target and refuses to plan a
+	// mount outside them; it can never change them. Absent (nil) from a host
+	// that predates the field.
+	MountRoots *[]string `json:"mount_roots,omitempty"`
 }
 
 // MaxRunningLaunches bounds one heartbeat.
@@ -241,6 +248,11 @@ func (p PollRequest) Check(now time.Time) error {
 	}
 	if p.Heartbeat.KernelVerified {
 		return errors.New("hostproto: kernel_verified requires an attached verification report, which protocol v1 does not carry")
+	}
+	if p.Heartbeat.MountRoots != nil {
+		if err := CheckMountRoots(*p.Heartbeat.MountRoots); err != nil {
+			return err
+		}
 	}
 	if len(p.Heartbeat.SealKey) > 0 {
 		var object map[string]json.RawMessage

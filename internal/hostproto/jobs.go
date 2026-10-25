@@ -619,6 +619,10 @@ func MountUnderRoots(source string, roots []string) bool {
 var secretComponents = []string{".ssh", ".gnupg", ".aws", ".azure", ".config", ".docker", ".kube", ".netrc",
 	".git-credentials", ".password-store", ".vault-token", ".local"}
 
+// SecretComponents returns the credential store names no mount source or
+// root may pass through (a copy; the Python runtime keeps the same list).
+func SecretComponents() []string { return append([]string(nil), secretComponents...) }
+
 func overlaps(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }

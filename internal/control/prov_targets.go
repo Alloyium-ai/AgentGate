@@ -51,11 +51,24 @@ type Target struct {
 	// MountRoots are the host folders launches on this target may mount
 	// (live or as a snapshot): a source must be a root or below one. An
 	// administrator sets them; the default, none, refuses every mount.
-	MountRoots   []string `json:"mount_roots"`
-	hostKey      string
-	sealKey      string
-	lastSequence uint64
-	lastSeenMS   int64
+	MountRoots []string `json:"mount_roots"`
+	// HostMountRoots are the host folders the target's host itself allows, as
+	// its last heartbeat reported them (agentgate-hostd mount-roots); the host
+	// refuses every other folder whatever this service sends. Absent when the
+	// host never reported them. MountRootsNotOnHost lists this service's roots
+	// that are not inside one of them: mounts there plan but the host refuses.
+	HostMountRoots      *[]string `json:"host_mount_roots,omitempty"`
+	MountRootsNotOnHost []string  `json:"mount_roots_not_on_host,omitempty"`
+	// HostClockSkewMS is the host's clock minus the service's at its last
+	// heartbeat (positive: the host is ahead), within the network delay, and
+	// HostClockMeasuredAt when that heartbeat arrived. A skew beyond 60 s makes
+	// every signed host request fail, so it is absent then.
+	HostClockSkewMS     *int64 `json:"host_clock_skew_ms,omitempty"`
+	HostClockMeasuredAt string `json:"host_clock_measured_at,omitempty"`
+	hostKey             string
+	sealKey             string
+	lastSequence        uint64
+	lastSeenMS          int64
 }
 
 // TargetInput creates or renames a target.
@@ -64,7 +77,9 @@ type TargetInput struct {
 	Reason string `json:"reason"`
 }
 
-const targetColumns = "id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision,seal_key,retiring,mount_roots"
+const targetColumns = "id,name,state,capabilities,hostname,agent_version,host_key,host_key_id,encryption_key,job_key_id,last_sequence,last_seen,heartbeat_seconds,created,created_by,updated,revision,seal_key,retiring,mount_roots," +
+	"coalesce((SELECT h.time FROM host_heartbeats h WHERE h.target_id=targets.id ORDER BY h.id DESC LIMIT 1),0)," +
+	"coalesce((SELECT h.heartbeat FROM host_heartbeats h WHERE h.target_id=targets.id ORDER BY h.id DESC LIMIT 1),'')"
 
 // TargetRetiring is the API state of an active target whose retirement
 // waits for its host to confirm the removal of its secrets.
@@ -73,14 +88,16 @@ const TargetRetiring = "retiring"
 func (s *Store) scanTarget(row rowScanner) (Target, error) {
 	var t Target
 	var caps, roots string
-	var retiring string
-	err := row.Scan(&t.ID, &t.Name, &t.State, &caps, &t.Hostname, &t.AgentVersion, &t.hostKey, &t.HostKeyID, &t.EncryptionKey, &t.JobKeyID, &t.lastSequence, &t.lastSeenMS, &t.HeartbeatSeconds, &t.Created, &t.CreatedBy, &t.Updated, &t.Revision, &t.sealKey, &retiring, &roots)
+	var retiring, beat string
+	var beatMS int64
+	err := row.Scan(&t.ID, &t.Name, &t.State, &caps, &t.Hostname, &t.AgentVersion, &t.hostKey, &t.HostKeyID, &t.EncryptionKey, &t.JobKeyID, &t.lastSequence, &t.lastSeenMS, &t.HeartbeatSeconds, &t.Created, &t.CreatedBy, &t.Updated, &t.Revision, &t.sealKey, &retiring, &roots, &beatMS, &beat)
 	if err != nil {
 		return t, err
 	}
 	if err = json.Unmarshal([]byte(roots), &t.MountRoots); err != nil || t.MountRoots == nil {
 		t.MountRoots = []string{}
 	}
+	t.hostReport(beat, beatMS)
 	t.HostPublicKey = t.hostKey
 	if t.sealKey != "" {
 		t.SealKey = json.RawMessage(t.sealKey)
@@ -100,6 +117,32 @@ func (s *Store) scanTarget(row rowScanner) (Target, error) {
 		t.State, t.RetiringSince = TargetRetiring, retiring
 	}
 	return t, nil
+}
+
+// hostReport fills what the target's last heartbeat says about its host: the
+// mount roots it enforces and its clock. Only an enrolled host's report counts.
+func (t *Target) hostReport(raw string, receivedMS int64) {
+	if raw == "" || t.HostKeyID == "" || (t.State != "active" && t.State != TargetRetiring) {
+		return
+	}
+	var beat storedHeartbeat
+	if json.Unmarshal([]byte(raw), &beat) != nil {
+		return
+	}
+	if beat.HostTimeMS > 0 && receivedMS > 0 {
+		skew := beat.HostTimeMS - receivedMS
+		t.HostClockSkewMS, t.HostClockMeasuredAt = &skew, time.UnixMilli(receivedMS).UTC().Format(time.RFC3339Nano)
+	}
+	if beat.MountRoots == nil || hostproto.CheckMountRoots(*beat.MountRoots) != nil {
+		return
+	}
+	host := append([]string{}, (*beat.MountRoots)...)
+	t.HostMountRoots = &host
+	for _, r := range t.MountRoots {
+		if !hostproto.MountUnderRoots(r, host) {
+			t.MountRootsNotOnHost = append(t.MountRootsNotOnHost, r)
+		}
+	}
 }
 
 // targetBy finds a live target by id, or by name among targets that are not retired.

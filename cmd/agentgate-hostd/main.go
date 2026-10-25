@@ -8,6 +8,7 @@
 //	agentgate-hostd run [--state-dir DIR]
 //	agentgate-hostd provision (--appliance-state DIR --source DIR [--policy F --token-file F] | --state-dir DIR)
 //	agentgate-hostd status [--state-dir DIR]
+//	agentgate-hostd mount-roots [--state-dir DIR] [--root PATH ... | --clear]
 //	agentgate-hostd unit
 //	agentgate-hostd version
 package main
@@ -50,7 +51,7 @@ type exitCode struct {
 func (e *exitCode) Error() string { return e.err.Error() }
 
 func usage() error {
-	return &exitCode{2, errors.New("usage: agentgate-hostd install|run|provision|status|unit|version [flags]; see --help of each")}
+	return &exitCode{2, errors.New("usage: agentgate-hostd install|run|provision|status|mount-roots|unit|version [flags]; see --help of each")}
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
@@ -66,6 +67,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return provision(args[1:], stdout, stderr)
 	case "status":
 		return status(args[1:], stdout)
+	case "mount-roots":
+		return mountRoots(args[1:], stdout, hostd.DefaultMountRootsFile, os.Geteuid)
 	case "unit":
 		fmt.Fprint(stdout, hostd.UnitFile("/usr/local/sbin/agentgate-hostd", hostd.DefaultStateDir))
 		return nil
@@ -110,6 +113,9 @@ func install(args []string, stdout io.Writer) error {
 	flags.StringVar(&o.Hostname, "hostname", "", "name reported at enrollment")
 	flags.BoolVar(&o.NoStart, "no-start", false, "write everything but do not start the service")
 	flags.StringVar(&o.SecretRoot, "secret-root", "", "secret store root (default "+hostd.DefaultSecretRoot+")")
+	var roots multiFlag
+	flags.Var(&roots, "mount-root", "a host folder launches on this host may mount or snapshot (repeatable; replaces "+hostd.DefaultMountRootsFile+")")
+	noRoots := flags.Bool("no-mount-roots", false, "allow no host folder mounts on this host (writes an empty "+hostd.DefaultMountRootsFile+")")
 	broker := hostd.BrokerConfig{}
 	flags.StringVar(&broker.Image, "broker-image", "", "digest-pinned agentgate-broker image; enables brokered secrets")
 	flags.IntVar(&broker.UID, "broker-uid", 10002, "unprivileged uid the broker serves as")
@@ -122,6 +128,10 @@ func install(args []string, stdout io.Writer) error {
 	if broker.Image != "" {
 		o.Broker = &broker
 	}
+	if *noRoots && len(roots) > 0 {
+		return &exitCode{2, errors.New("use --mount-root or --no-mount-roots, not both")}
+	}
+	o.SetMountRoots, o.MountRoots = *noRoots || len(roots) > 0, roots
 	var err error
 	if o.Token, err = readToken(o.Token, tokenFile); err != nil {
 		return &exitCode{2, err}
@@ -220,6 +230,50 @@ func provision(args []string, stdout, stderr io.Writer) error {
 	if !hostd.ReportsReady(output.String()) {
 		return errors.New("bring-up ended without ready=true")
 	}
+	return nil
+}
+
+// multiFlag collects a repeated flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// mountRoots shows or replaces the host folders launches on this host may
+// mount or snapshot. The list belongs to this host: the service cannot change
+// it, and an edit applies to the next job and stops a running launch whose
+// folder is no longer inside a root at the host agent's next poll.
+func mountRoots(args []string, stdout io.Writer, file string, euid func() int) error {
+	flags := flag.NewFlagSet("mount-roots", flag.ContinueOnError)
+	stateDir := flags.String("state-dir", hostd.DefaultStateDir, "host agent state directory (its private paths are never a root)")
+	var roots multiFlag
+	flags.Var(&roots, "root", "a host folder launches may mount or snapshot (repeatable; replaces the list)")
+	clearRoots := flags.Bool("clear", false, "allow no host folder at all")
+	if err := flags.Parse(args); err != nil {
+		return &exitCode{2, err}
+	}
+	if flags.NArg() != 0 || *clearRoots && len(roots) > 0 {
+		return &exitCode{2, errors.New("usage: agentgate-hostd mount-roots [--state-dir DIR] [--root PATH ... | --clear]")}
+	}
+	private := []string{*stateDir, hostd.DefaultSecretRoot}
+	if cfg, err := hostd.LoadConfig(*stateDir); err == nil {
+		private[1] = hostd.SecretRootOf(cfg)
+	}
+	if *clearRoots || len(roots) > 0 {
+		if euid() != 0 {
+			return errors.New("changing the mount roots needs root")
+		}
+		if err := hostd.WriteMountRoots(file, []string(roots), private); err != nil {
+			return &exitCode{2, err}
+		}
+	}
+	current, err := hostd.LoadMountRoots(file, private)
+	if err != nil {
+		return err
+	}
+	encoded, _ := json.MarshalIndent(map[string]any{"file": file, "mount_roots": current,
+		"note": "launches on this host may mount or snapshot only folders inside these roots; empty refuses every host folder"}, "", "  ")
+	fmt.Fprintln(stdout, string(encoded))
 	return nil
 }
 

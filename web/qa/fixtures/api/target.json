@@ -7,18 +7,26 @@
     "brokered-secrets",
     "pocpolicy-v2"
   ],
-  "created_at": "2026-10-25T02:51:18.657346095Z",
+  "created_at": "2026-10-25T03:40:04.613268808Z",
   "created_by": "oidc:ada",
-  "encryption_key": "UMBWp7ASrt5rE7TDlUup27sZaP1I4I_6fR68ZDTN8QU",
+  "encryption_key": "boZ_NT7tuVt3A3kYpdLTW6XglIubURPfTqbyuSTWJVs",
   "heartbeat_seconds": 10,
-  "host_key_id": "ed25519:c29dfd069b4da5f49e257f9b6a55b61e",
-  "host_public_key": "Dge5WcW0djMyRccalXmKGL2nJOWg2dMrU93dxNdyl4I",
+  "host_clock_measured_at": "2026-10-25T03:40:04.558Z",
+  "host_clock_skew_ms": 0,
+  "host_key_id": "ed25519:2717c711dbee3951d24420a69eed929b",
+  "host_mount_roots": [
+    "/srv/repos/app"
+  ],
+  "host_public_key": "KzVeSPywETwEb42Af8UyA_6vvi1kLMqBKMbleaFwmkI",
   "hostname": "host-1",
-  "id": "3051ed3763d89e3871ce3d313dc46788",
-  "job_key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+  "id": "13bb5542b7837790b18e92e891fbe811",
+  "job_key_id": "ed25519:06c7f62c4116d6ea1861ca7b855e2d14",
   "kernel_verified": false,
-  "last_seen_at": "2026-10-25T02:51:18.619Z",
+  "last_seen_at": "2026-10-25T03:40:04.558Z",
   "mount_roots": [
+    "/srv/repos"
+  ],
+  "mount_roots_not_on_host": [
     "/srv/repos"
   ],
   "name": "local",
@@ -27,18 +35,18 @@
   "seal_key": {
     "record": {
       "format": "agentgate.sealkey.v1",
-      "host_key": "SHA256:wp39BptNpfSeJX+balW2HikeDgye8UKy2DTcwwfskRE",
-      "key_id": "517a2ca45f52aead67bfa92b025161a47627e9637aefc43d89e44fdd7a851981",
-      "not_after": "2026-11-24T02:51:18Z",
-      "not_before": "2026-10-25T02:51:18Z",
-      "public_key": "UMBWp7ASrt5rE7TDlUup27sZaP1I4I_6fR68ZDTN8QU",
+      "host_key": "SHA256:JxfHEdvuOVHSRCCmnu2Smzr4WdZyvWtjcLQMmc2CsNQ",
+      "key_id": "0aedd7a8d47501a3b570904d7f738da89b64ed55c1fd251d3d9b8e2affe3a8b7",
+      "not_after": "2026-11-24T03:40:04Z",
+      "not_before": "2026-10-25T03:40:04Z",
+      "public_key": "boZ_NT7tuVt3A3kYpdLTW6XglIubURPfTqbyuSTWJVs",
       "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
-      "target_id": "3051ed3763d89e3871ce3d313dc46788"
+      "target_id": "13bb5542b7837790b18e92e891fbe811"
     },
-    "signature": "6VN0RFWkjhNZ08qGpgOckG0NL6F3kVU2lAjvtlCCzD1JTaMXgcGTgkKvFqj2zNhFiePh2bK4MXEgQ6xd-xIvAA"
+    "signature": "lC5WtR2bL1jlINHaa7LlYWa73PTftZ3rHJW16ZiGQsuNkLN90R861dLMP6IxqIDq81RbxTrtCal-d6sn_wIIAA"
   },
-  "seal_key_id": "517a2ca45f52aead67bfa92b025161a47627e9637aefc43d89e44fdd7a851981",
-  "seal_key_not_after": "2026-11-24T02:51:18Z",
+  "seal_key_id": "0aedd7a8d47501a3b570904d7f738da89b64ed55c1fd251d3d9b8e2affe3a8b7",
+  "seal_key_not_after": "2026-11-24T03:40:04Z",
   "state": "active",
-  "updated_at": "2026-10-25T02:51:18.693147410Z"
+  "updated_at": "2026-10-25T03:40:04.685115137Z"
 }

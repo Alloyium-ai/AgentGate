@@ -376,6 +376,14 @@ func (s *Store) resync(env hostproto.Envelope, hostID, requestID string) (hostpr
 	return hostproto.ResyncResponse{LastAcceptedSequence: 0, ServerTimeMS: now.UnixMilli()}, nil
 }
 
+// storedHeartbeat is one host_heartbeats row: the heartbeat as signed, and
+// the host's own clock (the signed request timestamp), so the service can
+// show the host's clock skew (the row's time is the service's clock).
+type storedHeartbeat struct {
+	hostproto.Heartbeat
+	HostTimeMS int64 `json:"host_time_ms"`
+}
+
 // HostPoll records a heartbeat and delivers queued jobs.
 func (s *Store) HostPoll(raw []byte, requestID string) (hostproto.PollResponse, error) {
 	var req hostproto.PollRequest
@@ -403,7 +411,7 @@ func (s *Store) pollWork(tx *sql.Tx, t Target, req hostproto.PollRequest) (hostp
 	if err := s.publishSealKey(tx, t, req.Heartbeat.SealKey); err != nil {
 		return hostproto.PollResponse{}, err
 	}
-	beat := req.Heartbeat
+	beat := storedHeartbeat{Heartbeat: req.Heartbeat, HostTimeMS: req.TimestampMS}
 	beat.SealKey = nil // stored on the target, not in every heartbeat row
 	if _, err := tx.Exec("INSERT INTO host_heartbeats(target_id,time,sequence,heartbeat) VALUES(?,?,?,?)", t.ID, now.UnixMilli(), req.Sequence, jsonText(beat)); err != nil {
 		return hostproto.PollResponse{}, err

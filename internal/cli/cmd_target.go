@@ -286,7 +286,7 @@ func (e *env) targetStatus(ctx context.Context, ref string) error {
 		{"name", t.Name}, {"id", t.ID}, {"state", e.p.state(t.State)}, {"online", online}, {"last seen", seen},
 		{"hostname", t.Hostname}, {"agent version", t.AgentVersion}, {"capabilities", joinOr(t.Capabilities, "none")},
 		{"host key", joinOr([]string{t.HostKeyID}, "none")}, {"local pin", pin}, {"job key", t.JobKeyID},
-		{"mount roots", joinOr(t.MountRoots, "none (every host folder mount is refused)")},
+		{"mount roots", joinOr(t.MountRoots, "none (every host folder mount is refused)")}, {"host mount roots", t.hostRootsText()},
 		{"heartbeat", fmt.Sprintf("every %ds", t.HeartbeatSeconds)}, {"kernel verified", fmt.Sprint(t.KernelVerified)},
 	})
 	if next := targetNext(t, pin); next != "" {

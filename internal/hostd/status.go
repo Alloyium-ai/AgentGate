@@ -57,16 +57,37 @@ type StatusReport struct {
 	Unfinished         []string `json:"unfinished_jobs"`
 	OutboxBytes        int64    `json:"outbox_bytes"`
 	OutboxJobs         []string `json:"outbox_pending_jobs"`
+	// MountRoots are the host folders this host's operator allows launches
+	// to mount (MountRootsFile); MountRootsError says why none apply when
+	// the file is unsafe or invalid.
+	MountRootsFile  string   `json:"mount_roots_file"`
+	MountRoots      []string `json:"mount_roots"`
+	MountRootsError string   `json:"mount_roots_error,omitempty"`
+	// Broker is the configured credential broker (nil: brokered secrets are
+	// off on this host) and SecretRoot the secret store.
+	Broker     *BrokerConfig `json:"broker"`
+	SecretRoot string        `json:"secret_root"`
 }
 
 // Status reads the state directory without changing it.
 func Status(stateDir string) (StatusReport, error) {
-	report := StatusReport{Unfinished: []string{}, OutboxJobs: []string{}}
+	return StatusWith(stateDir, DefaultMountRootsFile)
+}
+
+// StatusWith is Status with the mount roots file at rootsFile.
+func StatusWith(stateDir, rootsFile string) (StatusReport, error) {
+	report := StatusReport{Unfinished: []string{}, OutboxJobs: []string{}, MountRoots: []string{}, MountRootsFile: rootsFile}
 	cfg, err := LoadConfig(stateDir)
 	if err != nil {
 		return report, err
 	}
 	report.Runtime, report.ServiceURL = cfg.Runtime, cfg.ServiceURL
+	report.Broker, report.SecretRoot = cfg.Broker, cfg.secretRoot()
+	if roots, rootsErr := LoadMountRoots(rootsFile, []string{stateDir, cfg.secretRoot()}); rootsErr != nil {
+		report.MountRootsError = rootsErr.Error()
+	} else {
+		report.MountRoots = roots
+	}
 	if id, idErr := loadIdentity(stateDir); idErr == nil {
 		report.Enrolled, report.TargetID, report.TargetName = true, id.TargetID, id.TargetName
 		if key, keyErr := readHostKey(stateDir); keyErr == nil && key.ID == id.HostKeyID {

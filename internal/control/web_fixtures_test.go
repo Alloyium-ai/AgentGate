@@ -193,6 +193,10 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 
 	// A target with a stored secret, as a launcher sees it.
 	h, target := f.enrolledTarget()
+	// The host reports its own operator's mount roots, which hold less than
+	// the service's list will: target.json shows the mismatch.
+	hostRoots := []string{"/srv/repos/app"}
+	h.mountRoots = &hostRoots
 	h.poll()
 	f.profile("dev", false)
 	launcher := f.token(f.launcher(), "launcher")

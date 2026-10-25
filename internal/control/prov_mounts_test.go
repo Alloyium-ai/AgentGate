@@ -5,6 +5,7 @@ package control
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // reviewHostPaths are the host folders of the review repro
@@ -92,5 +93,77 @@ func TestMountRootsAreAdministeredAndAudited(t *testing.T) {
 	}
 	if resp, out := f.apiRequest("POST", "/api/v1/targets/local/mount-roots", admin, []byte(`{"mount_roots":[],"reason":"Clear them"}`)); resp.StatusCode != 200 || len(out["mount_roots"].([]any)) != 0 {
 		t.Fatalf("clear: %d %v", resp.StatusCode, out)
+	}
+}
+
+// The host enforces its own operator's mount roots; the service shows them,
+// names its own roots the host does not allow, refuses to plan a mount the
+// host would refuse, and shows the host's clock skew from its heartbeat.
+func TestHostReportedMountRootsAndClockSkew(t *testing.T) {
+	f := newProv(t)
+	h, tg := f.enrolledTarget()
+	if tg.HostMountRoots != nil || tg.HostClockSkewMS != nil || tg.MountRootsNotOnHost != nil {
+		t.Fatalf("a target without a heartbeat reports %+v", tg)
+	}
+	f.profile("safe", false)
+	f.mountRoots("local", "/srv", "/opt/data")
+	plan := func(src string) error {
+		m := specMap("safe")
+		m["mounts"] = []any{map[string]any{"name": "repo", "source": src, "mode": "snapshot"}}
+		_, err := f.s.PlanLaunch(f.launcher(), specBytes(t, m))
+		return err
+	}
+	// An older host reports no roots: only the service's own list applies.
+	h.poll()
+	if tg = must(f.s.TargetDetail("local")); tg.HostMountRoots != nil || tg.HostClockSkewMS == nil || *tg.HostClockSkewMS != 0 {
+		t.Fatalf("older host: %+v", tg)
+	}
+	if err := plan("/srv/other"); err != nil {
+		t.Fatalf("plan without host roots: %v", err)
+	}
+	roots := []string{"/srv/repos"}
+	h.mountRoots, h.skew = &roots, 7*time.Second
+	h.poll()
+	tg = must(f.s.TargetDetail("local"))
+	if tg.HostMountRoots == nil || strings.Join(*tg.HostMountRoots, ",") != "/srv/repos" || strings.Join(tg.MountRootsNotOnHost, ",") != "/srv,/opt/data" {
+		t.Fatalf("host roots %v, not on host %v", tg.HostMountRoots, tg.MountRootsNotOnHost)
+	}
+	if tg.HostClockSkewMS == nil || *tg.HostClockSkewMS != 7000 || tg.HostClockMeasuredAt == "" {
+		t.Fatalf("clock skew %v at %q", tg.HostClockSkewMS, tg.HostClockMeasuredAt)
+	}
+	if err := plan("/srv/other"); errCode(err) != "mount_root_not_on_host" {
+		t.Fatalf("a mount the host refuses was planned: %v", err)
+	}
+	if err := plan("/srv/repos/app"); err != nil {
+		t.Fatalf("a mount inside both lists: %v", err)
+	}
+	if err := plan("/srv/reposevil"); errCode(err) != "mount_root_not_on_host" {
+		t.Fatalf("prefix confusion on the host's list: %v", err)
+	}
+	// A host that allows nothing: every mount is refused at planning.
+	empty := []string{}
+	h.mountRoots = &empty
+	h.poll()
+	if tg = must(f.s.TargetDetail("local")); tg.HostMountRoots == nil || len(*tg.HostMountRoots) != 0 || len(tg.MountRootsNotOnHost) != 2 {
+		t.Fatalf("empty host roots: %+v", tg)
+	}
+	if err := plan("/srv/repos/app"); errCode(err) != "mount_root_not_on_host" {
+		t.Fatalf("a host without roots: %v", err)
+	}
+	// Matching lists: nothing is reported missing.
+	both := []string{"/srv", "/opt/data"}
+	h.mountRoots = &both
+	h.poll()
+	if tg = must(f.s.TargetDetail("local")); tg.MountRootsNotOnHost != nil {
+		t.Fatalf("matching lists report %v", tg.MountRootsNotOnHost)
+	}
+	// A heartbeat whose roots break the protocol's rules is refused whole.
+	bad := []string{"/etc"}
+	h.mountRoots = &bad
+	if _, err := f.s.HostPoll(h.pollRaw(), newID()); errCode(err) != "invalid_poll" {
+		t.Fatalf("a heartbeat with a protected root: %v", err)
+	}
+	if tg = must(f.s.TargetDetail("local")); strings.Join(*tg.HostMountRoots, ",") != "/srv,/opt/data" {
+		t.Fatalf("a refused heartbeat changed the host roots: %v", tg.HostMountRoots)
 	}
 }

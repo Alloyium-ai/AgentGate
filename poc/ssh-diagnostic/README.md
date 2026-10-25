@@ -59,7 +59,8 @@ docker network create agentgate-egress
 # 4. Add the target and enroll this machine's host agent with the one-time token.
 agentgate target add local --token-file ./enroll.token
 sudo agentgate-hostd install --service-url https://localhost:9443 --token-file ./enroll.token --ca-file "$CA" \
-  --runtime docker-host --instance demo --broker-image "$BROKER" --broker-uid 10002 --broker-gid 10002
+  --runtime docker-host --instance demo --broker-image "$BROKER" --broker-uid 10002 --broker-gid 10002 \
+  --mount-root /srv/repos                      # this host's own list of folders launches may mount
 rm ./enroll.token
 sudo agentgate-hostd status                    # prints host_key_id and the key fingerprint to compare
 
@@ -85,6 +86,8 @@ agentgate secret set anthropic --target local --upstream api.anthropic.com --hea
 
 # 9. A one-shot command on a read-only repository mount (exit 8: it waits for bob).
 sudo mkdir -p /srv/repos/app            # the host folder (readable by uid 65534)
+agentgate target mount-roots local --root /srv/repos --reason "Launches may mount the repositories"
+agentgate target status local           # the service's roots and the host's own (/srv/repos from step 4) agree
 ID=$(agentgate launch -q --name tests --profile python-dev --image "$IMAGE" --mode oneshot --lifetime 10m \
   --mount /srv/repos/app:repo:ro --workdir /var/lib/agentgate/mounts/repo -- python3 -c 'print(6+6)')
 agentgate --context bob approve "$ID" --reason "Reviewed the plan"
@@ -640,6 +643,29 @@ and starts one `agentgate-broker` container per launch. Enable it with
 `agentgate-hostd install ... --broker-image NAME@sha256:HEX` (optionally
 `--broker-egress-network`, `--broker-uid`, `--broker-gid`, `--broker-pool`,
 `--secret-root`); the host then advertises `brokered-secrets`.
+
+### Host folders a launch may mount
+
+A launch mounts or snapshots a host folder only when it is inside the
+target's mount roots on the service (`agentgate target mount-roots`) **and**
+inside this host's own list, which only the host's operator sets:
+
+```sh
+sudo agentgate-hostd mount-roots --root /srv/repos --root /srv/data   # replace the list
+sudo agentgate-hostd mount-roots                                      # show it
+sudo agentgate-hostd mount-roots --clear                              # allow no host folder
+```
+
+The list lives in `/etc/agentgate/mount-roots.json` (root-owned, 0644; also
+written by `agentgate-hostd install --mount-root PATH`). Without it no host
+folder is mounted. `agentgate-hostd` checks every launch and snapshot job
+against it (inside a root component by component, no symbolic link, no mount
+point inside the root on the way to the folder, never the host agent's state
+or secret store), and `mounts.py` and `launch.py` check again right before
+Docker binds the folder or the snapshot is copied. An edit applies to the next
+job, and a running launch whose folder left the list is stopped at the next
+poll. The service shows the host's list next to its own (`agentgate target
+status`, the Targets page) and refuses to plan a mount the host would refuse.
 
 For such a launch the service assigns a `/29` inside `172.30.0.0/16` and puts the
 broker's exact endpoint in the signed policy instead of the taskboard (a

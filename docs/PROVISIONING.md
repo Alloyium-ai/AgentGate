@@ -81,9 +81,10 @@ Rules every implementation enforces (`internal/control/prov_launchspec.go`; JSON
   that pass the same source rules). A new target has none, so every mount is refused (`422 mount_root_not_allowed`)
   until its administrator lists roots. Every mount brings host data into the sandbox and needs a second human's
   approval, a snapshot as much as a live folder; the reason names the mount and its source. A writable mount is never
-  executable (`internal/access` refuses the overlap). The host re-checks every source rule; it must also apply the
-  same allowlist to the roots in its own configuration (`hostproto.MountUnderRoots`), which `agentgate-hostd` does not
-  carry yet (see the host-side changes).
+  executable (`internal/access` refuses the overlap). The host re-checks every source rule and applies **its own
+  operator's mount roots** as well (see [Host mount roots](#host-mount-roots)): a host that reports its roots makes the
+  service refuse, when the launch is planned, a mount outside them (`422 mount_root_not_on_host`), and the host
+  refuses it in any case.
 - `secrets[]` (at most 8): `ref` names a secret on that target, by name only; `expose.env` names the variable that
   receives the broker address and may not also appear in `agent.env`. The spec never contains a value (an unknown
   field such as `value` is rejected).
@@ -255,6 +256,32 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
   from `spec.secrets` (refs and variables, in order: `secret_binding_differs`) or whose resolved `mounts` differ from
   `spec.mounts` in count or, in order, in name or mode (`mount_binding_differs`). A mount's `source` is the service's
   resolution of the request and is validated on the host separately.
+- **Host mount roots** (`internal/hostd/mountroots.go`, `poc/ssh-diagnostic/mounts.py`): the host folders a host's
+  own operator allows launches to mount or snapshot, in `/etc/agentgate/mount-roots.json`
+  (`{"version":"agentgate.hostd-mount-roots.v1","roots":[...]}`, root-owned, mode 0644, in a root-owned directory that
+  group and others cannot write, read without following a link). Only `agentgate-hostd install --mount-root PATH ...`
+  (or `--no-mount-roots`), `agentgate-hostd mount-roots --root PATH ... | --clear` or root editing the file changes it;
+  no job can. A missing file means no roots, so **by default every host folder is refused**. A root passes the same
+  rules as a mount source (canonical, safe characters, outside the protected trees, credential stores and home
+  directories, at most 16, unique) and may not overlap the host agent's state directory (which holds the broker
+  configurations) or its secret store; an invalid or unsafe file allows nothing and is reported by `status` and in the
+  log. Before a `launch` or `snapshot-mount` job uses a folder, the host requires it to be inside a root component by
+  component (`/srv/dataevil` is not inside `/srv/data`), the deepest such root and the folder to resolve to themselves
+  (no symbolic link on either path, `..` is refused as non-canonical), no mount point inside that root at, above or
+  below the folder (a bind mount inside a root could bring in any tree; list such a mount as its own root), and neither
+  the folder nor its root to be the same directory (device and inode) as a protected tree, the state directory or the
+  secret store; otherwise the job is `rejected` with `mount_root_not_allowed` or `invalid_mount` and nothing runs.
+  `launch.py`/`mounts.py` apply the same file and rules again right before Docker binds a folder or a snapshot is
+  copied (a Go test keeps the two readers and their protected lists equal). The file is read for every check, so an
+  edit applies to the next job without a restart, and a running launch whose folder is no longer inside a root is
+  stopped at the next poll (`mount_root_removed`; it ends `failed`). Every heartbeat reports the roots the host
+  enforces (`heartbeat.mount_roots`, an explicit list; absent only from an older host); the target shows them as
+  `host_mount_roots`, the service's own roots outside them as `mount_roots_not_on_host`, and the host's clock against
+  the service's at that heartbeat as `host_clock_skew_ms`. Limits: a root that is itself a bind of a subdirectory of a
+  protected tree (not of the tree itself) is not detected; and a host user who can write inside a root could replace
+  a folder with a link between the last check and Docker's bind, which Docker would follow, so keep the roots writable
+  only by users you trust (an agent's own read-write mount is inside a root, but only one launch runs on a target at a
+  time and its links are refused at the next launch's check).
 - **Fail closed:** an unverifiable, expired or unknown job is dropped and reported with a `rejected` result. It is
   never run on a guess. A `rejected` or `failed` launch result without a receipt ends the launch `failed` with its
   `evidence_missing` reason.
@@ -306,7 +333,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | Endpoint | Method | Role | Purpose |
 | --- | --- | --- | --- |
 | `/targets` | GET, POST | viewer, admin | list targets; create a target and its one-time enrollment token |
-| `/targets/{id}` | GET, PATCH, DELETE | viewer, admin | status, capabilities, key fingerprint, encryption key; rename; retire (refused while a launch is live; with secrets on the host it queues one `secret-delete` per secret and the target is `retiring` until the host confirms them, then retired; `{"force": true}` finishes without the host and records those secrets `removal: unconfirmed`) |
+| `/targets/{id}` | GET, PATCH, DELETE | viewer, admin | status, capabilities, key fingerprint, encryption key, mount roots and the host's own (`host_mount_roots`, `mount_roots_not_on_host`), the host's clock skew; rename; retire (refused while a launch is live; with secrets on the host it queues one `secret-delete` per secret and the target is `retiring` until the host confirms them, then retired; `{"force": true}` finishes without the host and records those secrets `removal: unconfirmed`) |
 | `/targets/{id}/enrollment` | POST | admin | a new one-time token (reinstall, job key rotation) |
 | `/targets/{id}/approve-key` | POST | admin | approve the presented host key fingerprint; activates the target |
 | `/targets/{id}/mount-roots` | POST | admin | replace the host folders launches on the target may mount or snapshot (`mount_roots`, at most 16; empty refuses every mount) |

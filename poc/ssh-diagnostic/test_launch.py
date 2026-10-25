@@ -639,6 +639,42 @@ class EmitterTest(unittest.TestCase):
         os.close(write)
 
 
+class SnapshotLocalTest(unittest.TestCase):
+    """A snapshot-mount job copies a folder only inside the host operator's mount roots."""
+
+    def test_snapshot_needs_a_host_mount_root(self):
+        import mounts
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        base = Path(os.path.realpath(directory.name))
+        instance, folder = base / 'instance', base / 'srv' / 'data' / 'repo'
+        instance.mkdir(mode=0o700)
+        folder.mkdir(parents=True)
+        (folder / 'a.txt').write_text('a')
+        built = []
+        with unittest.mock.patch.object(mounts, 'build_snapshot', lambda *args: built.append(args) or {}), \
+             unittest.mock.patch.object(mounts, 'install_snapshot', lambda *args, **kwargs: {'files': 1}), \
+             unittest.mock.patch.object(mounts, 'submounts', lambda source, mountinfo=None: []), \
+             unittest.mock.patch.object(mounts, 'mount_points', lambda mountinfo=None: []):
+            for roots in ([], [str(base / 'srv' / 'dat')], [str(base / 'srv' / 'data' / 'repo2')]):
+                with self.subTest(roots=roots), unittest.mock.patch.object(mounts, 'load_host_roots', return_value=roots), \
+                     self.assertRaises(mounts.MountError):
+                    launch.snapshot_local(instance, 'repo', str(folder))
+            self.assertEqual(built, [])
+            with unittest.mock.patch.object(mounts, 'load_host_roots', return_value=[str(base / 'srv' / 'data')]):
+                try:
+                    launch.snapshot_local(instance, 'repo', str(folder))
+                except (OSError, ValueError, KeyError):
+                    pass  # what follows the copy is covered elsewhere
+            self.assertEqual(len(built), 1)
+
+    def test_a_removed_mount_root_is_a_stop_reason_that_fails_the_launch(self):
+        self.assertIn('mount_root_removed', launch.STOP_REASONS)
+        result = {'state': 'stopped', 'cleaned': True}
+        self.assertEqual(launch.classify(result, None, {'reason': 'mount_root_removed'}, [], False),
+                         ('failed', 'mount_root_removed'))
+
+
 class SnapshotIdentityTest(unittest.TestCase):
     def test_tree_digest_binds_content_names_and_modes(self):
         with tempfile.TemporaryDirectory() as directory:

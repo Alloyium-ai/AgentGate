@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -348,6 +350,25 @@ func (h *harness) open() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	// The operator of the test host allows /srv; the filesystem view treats
+	// every path as a real directory. mountroots_test.go uses real ones.
+	h.daemon.MountRootsFile = filepath.Join(filepath.Dir(h.dir), "etc-agentgate", "mount-roots.json")
+	if _, statErr := os.Stat(h.daemon.MountRootsFile); errors.Is(statErr, os.ErrNotExist) {
+		if err = WriteMountRoots(h.daemon.MountRootsFile, []string{"/srv"}, h.daemon.privatePaths()); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	h.daemon.mountFS = permissiveMountFS()
+}
+
+// permissiveMountFS treats every path as a distinct real directory without
+// links or mount points.
+func permissiveMountFS() mountFS {
+	return mountFS{resolve: func(p string) (string, error) { return p, nil }, mountPoints: func() ([]string, error) { return nil, nil },
+		identity: func(p string) (fileID, bool) {
+			sum := sha256.Sum256([]byte(p))
+			return fileID{dev: 1, ino: binary.BigEndian.Uint64(sum[:8])}, true
+		}}
 }
 
 func (h *harness) cycle() {

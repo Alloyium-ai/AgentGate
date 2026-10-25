@@ -449,6 +449,13 @@ func (s *Store) resolveLaunch(tx *sql.Tx, spec hostproto.LaunchSpec, canonical [
 			return r, fail(422, "mount_root_not_allowed", "Mount "+m.Name+": "+m.Source+" is not inside a host folder target "+target.Name+" allows (mount roots: "+joinOr(target.MountRoots)+
 				"). An administrator lists the folders launches may mount with POST /targets/{id}/mount-roots.")
 		}
+		// The host applies its own operator's roots and refuses any other
+		// folder, whatever this service signs: refuse now rather than after
+		// a second human approved a launch the host will not run.
+		if target.HostMountRoots != nil && !hostproto.MountUnderRoots(m.Source, *target.HostMountRoots) {
+			return r, fail(422, "mount_root_not_on_host", "Mount "+m.Name+": "+m.Source+" is not inside a host folder the host of target "+target.Name+" allows (its own mount roots: "+joinOr(*target.HostMountRoots)+
+				"). The host's operator lists them on the host with agentgate-hostd mount-roots --root PATH; this service cannot change them.")
+		}
 		switch m.Mode {
 		case "read-write":
 			if !contains(target.Capabilities, hostproto.CapabilityLiveMounts) {

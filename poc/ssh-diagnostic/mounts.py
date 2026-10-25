@@ -34,6 +34,24 @@ SECRET_NAMES = ('.ssh', '.gnupg', '.aws', '.azure', '.config', '.docker', '.kube
                 '.git-credentials', '.local/share/agentgate', '.password-store', '.vault-token')
 SNAPSHOT_MAX_BYTES = 256 << 20
 SNAPSHOT_MAX_ENTRIES = 20000
+# The host folders this host's own operator allows a launch to mount or
+# snapshot, written by agentgate-hostd install --mount-root or agentgate-hostd
+# mount-roots. It belongs to the host, not the service: a launch job cannot
+# change it. A missing file allows no host folder at all.
+HOST_ROOTS = '/etc/agentgate/mount-roots.json'
+HOST_ROOTS_VERSION = 'agentgate.hostd-mount-roots.v1'
+MAX_HOST_ROOTS = 16
+# hostproto.ProtectedMountTrees, which every launch mount and mount root must
+# stay clear of (a Go test keeps the two lists equal).
+LAUNCH_PROTECTED = ('/proc', '/sys', '/dev', '/run', '/var/run', '/etc', '/root', '/boot', '/usr', '/bin',
+                    '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/var/lib/docker', '/var/lib/containerd',
+                    '/var/lib/cloud', '/var/lib/kubelet', '/snap', '/var/lib/agentgate',
+                    '/var/lib/containers', '/var/lib/rancher', '/var/lib/systemd', '/var/lib/private', '/var/lib/libvirt',
+                    '/var/lib/lxd', '/var/lib/incus', '/var/lib/sss', '/var/lib/polkit-1', '/var/lib/sudo', '/var/backups',
+                    '/var/log', '/var/mail', '/var/spool', '/lost+found')
+# hostproto's credential store components: no mount root passes through one.
+LAUNCH_SECRET_COMPONENTS = ('.ssh', '.gnupg', '.aws', '.azure', '.config', '.docker', '.kube', '.netrc',
+                            '.git-credentials', '.password-store', '.vault-token', '.local')
 
 
 class MountError(ValueError):
@@ -165,6 +183,100 @@ def check_bind_source(source, forbidden=(), home=None):
     return source
 
 
+def _host_root_rules(root):
+    """The rules a mount root must pass (hostproto.CheckMountRoots, per root)."""
+    if not isinstance(root, str) or not BIND_SOURCE.fullmatch(root) or os.path.normpath(root) != root or root == '/':
+        raise MountError('a mount root must be a canonical absolute path of letters, digits and . _ @ + - /: ' + repr(root))
+    for protected in LAUNCH_PROTECTED:
+        if overlaps(root, protected):
+            raise MountError('mount root %s overlaps protected host tree %s' % (root, protected))
+    if root.startswith('/var/lib/agentgate-'):
+        raise MountError('mount root %s overlaps an AgentGate instance or host agent directory' % root)
+    for part in root.strip('/').split('/'):
+        if part in LAUNCH_SECRET_COMPONENTS:
+            raise MountError('mount root %s passes through the credential store %s' % (root, part))
+    check_source_rules(root)
+    return root
+
+
+def load_host_roots(path=HOST_ROOTS, owner=0):
+    """The operator's mount roots: [] when the file is missing; MountError when it is unsafe or malformed.
+
+    The file must be a regular file owned by root (owner), not writable by
+    group or others, in a directory with the same custody, holding exactly
+    {"version": HOST_ROOTS_VERSION, "roots": [...]}.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        raise MountError('the mount roots file %s cannot be read safely: %s' % (path, error)) from None
+    try:
+        parent = os.lstat(os.path.dirname(path))
+        if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != owner or parent.st_mode & 0o022 or \
+           os.path.realpath(os.path.dirname(path)) != os.path.dirname(path):
+            raise MountError('the directory of %s must belong to uid %d and not be writable by group or others' % (path, owner))
+        meta = os.fstat(fd)
+        if not stat.S_ISREG(meta.st_mode) or meta.st_uid != owner or meta.st_mode & 0o022:
+            raise MountError('%s must be a regular file of uid %d that group and others cannot write' % (path, owner))
+        raw = os.read(fd, (128 << 10) + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > 128 << 10:
+        raise MountError('%s is too large' % path)
+    try:
+        document = json.loads(raw, object_pairs_hook=_duplicate_free, parse_constant=_no_constant)
+    except MountError:
+        raise
+    except (ValueError, UnicodeDecodeError) as error:
+        raise MountError('%s is not valid JSON: %s' % (path, error)) from None
+    if not isinstance(document, dict) or set(document) != {'version', 'roots'} or \
+       document['version'] != HOST_ROOTS_VERSION or not isinstance(document['roots'], list):
+        raise MountError('%s requires exactly {"version": "%s", "roots": [...]}' % (path, HOST_ROOTS_VERSION))
+    roots = document['roots']
+    if len(roots) > MAX_HOST_ROOTS or len(set(map(str, roots))) != len(roots):
+        raise MountError('%s lists at most %d unique roots' % (path, MAX_HOST_ROOTS))
+    return [_host_root_rules(root) for root in roots]
+
+
+def mount_points(mountinfo='/proc/self/mountinfo'):
+    """Every mount point of this mount namespace."""
+    found = []
+    with open(mountinfo, encoding='utf-8', errors='surrogateescape') as lines:
+        for line in lines:
+            fields = line.split()
+            if len(fields) >= 5:
+                found.append(re.sub(r'\\([0-7]{3})', lambda match: chr(int(match.group(1), 8)), fields[4]))
+    return found
+
+
+def check_host_roots(source, roots, mountinfo='/proc/self/mountinfo'):
+    """A launch's host folder must be inside one of the operator's roots.
+
+    Component by component (/srv/dataevil is not inside /srv/data); the
+    deepest matching root and the source must be real paths (no symbolic
+    link); and no mount point may lie inside that root at, above or below the
+    source. agentgate-hostd applies the same rules before the job reaches here.
+    """
+    if not roots:
+        raise MountError('this host allows no host folder mounts: its operator lists no mount roots in ' + HOST_ROOTS)
+    if not isinstance(source, str) or not BIND_SOURCE.fullmatch(source) or os.path.normpath(source) != source or source == '/':
+        raise MountError('a host folder must be a canonical absolute path: ' + repr(source))
+    matching = [root for root in roots if source == root or source.startswith(root + '/')]
+    if not matching:
+        raise MountError('%s is not inside a host folder this host allows (mount roots: %s)' % (source, ', '.join(roots)))
+    root = max(matching, key=len)
+    if os.path.realpath(root) != root or not os.path.isdir(root):
+        raise MountError('mount root %s is missing or reached through a symbolic link' % root)
+    if os.path.realpath(source) != source or not os.path.isdir(source):
+        raise MountError('%s is not a real directory inside mount root %s (a symbolic link or missing)' % (source, root))
+    for point in mount_points(mountinfo):
+        if point != root and point.startswith(root + '/') and overlaps(point, source):
+            raise MountError('mount point %s lies inside mount root %s at, above or below %s' % (point, root, source))
+    return source
+
+
 def submounts(source, mountinfo='/proc/self/mountinfo'):
     """Return mount points strictly below source; a bind must not carry them."""
     found = []
@@ -222,12 +334,14 @@ def docker_argument(source, entry):
 LAUNCH_MOUNTS = 'launch-mounts.json'
 
 
-def prepare(root, entries=None):
+def prepare(root, entries=None, host_roots=None):
     """Validate the mounts for the next target and record the approved set.
 
     Prints one Docker argument per line and writes mounts-active.json for the
     target binding. Any doubt refuses the target instead of dropping a mount.
-    A launch passes its own validated entries; the SSH path reads mounts.json.
+    A launch passes its own validated entries and the host's mount roots
+    (host_roots, a loader); the SSH path reads mounts.json, which the operator
+    writes on this host, and has no roots to apply.
     """
     from settings import effective_policy, load_settings
     root = Path(root)
@@ -238,9 +352,13 @@ def prepare(root, entries=None):
     if entries:
         info = effective_policy(root, load_settings(root / 'settings.json'))
         check_policy_coherence(entries, info['document'].get('filesystem'))
+    roots = None
     for entry in entries:
         if entry['kind'] == 'bind':
             source = check_bind_source(entry['source'], forbidden=(str(root),))
+            if host_roots is not None:
+                roots = host_roots() if roots is None else roots
+                check_host_roots(source, roots)
             check_live_directory(source)
         else:
             source = str(snapshot_source(root, entry['name']))
@@ -428,7 +546,7 @@ def main(argv):
     if len(argv) == 2 and argv[0] == 'launch':
         # The launch runtime writes this root-owned list; it is validated again here.
         entries = parse_document(read_private(Path(argv[1]) / LAUNCH_MOUNTS))
-        sys.stdout.write(''.join(line + '\n' for line in prepare(argv[1], entries)))
+        sys.stdout.write(''.join(line + '\n' for line in prepare(argv[1], entries, host_roots=load_host_roots)))
         return 0
     if len(argv) == 4 and argv[0] == 'install-snapshot':
         result = install_snapshot(argv[1], argv[2], argv[3])

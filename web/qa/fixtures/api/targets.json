@@ -9,39 +9,41 @@
         "brokered-secrets",
         "pocpolicy-v2"
       ],
-      "created_at": "2026-10-25T02:51:18.810499290Z",
+      "created_at": "2026-10-25T03:40:04.879939506Z",
       "created_by": "oidc:ada",
-      "encryption_key": "IJlmIbIq19niC1j4eJgbc42aIwFE08du2T4oa94GWVE",
+      "encryption_key": "_yZL57CxQaDjUqJXP4lsmuegTL8VNOK2U9j57wSONBk",
       "heartbeat_seconds": 10,
-      "host_key_id": "ed25519:60a91d0b4d637fd304dd20c2ca73a808",
-      "host_public_key": "Y_X96UU9rrE8KHF8D2rk42AGtHN8rAGjm8jAXn-0dmY",
+      "host_clock_measured_at": "2026-10-25T03:40:04.558Z",
+      "host_clock_skew_ms": 0,
+      "host_key_id": "ed25519:d4f53e46dafa9401bda67464f263bd65",
+      "host_public_key": "UXWLL08DNYZ6D7BAcSVFQRjOlMw7sRKOSX4vAFhSdE4",
       "hostname": "host-1",
-      "id": "9161c8ca7d9e80a8314e5cf415f265aa",
-      "job_key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+      "id": "fe854bf4bbcd6484d2d728ea93059aa0",
+      "job_key_id": "ed25519:06c7f62c4116d6ea1861ca7b855e2d14",
       "kernel_verified": false,
-      "last_seen_at": "2026-10-25T02:51:18.619Z",
+      "last_seen_at": "2026-10-25T03:40:04.558Z",
       "mount_roots": [],
       "name": "old-host",
       "online": true,
-      "retiring_since": "2026-10-25T02:51:18.828763226Z",
+      "retiring_since": "2026-10-25T03:40:04.912496591Z",
       "revision": 5,
       "seal_key": {
         "record": {
           "format": "agentgate.sealkey.v1",
-          "host_key": "SHA256:YKkdC01jf9ME3SDCynOoCKBu0iOTTQZipAnt4zHMwjo",
-          "key_id": "45ddb739faef1333f9fc2be6b5a9827e945d9248cf73fb9f2d750bec3786afff",
-          "not_after": "2026-11-24T02:51:18Z",
-          "not_before": "2026-10-25T02:51:18Z",
-          "public_key": "IJlmIbIq19niC1j4eJgbc42aIwFE08du2T4oa94GWVE",
+          "host_key": "SHA256:1PU+Rtr6lAG9pnRk8mO9ZYMrn1gBDcyRdDG/8dqag0c",
+          "key_id": "08a9cf700364a48c1fb50d8f58b421c4e0a56ae21b305afe351421172091e9b6",
+          "not_after": "2026-11-24T03:40:04Z",
+          "not_before": "2026-10-25T03:40:04Z",
+          "public_key": "_yZL57CxQaDjUqJXP4lsmuegTL8VNOK2U9j57wSONBk",
           "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
-          "target_id": "9161c8ca7d9e80a8314e5cf415f265aa"
+          "target_id": "fe854bf4bbcd6484d2d728ea93059aa0"
         },
-        "signature": "N3Jnt_H3ySF0ZG5kvtRSx4GGG3OXQNp-xDctY5-EteHfQX7-tO3O_iNemIlIavWsUqJv8DBsjbZG-aeeIl7yDQ"
+        "signature": "rCX09iZVtscZ5U_FZAy81orpSebamdHjEjsUtkIIouzRbNGqchofKvuXE8U8FXDlSL5Kly06Y3GKELEZ1MOqCQ"
       },
-      "seal_key_id": "45ddb739faef1333f9fc2be6b5a9827e945d9248cf73fb9f2d750bec3786afff",
-      "seal_key_not_after": "2026-11-24T02:51:18Z",
+      "seal_key_id": "08a9cf700364a48c1fb50d8f58b421c4e0a56ae21b305afe351421172091e9b6",
+      "seal_key_not_after": "2026-11-24T03:40:04Z",
       "state": "retiring",
-      "updated_at": "2026-10-25T02:51:18.828763226Z"
+      "updated_at": "2026-10-25T03:40:04.912496591Z"
     },
     {
       "agent_version": "0.1.0",
@@ -52,34 +54,34 @@
         "brokered-secrets",
         "pocpolicy-v2"
       ],
-      "created_at": "2026-10-25T02:51:18.800559423Z",
+      "created_at": "2026-10-25T03:40:04.864704841Z",
       "created_by": "oidc:ada",
-      "encryption_key": "W_6MqIVj6botAPqMjkipYruXbAXR4Vw7tb0niiK8wD8",
+      "encryption_key": "d2NGngBLCvAhKBjpdC3pikmRwoNK-BUlQ1oSUU2vzR8",
       "heartbeat_seconds": 10,
-      "host_key_id": "ed25519:7c5c2ca370efc2dce1b830eebd0f1f71",
-      "host_public_key": "wAYW0V5DORfoth-M4IgLbHRr4qwhkUZXKT-ADEvu-k8",
+      "host_key_id": "ed25519:c0108d1e97f6e09daa3a5bd2014e6a82",
+      "host_public_key": "Y47j3D77ph7Cmjy0Fj2JFllPfB2szbIB_TnwkEZbuLQ",
       "hostname": "host-1",
-      "id": "0946542c28d86735d3678bf72ba2a070",
-      "job_key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+      "id": "db7b28a9f2aecfb47cb81176081f4ad3",
+      "job_key_id": "ed25519:06c7f62c4116d6ea1861ca7b855e2d14",
       "kernel_verified": false,
-      "last_seen_at": "2026-10-25T02:51:18.619Z",
+      "last_seen_at": "2026-10-25T03:40:04.558Z",
       "mount_roots": [],
       "name": "waiting-host",
       "online": false,
       "revision": 2,
       "state": "awaiting_key_approval",
-      "updated_at": "2026-10-25T02:51:18.802231754Z"
+      "updated_at": "2026-10-25T03:40:04.867268630Z"
     },
     {
       "agent_version": "",
       "capabilities": [],
-      "created_at": "2026-10-25T02:51:18.797886989Z",
+      "created_at": "2026-10-25T03:40:04.860434587Z",
       "created_by": "oidc:ada",
       "encryption_key": "",
       "heartbeat_seconds": 10,
       "host_key_id": "",
       "hostname": "",
-      "id": "c72e5f9401cfe5f8e39a5b29db087cc6",
+      "id": "a97f86565a830e466a64fa10c1f72e77",
       "job_key_id": "",
       "kernel_verified": false,
       "mount_roots": [],
@@ -87,7 +89,7 @@
       "online": false,
       "revision": 1,
       "state": "pending",
-      "updated_at": "2026-10-25T02:51:18.797886989Z"
+      "updated_at": "2026-10-25T03:40:04.860434587Z"
     },
     {
       "agent_version": "0.1.0",
@@ -98,23 +100,23 @@
         "brokered-secrets",
         "pocpolicy-v2"
       ],
-      "created_at": "2026-10-25T02:51:18.788947359Z",
+      "created_at": "2026-10-25T03:40:04.843765208Z",
       "created_by": "oidc:ada",
-      "encryption_key": "SGhzr3LcPrwc8tHSKwcnry1Qx1eI-ga4Vb9Pe_nRmDk",
+      "encryption_key": "zSS2Q8KfREkXAScbhIWNz29_-_dXT3ItoxMy2UPFjV0",
       "heartbeat_seconds": 10,
-      "host_key_id": "ed25519:5dbb2c751561fbf1549e33f14dc30e33",
-      "host_public_key": "RTolzD4CyP1r5w8Rcz-7ob7U16Qc20Ss0B11MwBehSs",
+      "host_key_id": "ed25519:3fef472ec4dfb9808d6268b7ab3ff462",
+      "host_public_key": "RqYqIHVIVIYlWs_QFRkQgULmdHU3Sd-BGnPhgsmGUW0",
       "hostname": "host-1",
-      "id": "b478bac56f6d82b8fc3ff4345d240b52",
-      "job_key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+      "id": "e2b1f35fcb0c4059009c10944f861c3a",
+      "job_key_id": "ed25519:06c7f62c4116d6ea1861ca7b855e2d14",
       "kernel_verified": false,
-      "last_seen_at": "2026-10-25T02:51:18.619Z",
+      "last_seen_at": "2026-10-25T03:40:04.558Z",
       "mount_roots": [],
       "name": "fresh-host",
       "online": true,
       "revision": 3,
       "state": "active",
-      "updated_at": "2026-10-25T02:51:18.791736079Z"
+      "updated_at": "2026-10-25T03:40:04.848088771Z"
     },
     {
       "agent_version": "0.1.0",
@@ -125,18 +127,26 @@
         "brokered-secrets",
         "pocpolicy-v2"
       ],
-      "created_at": "2026-10-25T02:51:18.657346095Z",
+      "created_at": "2026-10-25T03:40:04.613268808Z",
       "created_by": "oidc:ada",
-      "encryption_key": "UMBWp7ASrt5rE7TDlUup27sZaP1I4I_6fR68ZDTN8QU",
+      "encryption_key": "boZ_NT7tuVt3A3kYpdLTW6XglIubURPfTqbyuSTWJVs",
       "heartbeat_seconds": 10,
-      "host_key_id": "ed25519:c29dfd069b4da5f49e257f9b6a55b61e",
-      "host_public_key": "Dge5WcW0djMyRccalXmKGL2nJOWg2dMrU93dxNdyl4I",
+      "host_clock_measured_at": "2026-10-25T03:40:04.558Z",
+      "host_clock_skew_ms": 0,
+      "host_key_id": "ed25519:2717c711dbee3951d24420a69eed929b",
+      "host_mount_roots": [
+        "/srv/repos/app"
+      ],
+      "host_public_key": "KzVeSPywETwEb42Af8UyA_6vvi1kLMqBKMbleaFwmkI",
       "hostname": "host-1",
-      "id": "3051ed3763d89e3871ce3d313dc46788",
-      "job_key_id": "ed25519:f738f8ccf29253e1d2e2591b4507c2d5",
+      "id": "13bb5542b7837790b18e92e891fbe811",
+      "job_key_id": "ed25519:06c7f62c4116d6ea1861ca7b855e2d14",
       "kernel_verified": false,
-      "last_seen_at": "2026-10-25T02:51:18.619Z",
+      "last_seen_at": "2026-10-25T03:40:04.558Z",
       "mount_roots": [
+        "/srv/repos"
+      ],
+      "mount_roots_not_on_host": [
         "/srv/repos"
       ],
       "name": "local",
@@ -145,20 +155,20 @@
       "seal_key": {
         "record": {
           "format": "agentgate.sealkey.v1",
-          "host_key": "SHA256:wp39BptNpfSeJX+balW2HikeDgye8UKy2DTcwwfskRE",
-          "key_id": "517a2ca45f52aead67bfa92b025161a47627e9637aefc43d89e44fdd7a851981",
-          "not_after": "2026-11-24T02:51:18Z",
-          "not_before": "2026-10-25T02:51:18Z",
-          "public_key": "UMBWp7ASrt5rE7TDlUup27sZaP1I4I_6fR68ZDTN8QU",
+          "host_key": "SHA256:JxfHEdvuOVHSRCCmnu2Smzr4WdZyvWtjcLQMmc2CsNQ",
+          "key_id": "0aedd7a8d47501a3b570904d7f738da89b64ed55c1fd251d3d9b8e2affe3a8b7",
+          "not_after": "2026-11-24T03:40:04Z",
+          "not_before": "2026-10-25T03:40:04Z",
+          "public_key": "boZ_NT7tuVt3A3kYpdLTW6XglIubURPfTqbyuSTWJVs",
           "suite": "hpke-base-x25519-hkdfsha256-hkdfsha256-chacha20poly1305",
-          "target_id": "3051ed3763d89e3871ce3d313dc46788"
+          "target_id": "13bb5542b7837790b18e92e891fbe811"
         },
-        "signature": "6VN0RFWkjhNZ08qGpgOckG0NL6F3kVU2lAjvtlCCzD1JTaMXgcGTgkKvFqj2zNhFiePh2bK4MXEgQ6xd-xIvAA"
+        "signature": "lC5WtR2bL1jlINHaa7LlYWa73PTftZ3rHJW16ZiGQsuNkLN90R861dLMP6IxqIDq81RbxTrtCal-d6sn_wIIAA"
       },
-      "seal_key_id": "517a2ca45f52aead67bfa92b025161a47627e9637aefc43d89e44fdd7a851981",
-      "seal_key_not_after": "2026-11-24T02:51:18Z",
+      "seal_key_id": "0aedd7a8d47501a3b570904d7f738da89b64ed55c1fd251d3d9b8e2affe3a8b7",
+      "seal_key_not_after": "2026-11-24T03:40:04Z",
       "state": "active",
-      "updated_at": "2026-10-25T02:51:18.693147410Z"
+      "updated_at": "2026-10-25T03:40:04.685115137Z"
     }
   ]
 }

@@ -255,6 +255,10 @@ func (d *Daemon) startLaunch(ctx context.Context, job hostproto.Job, p hostproto
 		d.finish(job.ID, hostproto.ResultRejected, "invalid_mount", err.Error(), nil, "not_started")
 		return
 	}
+	if code, err := d.checkLaunchMounts(p.Mounts); err != nil {
+		d.finish(job.ID, hostproto.ResultRejected, code, err.Error(), nil, "not_started")
+		return
+	}
 	prepared, code, err := prepareLaunch(job, p, d.capabilities(ctx), d.Now(), d.Identity.TargetID, d.Config.Broker)
 	if err != nil {
 		d.finish(job.ID, hostproto.ResultRejected, code, err.Error(), nil, "not_started")
@@ -265,7 +269,8 @@ func (d *Daemon) startLaunch(ctx context.Context, job hostproto.Job, p hostproto
 		heartbeat = defaultHeartbeat
 	}
 	launchCtx, cancel := context.WithCancel(ctx)
-	active := &activeLaunch{jobID: job.ID, launchID: job.LaunchID, heartbeat: heartbeat, started: d.Now(), cancel: cancel, done: make(chan struct{})}
+	active := &activeLaunch{jobID: job.ID, launchID: job.LaunchID, heartbeat: heartbeat, started: d.Now(), cancel: cancel, done: make(chan struct{}),
+		mounts: append([]hostproto.LaunchMount(nil), p.Mounts...)}
 	// The secret store is checked and the launch registered under secretMu,
 	// so no secret-put or secret-delete changes a value between the check
 	// and the broker reading it.
@@ -791,6 +796,15 @@ func (d *Daemon) applyProfileJob(ctx context.Context, job hostproto.Job, p hostp
 func (d *Daemon) snapshotJob(ctx context.Context, job hostproto.Job, p hostproto.SnapshotMountPayload) {
 	if !d.hasCapability(ctx, hostproto.CapabilitySnapshots) {
 		d.finish(job.ID, hostproto.ResultRejected, "unsupported_capability", "this target does not take snapshot mounts", nil, "")
+		return
+	}
+	snapshot := []hostproto.LaunchMount{{Name: p.Name, Source: p.Source, Mode: "snapshot", Path: hostproto.MountRoot + "/" + p.Name}}
+	if err := d.checkMountSources(snapshot); err != nil {
+		d.finish(job.ID, hostproto.ResultRejected, "invalid_mount", err.Error(), nil, "")
+		return
+	}
+	if code, err := d.checkLaunchMounts(snapshot); err != nil {
+		d.finish(job.ID, hostproto.ResultRejected, code, err.Error(), nil, "")
 		return
 	}
 	result, err := d.Runtime.Snapshot(ctx, p.Name, p.Source, p.MaxBytes, p.MaxEntries)

@@ -53,6 +53,12 @@ type Daemon struct {
 	// Broker runs each launch's credential broker. Open sets a DockerBroker
 	// when the configuration has a broker section; tests replace it.
 	Broker BrokerRuntime
+	// MountRootsFile is the operator's own list of host folders launches may
+	// mount (DefaultMountRootsFile). It is read again for every check, so an
+	// edit applies to the next job and to running launches at the next poll.
+	MountRootsFile string
+
+	mountFS mountFS
 
 	jobKey ed25519.PublicKey
 
@@ -71,6 +77,7 @@ type Daemon struct {
 	lastContact  time.Time
 	pollInterval time.Duration
 	degraded     string
+	rootsErr     string
 	workers      sync.WaitGroup
 }
 
@@ -83,6 +90,10 @@ type activeLaunch struct {
 	stopSent        bool
 	// secrets are the refs the launch's broker uses.
 	secrets []string
+	// mounts are the host folders the launch uses; rootStopSent records that
+	// it was stopped because one is no longer inside a mount root.
+	mounts       []hostproto.LaunchMount
+	rootStopSent bool
 }
 
 // Open loads a daemon from an enrolled state directory.
@@ -132,7 +143,8 @@ func newDaemon(cfg Config, stateDir string, id Identity, keys Keys, service Serv
 	interval := time.Duration(id.PollSeconds) * time.Second
 	d := &Daemon{Config: cfg, StateDir: stateDir, Identity: id, Keys: keys, Service: service, Runtime: runtime,
 		Ledger: ledger, Outbox: outbox, Sequence: newSequence(stateDir), Now: now, Random: random, Log: logger,
-		jobKey: jobKey, active: map[string]*activeLaunch{}, pollInterval: clampInterval(interval)}
+		jobKey: jobKey, active: map[string]*activeLaunch{}, pollInterval: clampInterval(interval),
+		MountRootsFile: DefaultMountRootsFile, mountFS: systemMountFS()}
 	if cfg.Broker != nil {
 		d.Broker = &DockerBroker{}
 	}
@@ -278,8 +290,11 @@ func (d *Daemon) PollOnce(ctx context.Context) error {
 		d.signMu.Unlock()
 		return err
 	}
+	// The host reports the roots it enforces, so the service can show where
+	// its own list differs; the service never changes them.
+	roots := d.reportedMountRoots()
 	request := hostproto.PollRequest{Header: header, MaxJobs: maxJobsPerPoll, Heartbeat: hostproto.Heartbeat{
-		Capabilities: d.capabilities(ctx), RunningLaunches: d.runningLaunches(), AgentVersion: Version, SealKey: d.sealKeyRecord()}}
+		Capabilities: d.capabilities(ctx), RunningLaunches: d.runningLaunches(), AgentVersion: Version, SealKey: d.sealKeyRecord(), MountRoots: &roots}}
 	env, err := hostproto.Seal(hostproto.DomainPoll, d.Keys.Signing, request)
 	if err != nil {
 		d.signMu.Unlock()
@@ -556,6 +571,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.logf("poll failed: %v", err)
 		}
 		d.EnforceGrace(ctx)
+		d.EnforceMountRoots(ctx)
 		if d.degradedReason() != "" {
 			d.retryReconcile(ctx)
 		}

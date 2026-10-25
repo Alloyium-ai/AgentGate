@@ -65,7 +65,7 @@ UPLOAD_CHUNK = 4 << 10
 MAX_LOG_READ = 1 << 20
 EVENT_QUEUE = 512
 RECEIPT_VERSION = 'agentgate.launch-receipt.v1'
-STOP_REASONS = ('stop_requested', 'service_unreachable', 'lost_host', 'host_shutdown', 'deadline')
+STOP_REASONS = ('stop_requested', 'service_unreachable', 'lost_host', 'host_shutdown', 'deadline', 'mount_root_removed')
 
 
 class LaunchError(RuntimeError):
@@ -927,6 +927,8 @@ def snapshot_local(root, name, source, max_bytes=None, max_entries=None):
     import mounts
     mounts.check_name(name)
     mounts.check_source_rules(source, forbidden=(str(root),), home=None)
+    # Only a folder inside the host operator's own mount roots is copied.
+    mounts.check_host_roots(source, mounts.load_host_roots())
     mounts.check_live_directory(source)
     max_bytes = min(max_bytes or mounts.SNAPSHOT_MAX_BYTES, mounts.SNAPSHOT_MAX_BYTES)
     max_entries = min(max_entries or mounts.SNAPSHOT_MAX_ENTRIES, mounts.SNAPSHOT_MAX_ENTRIES)

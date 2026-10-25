@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +48,11 @@ type InstallOptions struct {
 	// SecretRoot and Broker configure brokered secrets (see Config).
 	SecretRoot string
 	Broker     *BrokerConfig
+	// SetMountRoots replaces the operator's mount roots file with
+	// MountRoots (empty: no host folder may be mounted); without it an
+	// existing file is kept and a missing one stays missing (no roots).
+	SetMountRoots bool
+	MountRoots    []string
 }
 
 // Installer performs an idempotent install. Its file roots and commands are
@@ -150,6 +156,12 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 	if err = cfg.Validate(); err != nil {
 		return err
 	}
+	private := []string{o.StateDir, cfg.secretRoot()}
+	if o.SetMountRoots {
+		if err = CheckLocalMountRoots(nonNil(o.MountRoots), private); err != nil {
+			return err
+		}
+	}
 	origin, _ := ServiceOrigin(o.ServiceURL, o.AllowLoopbackHTTP)
 	if err = in.prerequisites(o); err != nil {
 		return err
@@ -161,11 +173,15 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 	if err = ensurePrivateDir(stateDir); err != nil {
 		return err
 	}
+	reconfigured := false
 	if existing, loadErr := loadConfig(stateDir); loadErr == nil {
 		if existing.ServiceURL != cfg.ServiceURL || existing.Runtime != cfg.Runtime || existing.Instance != cfg.Instance {
 			return fmt.Errorf("hostd: this host is already installed for %s (%s, instance %s); uninstall it before changing the service or runtime",
 				existing.ServiceURL, existing.Runtime, existing.Instance)
 		}
+		before, _ := json.Marshal(existing)
+		after, _ := json.Marshal(cfg)
+		reconfigured = !bytes.Equal(before, after)
 	} else if !errors.Is(loadErr, os.ErrNotExist) {
 		return loadErr
 	}
@@ -193,6 +209,9 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 		in.say("enrolled as target %s (%s)", id.TargetID, id.TargetName)
 		in.sayKey(stateDir, id)
 	}
+	if err = in.mountRoots(o, private); err != nil {
+		return err
+	}
 	if o.Executable != "" {
 		if err = in.copyBinary(o.Executable, in.path(o.BinaryPath)); err != nil {
 			return err
@@ -216,7 +235,62 @@ func (in *Installer) Install(ctx context.Context, o InstallOptions) error {
 			return fmt.Errorf("hostd: systemctl %s: %w", strings.Join(args, " "), err)
 		}
 	}
+	if reconfigured {
+		// The daemon reads its configuration at start. A restart stops a
+		// running launch, so it waits until no job is unfinished.
+		if busy := in.unfinishedJobs(stateDir); busy > 0 {
+			in.say("the configuration changed, but %d job(s) are unfinished, so agentgate-hostd was not restarted; run systemctl restart agentgate-hostd after they end to apply it", busy)
+			return nil
+		}
+		if err = in.Run(ctx, "systemctl", "restart", "agentgate-hostd.service"); err != nil {
+			return fmt.Errorf("hostd: systemctl restart agentgate-hostd.service: %w", err)
+		}
+		in.say("restarted agentgate-hostd to apply the new configuration")
+	}
 	in.say("agentgate-hostd is running")
+	return nil
+}
+
+// unfinishedJobs counts the jobs the ledger records as not done; an
+// unreadable ledger counts as busy.
+func (in *Installer) unfinishedJobs(stateDir string) int {
+	ledger, err := openLedger(stateDir, time.Now)
+	if err != nil {
+		return 1
+	}
+	entries, err := ledger.Unfinished()
+	if err != nil {
+		return 1
+	}
+	return len(entries)
+}
+
+func nonNil(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
+}
+
+// mountRoots writes the operator's mount roots when asked and says which
+// apply: they belong to this host, and the service can never change them.
+func (in *Installer) mountRoots(o InstallOptions, private []string) error {
+	file := in.path(DefaultMountRootsFile)
+	if o.SetMountRoots {
+		if err := WriteMountRoots(file, nonNil(o.MountRoots), private); err != nil {
+			return err
+		}
+		in.say("wrote %s", DefaultMountRootsFile)
+	}
+	roots, err := LoadMountRoots(file, private)
+	switch {
+	case err != nil:
+		in.say("WARNING: %v; every host folder mount is refused until it is fixed (agentgate-hostd mount-roots --root PATH)", err)
+	case len(roots) == 0:
+		in.say("mount roots: none, so launches on this host cannot mount host folders (agentgate-hostd mount-roots --root PATH allows one)")
+	default:
+		in.say("mount roots (host folders launches may mount, enforced here whatever the service sends): %s", strings.Join(roots, ", "))
+	}
 	return nil
 }
 

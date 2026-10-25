@@ -660,3 +660,18 @@ func TestTargetRetireWaitsForTheHostOrForces(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 }
+
+func TestHostMountRootsText(t *testing.T) {
+	none, roots := []string{}, []string{"/srv/repos/app"}
+	cases := map[string]Target{
+		"not reported by the host":       {MountRoots: []string{"/srv"}},
+		"none (the host refuses every":   {HostMountRoots: &none},
+		"/srv/repos/app":                 {HostMountRoots: &roots},
+		"MISMATCH: the host refuses mou": {HostMountRoots: &roots, MountRootsNotOnHost: []string{"/srv/repos"}},
+	}
+	for want, target := range cases {
+		if got := target.hostRootsText(); !strings.Contains(got, want) {
+			t.Errorf("%q does not say %q", got, want)
+		}
+	}
+}
