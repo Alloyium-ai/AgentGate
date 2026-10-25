@@ -571,7 +571,10 @@ func checkUpstreams(values []string) error {
 // ProtectedMountTrees may never be shared or contain a shared tree: system
 // trees, container and VM runtimes' state (their images and volumes hold
 // other workloads' data and credentials), the host's backups (which include
-// copies of /etc/shadow), logs, mail and spools.
+// copies of /etc/shadow), logs, mail and spools. It is the one list of these
+// rules: the guard (internal/dockerplacement) calls CheckProtectedSource, and
+// poc/ssh-diagnostic/mounts.py holds a block generated from it
+// (TestPythonMountRulesAreGeneratedFromHostproto).
 var ProtectedMountTrees = []string{"/proc", "/sys", "/dev", "/run", "/var/run", "/etc", "/root", "/boot", "/usr", "/bin",
 	"/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/var/lib/docker", "/var/lib/containerd",
 	"/var/lib/cloud", "/var/lib/kubelet", "/snap", "/var/lib/agentgate",
@@ -614,6 +617,10 @@ func MountUnderRoots(source string, roots []string) bool {
 	return false
 }
 
+// InstanceDirPrefix starts the AgentGate instance and host agent directories
+// (/var/lib/agentgate-poc-NAME, /var/lib/agentgate-hostd); no source is below one.
+const InstanceDirPrefix = "/var/lib/agentgate-"
+
 // secretComponents are per-user credential stores; a source may not contain or
 // sit inside one.
 var secretComponents = []string{".ssh", ".gnupg", ".aws", ".azure", ".config", ".docker", ".kube", ".netrc",
@@ -633,12 +640,22 @@ func CheckMountSource(source string) error {
 	if len(source) > 4096 || !BindSourcePattern.MatchString(source) || path.Clean(source) != source || source == "/" {
 		return fmt.Errorf("hostproto: mount source must be a canonical absolute path of safe characters: %q", source)
 	}
+	return CheckProtectedSource(source)
+}
+
+// CheckProtectedSource refuses a canonical absolute source that overlaps a
+// protected tree, lies below an instance directory, passes through a
+// credential store, or is a home directory or contains one.
+func CheckProtectedSource(source string) error {
+	if source == "" || source[0] != '/' || source == "/" {
+		return fmt.Errorf("hostproto: mount source must be an absolute path other than /: %q", source)
+	}
 	for _, p := range ProtectedMountTrees {
 		if overlaps(source, p) {
 			return fmt.Errorf("hostproto: mount source %s overlaps protected tree %s", source, p)
 		}
 	}
-	if strings.HasPrefix(source, "/var/lib/agentgate-") {
+	if strings.HasPrefix(source, InstanceDirPrefix) || strings.HasPrefix(InstanceDirPrefix, source+"/") {
 		return errors.New("hostproto: mount source overlaps an AgentGate instance directory")
 	}
 	parts := strings.Split(source[1:], "/")

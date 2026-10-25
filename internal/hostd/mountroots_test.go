@@ -410,7 +410,7 @@ func TestMountRootsMatchThePythonRuntime(t *testing.T) {
 	script := `import json, os, sys
 sys.path.insert(0, sys.argv[1])
 import mounts
-out = {'protected': list(mounts.LAUNCH_PROTECTED), 'secrets': list(mounts.LAUNCH_SECRET_COMPONENTS)}
+out = {'protected': list(mounts.PROTECTED), 'secrets': list(mounts.SECRET_NAMES)}
 try:
     out['roots'] = mounts.load_host_roots(sys.argv[2], owner=os.geteuid())
 except mounts.MountError as error:
@@ -445,11 +445,11 @@ print(json.dumps(out))`
 	protected, _ := json.Marshal(view["protected"])
 	want, _ := json.Marshal(hostproto.ProtectedMountTrees)
 	if !bytes.Equal(protected, want) {
-		t.Fatalf("mounts.LAUNCH_PROTECTED %s differs from hostproto.ProtectedMountTrees %s", protected, want)
+		t.Fatalf("mounts.PROTECTED %s differs from hostproto.ProtectedMountTrees %s", protected, want)
 	}
 	secrets, _ := json.Marshal(view["secrets"])
 	if want, _ := json.Marshal(hostproto.SecretComponents()); !bytes.Equal(secrets, want) {
-		t.Fatalf("mounts.LAUNCH_SECRET_COMPONENTS %s differs from hostproto's %s", secrets, want)
+		t.Fatalf("mounts.SECRET_NAMES %s differs from hostproto's %s", secrets, want)
 	}
 	roots, _ := json.Marshal(view["roots"])
 	if string(roots) != `["`+root+`"]` {

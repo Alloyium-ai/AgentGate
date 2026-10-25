@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"alloyium.local/kernel-poc/internal/hostproto"
 )
 
 // HostMountRoot is the only container directory that may hold host folder
@@ -23,42 +25,15 @@ const MaxHostMounts = 8
 
 var hostMountName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
-// Host trees that may never be bound into a target, or contain a bound tree.
-// poc/ssh-diagnostic/mounts.py PROTECTED holds the same list; a test binds them.
-var protectedHostTrees = []string{
-	"/proc", "/sys", "/dev", "/run", "/var/run", "/etc", "/root", "/boot",
-	"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
-	"/var/lib/docker", "/var/lib/containerd", "/var/lib/cloud", "/var/lib/kubelet", "/snap",
-}
-
-// Per-user credential stores. A source may not pass through or contain one,
-// wherever the home directory is. Mirrors mounts.py SECRET_NAMES.
-var credentialStores = []string{".ssh", ".gnupg", ".aws", ".azure", ".config", ".docker", ".kube", ".netrc",
-	".git-credentials", ".local/share/agentgate", ".password-store", ".vault-token"}
-
-// instancePrefix names the POC instance directories; mirrors mounts.py INSTANCE_PREFIX.
-const instancePrefix = "/var/lib/agentgate-poc-"
-
-// protectedSource applies the static source rules shared with mounts.py.
-// The guard cannot know the operator's $HOME, so a home directory (/home or
-// /home/NAME) and any credential store below any directory are refused.
+// protectedSource applies the static source rules every component shares
+// (hostproto.CheckProtectedSource: the protected trees, the instance
+// directories, credential stores and home directories; mounts.py holds a
+// block generated from the same list). The guard cannot know the operator's
+// $HOME, so a home directory (/home or /home/NAME) and any credential store
+// below any directory are refused.
 func protectedSource(source string) error {
-	for _, protected := range protectedHostTrees {
-		if overlaps(source, protected) {
-			return fmt.Errorf("host folder %s overlaps protected host tree %s", source, protected)
-		}
-	}
-	if strings.HasPrefix(source, instancePrefix) || strings.HasPrefix(instancePrefix, source+"/") {
-		return fmt.Errorf("host folder %s overlaps an AgentGate instance directory", source)
-	}
-	parts := strings.Split(strings.TrimPrefix(source, "/"), "/")
-	if parts[0] == "home" && len(parts) <= 2 {
-		return fmt.Errorf("host folder %s is a home directory or contains one", source)
-	}
-	for _, store := range credentialStores {
-		if strings.Contains(source+"/", "/"+store+"/") {
-			return fmt.Errorf("host folder %s passes through the credential store %s", source, store)
-		}
+	if err := hostproto.CheckProtectedSource(source); err != nil {
+		return fmt.Errorf("host folder %s: %s", source, strings.TrimPrefix(err.Error(), "hostproto: "))
 	}
 	return nil
 }

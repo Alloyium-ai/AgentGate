@@ -324,10 +324,15 @@ Run the same command again to refresh it. Changes inside the VM never reach this
 through the workspace instead.
 
 Rules for every folder: at most eight; canonical paths with no symlink; not `/`, `/etc`, `/root`, `/proc`, `/sys`, `/dev`, `/run`,
-`/var/run`, `/boot`, `/usr`, `/bin`, `/sbin`, `/lib*`, `/var/lib/docker`, `/var/lib/containerd`, or any tree that contains one;
-not your home directory (`$HOME`) or a directory containing it; not overlapping `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`,
-`~/.docker`, `~/.kube`, or the other credential stores `mounts.py` lists; not overlapping the state directory, the policy directory, or
-any `/var/lib/agentgate-poc-*` instance; no further mount below a live folder; sources of two folders never overlap. Share a project
+`/var/run`, `/boot`, `/usr`, `/bin`, `/sbin`, `/lib*`, container and VM runtime state (`/var/lib/docker`, `containerd`,
+`containers`, `rancher`, `kubelet`, `libvirt`, `lxd`, `incus`, `cloud`), `/var/lib/systemd`, `/var/lib/private`, `/var/lib/sss`,
+`/var/lib/polkit-1`, `/var/lib/sudo`, `/var/lib/agentgate`, `/var/backups`, `/var/log`, `/var/mail`, `/var/spool`, `/snap`,
+`/lost+found`, or any tree that contains one; not your home directory (`$HOME`) or a directory containing it; not passing through
+`.ssh`, `.gnupg`, `.aws`, `.azure`, `.config`, `.docker`, `.kube`, `.local`, `.netrc`, `.git-credentials`, `.password-store` or
+`.vault-token`; not overlapping the state directory, the policy directory, or any `/var/lib/agentgate-*` instance or host agent
+directory; no further mount below a live folder; sources of two folders never overlap. These are the same rules the service,
+`agentgate-hostd` and the guard apply: `mounts.py` holds a block generated from `hostproto.ProtectedMountTrees`, the guard calls
+`hostproto.CheckProtectedSource`, and a test fails when any of them judges a folder differently. Share a project
 folder, not a whole home or system tree: everything inside the folder, including `.git` and any `.env` file, becomes visible. Live bind paths may use only letters, digits, and `. _ @ + - /`.
 The target binding (`target.json`) lists each approved mount; the guard (`dockerplacement`) and the gateway both refuse a target whose
 Docker mounts differ in any way, a read-only folder that the kernel mount table does not show read-only, a further mount below a folder,

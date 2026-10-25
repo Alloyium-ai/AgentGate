@@ -3,53 +3,72 @@
 package dockerplacement
 
 import (
-	"os"
-	"regexp"
+	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
+
+	"alloyium.local/kernel-poc/internal/hostproto"
 )
 
-func pythonTuple(t *testing.T, source, name string) []string {
-	t.Helper()
-	match := regexp.MustCompile(`(?s)\n` + name + ` = \((.*?)\)\n`).FindStringSubmatch(source)
-	if match == nil {
-		t.Fatalf("mounts.py lacks %s", name)
-	}
-	var out []string
-	for _, item := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(match[1], -1) {
-		out = append(out, item[1])
-	}
-	return out
+// sourceCases are host folders every component must judge alike: the review
+// found the guard and mounts.py accepting the first group while hostproto
+// refused it.
+var sourceCases = map[string]bool{
+	"/var/backups": false, "/var/log": false, "/var/lib/sudo": false, "/var/lib/sss": false, "/var/lib/agentgate": false,
+	"/var/lib/agentgate/secrets": false, "/var/lib/containers/storage": false, "/var/spool/cron": false, "/home/a/.local/bin": false,
+	"/var/lib/agentgate-x": false, "/var/lib/agentgate-hostd": false, "/var/lib/agentgate-poc-demo": false, "/home": false, "/home/alice": false,
+	"/srv/x/.ssh": false, "/srv/x/.ssh/keys": false, "/data/.local/share/agentgate": false, "/var/lib": false, "/snap/core": false,
+	"/var/lib/kubelet/pods": false, "/var/lib/cloud": false, "/etc/ssh": false, "/var": false,
+	"/home/alice/src/app": true, "/srv/repos/app": true, "/data/sshkeys-docs": true, "/var/lib/postgresql/16": true, "/opt/tools": true,
+	"/srv/local/bin": true, "/srv/agentgate-data": true,
 }
 
-// The guard and the operator-side validator refuse exactly the same trees.
-func TestProtectedTreesMatchTheMountValidator(t *testing.T) {
-	raw, err := os.ReadFile("../../poc/ssh-diagnostic/mounts.py")
+// The guard, hostproto and the Python runtime refuse exactly the same host
+// folders: the guard calls hostproto.CheckProtectedSource and mounts.py holds
+// a block generated from hostproto (internal/hostproto
+// TestPythonMountRulesAreGeneratedFromHostproto). This fails if any of the
+// three judges a case differently.
+func TestEveryCopyOfTheProtectedMountRulesAgrees(t *testing.T) {
+	sources := make([]string, 0, len(sourceCases))
+	for source, ok := range sourceCases {
+		sources = append(sources, source)
+		if guard := protectedSource(source) == nil; guard != ok {
+			t.Errorf("the guard judges %s %t, want %t", source, guard, ok)
+		}
+		if proto := hostproto.CheckMountSource(source) == nil; proto != ok {
+			t.Errorf("hostproto judges %s %t, want %t", source, proto, ok)
+		}
+	}
+	python, err := exec.LookPath("python3")
 	if err != nil {
-		t.Fatal(err)
+		t.Skip("python3 unavailable; the Python side was not compared")
 	}
-	source := string(raw)
-	if got, want := strings.Join(pythonTuple(t, source, "PROTECTED"), ","), strings.Join(protectedHostTrees, ","); got != want {
-		t.Fatalf("PROTECTED %s\nGo        %s", got, want)
+	script := `import json, sys
+sys.path.insert(0, sys.argv[1])
+import mounts
+out = {}
+for source in sys.argv[2:]:
+    try:
+        mounts.check_bind_source(source)
+        out[source] = True
+    except mounts.MountError:
+        out[source] = False
+print(json.dumps(out))`
+	raw, err := exec.Command(python, append([]string{"-I", "-c", script, "../../poc/ssh-diagnostic"}, sources...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("python: %v %s", err, raw)
 	}
-	if got, want := strings.Join(pythonTuple(t, source, "SECRET_NAMES"), ","), strings.Join(credentialStores, ","); got != want {
-		t.Fatalf("SECRET_NAMES %s\nGo           %s", got, want)
+	var judged map[string]bool
+	if err = json.Unmarshal(raw, &judged); err != nil {
+		t.Fatalf("python output %s", raw)
 	}
-	if !strings.Contains(source, "INSTANCE_PREFIX = '"+instancePrefix+"'") {
-		t.Fatal("instance prefix differs")
-	}
-}
-
-func TestProtectedSourceRefusesHomesStoresAndInstances(t *testing.T) {
-	for _, source := range []string{"/home", "/home/alice", "/srv/x/.ssh", "/srv/x/.ssh/keys", "/data/.local/share/agentgate",
-		"/var/lib/agentgate-poc-demo", "/var/lib", "/snap/core", "/var/lib/kubelet/pods", "/var/lib/cloud"} {
-		if protectedSource(source) == nil {
-			t.Errorf("%s accepted", source)
+	for source, ok := range sourceCases {
+		if judged[source] != ok {
+			t.Errorf("mounts.py judges %s %t, want %t", source, judged[source], ok)
 		}
 	}
-	for _, source := range []string{"/home/alice/src/app", "/srv/repos/app", "/data/sshkeys-docs"} {
-		if err := protectedSource(source); err != nil {
-			t.Errorf("%s refused: %v", source, err)
-		}
+	if !strings.Contains(string(raw), "/srv/repos/app") {
+		t.Fatal("the Python side judged nothing")
 	}
 }

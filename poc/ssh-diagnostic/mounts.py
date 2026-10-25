@@ -24,14 +24,25 @@ MAX_MOUNTS = 8
 NAME = re.compile(r'[a-z0-9][a-z0-9_-]{0,31}')
 # Docker parses --mount as CSV. A bind source keeps to characters that need no quoting.
 BIND_SOURCE = re.compile(r'/[A-Za-z0-9._@+/-]{1,4095}')
-# Host trees that may never be shared or contain a shared tree.
-PROTECTED = ('/proc', '/sys', '/dev', '/run', '/var/run', '/etc', '/root', '/boot', '/usr', '/bin',
-             '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/var/lib/docker', '/var/lib/containerd',
-             '/var/lib/cloud', '/var/lib/kubelet', '/snap')
-INSTANCE_PREFIX = '/var/lib/agentgate-poc-'
-# Per-user secret stores below a home directory.
-SECRET_NAMES = ('.ssh', '.gnupg', '.aws', '.azure', '.config', '.docker', '.kube', '.netrc',
-                '.git-credentials', '.local/share/agentgate', '.password-store', '.vault-token')
+# The protected trees, the instance directory prefix and the credential store
+# names: one list for every component, hostproto.ProtectedMountTrees. The
+# block below is generated from it; edit the Go list and run
+# AGENTGATE_WRITE_PROTECTED_MOUNTS=1 go test ./internal/hostproto -run TestPythonMountRules
+# BEGIN GENERATED FROM internal/hostproto
+PROTECTED = (
+    '/proc', '/sys', '/dev', '/run', '/var/run', '/etc', '/root', '/boot', '/usr', '/bin', '/sbin',
+    '/lib', '/lib32', '/lib64', '/libx32', '/var/lib/docker', '/var/lib/containerd',
+    '/var/lib/cloud', '/var/lib/kubelet', '/snap', '/var/lib/agentgate', '/var/lib/containers',
+    '/var/lib/rancher', '/var/lib/systemd', '/var/lib/private', '/var/lib/libvirt', '/var/lib/lxd',
+    '/var/lib/incus', '/var/lib/sss', '/var/lib/polkit-1', '/var/lib/sudo', '/var/backups',
+    '/var/log', '/var/mail', '/var/spool', '/lost+found',
+)
+INSTANCE_PREFIX = '/var/lib/agentgate-'
+SECRET_NAMES = (
+    '.ssh', '.gnupg', '.aws', '.azure', '.config', '.docker', '.kube', '.netrc', '.git-credentials',
+    '.password-store', '.vault-token', '.local',
+)
+# END GENERATED FROM internal/hostproto
 SNAPSHOT_MAX_BYTES = 256 << 20
 SNAPSHOT_MAX_ENTRIES = 20000
 # The host folders this host's own operator allows a launch to mount or
@@ -41,17 +52,6 @@ SNAPSHOT_MAX_ENTRIES = 20000
 HOST_ROOTS = '/etc/agentgate/mount-roots.json'
 HOST_ROOTS_VERSION = 'agentgate.hostd-mount-roots.v1'
 MAX_HOST_ROOTS = 16
-# hostproto.ProtectedMountTrees, which every launch mount and mount root must
-# stay clear of (a Go test keeps the two lists equal).
-LAUNCH_PROTECTED = ('/proc', '/sys', '/dev', '/run', '/var/run', '/etc', '/root', '/boot', '/usr', '/bin',
-                    '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/var/lib/docker', '/var/lib/containerd',
-                    '/var/lib/cloud', '/var/lib/kubelet', '/snap', '/var/lib/agentgate',
-                    '/var/lib/containers', '/var/lib/rancher', '/var/lib/systemd', '/var/lib/private', '/var/lib/libvirt',
-                    '/var/lib/lxd', '/var/lib/incus', '/var/lib/sss', '/var/lib/polkit-1', '/var/lib/sudo', '/var/backups',
-                    '/var/log', '/var/mail', '/var/spool', '/lost+found')
-# hostproto's credential store components: no mount root passes through one.
-LAUNCH_SECRET_COMPONENTS = ('.ssh', '.gnupg', '.aws', '.azure', '.config', '.docker', '.kube', '.netrc',
-                            '.git-credentials', '.password-store', '.vault-token', '.local')
 
 
 class MountError(ValueError):
@@ -154,7 +154,7 @@ def check_source_rules(source, forbidden=(), home=None):
         if overlaps(source, protected):
             raise MountError('%s overlaps protected host tree %s' % (source, protected))
     if source.startswith(INSTANCE_PREFIX) or INSTANCE_PREFIX.startswith(source.rstrip('/') + '/'):
-        raise MountError('%s overlaps an AgentGate instance directory' % source)
+        raise MountError('%s overlaps an AgentGate instance or host agent directory' % source)
     # The same rules the guard applies without knowing $HOME (dockerplacement
     # protectedSource): no home directory itself, no credential store anywhere.
     parts = source.strip('/').split('/')
@@ -187,14 +187,6 @@ def _host_root_rules(root):
     """The rules a mount root must pass (hostproto.CheckMountRoots, per root)."""
     if not isinstance(root, str) or not BIND_SOURCE.fullmatch(root) or os.path.normpath(root) != root or root == '/':
         raise MountError('a mount root must be a canonical absolute path of letters, digits and . _ @ + - /: ' + repr(root))
-    for protected in LAUNCH_PROTECTED:
-        if overlaps(root, protected):
-            raise MountError('mount root %s overlaps protected host tree %s' % (root, protected))
-    if root.startswith('/var/lib/agentgate-'):
-        raise MountError('mount root %s overlaps an AgentGate instance or host agent directory' % root)
-    for part in root.strip('/').split('/'):
-        if part in LAUNCH_SECRET_COMPONENTS:
-            raise MountError('mount root %s passes through the credential store %s' % (root, part))
     check_source_rules(root)
     return root
 
