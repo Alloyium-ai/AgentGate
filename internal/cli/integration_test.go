@@ -90,6 +90,15 @@ type fakeHostd struct {
 	seq    uint64
 	seal   *secretseal.HostKey
 	store  *secretseal.Store
+	// caps replaces fakeHostCaps when set.
+	caps []string
+}
+
+func (h *fakeHostd) capabilities() []string {
+	if h.caps != nil {
+		return h.caps
+	}
+	return fakeHostCaps
 }
 
 var fakeHostCaps = []string{hostproto.CapabilityDocker, hostproto.CapabilityLiveMounts, hostproto.CapabilitySnapshots, hostproto.CapabilityBroker, hostproto.CapabilityBrokeredSecrets, hostproto.CapabilityPOCPolicyV2}
@@ -130,7 +139,7 @@ func (h *fakeHostd) header() hostproto.Header {
 
 func (h *fakeHostd) enroll(token string) hostproto.EnrollResponse {
 	req := hostproto.EnrollRequest{Token: token, PublicKey: hostproto.EncodeKey(h.key.Public().(ed25519.PublicKey)), EncryptionKey: hostproto.EncodeKey(h.box.PublicKey().Bytes()),
-		Hostname: "host-1", Capabilities: fakeHostCaps, AgentVersion: "0.1.0", Nonce: hostNonce(), TimestampMS: time.Now().UnixMilli()}
+		Hostname: "host-1", Capabilities: h.capabilities(), AgentVersion: "0.1.0", Nonce: hostNonce(), TimestampMS: time.Now().UnixMilli()}
 	var resp hostproto.EnrollResponse
 	h.post(hostproto.PathEnroll, hostproto.DomainEnroll, req, &resp)
 	if err := hostproto.VerifyEnrollResponse(token, resp); err != nil {
@@ -154,7 +163,7 @@ func (h *fakeHostd) poll(running ...string) []hostproto.Job {
 		record, _ = json.Marshal(h.seal.Published())
 	}
 	var resp hostproto.PollResponse
-	h.post(hostproto.PathPoll, hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: fakeHostCaps, RunningLaunches: running, AgentVersion: "0.1.0", SealKey: record}, MaxJobs: 16}, &resp)
+	h.post(hostproto.PathPoll, hostproto.DomainPoll, hostproto.PollRequest{Header: h.header(), Heartbeat: hostproto.Heartbeat{Capabilities: h.capabilities(), RunningLaunches: running, AgentVersion: "0.1.0", SealKey: record}, MaxJobs: 16}, &resp)
 	jobs := []hostproto.Job{}
 	for _, env := range resp.Jobs {
 		var job hostproto.Job

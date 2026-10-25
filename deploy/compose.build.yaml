@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Dan Metcalf
+#
+# Build the control service image from this checkout instead of using the
+# CI-built one. Everything else (read-only root file system, no capabilities,
+# user 10001, the TLS front on 127.0.0.1:9443) comes unchanged from
+# compose.yaml. Paths are relative to the first compose file (the repository
+# root):
+#
+#   export AGENTGATE_IMAGE=agentgate-local:dev
+#   docker compose -f compose.yaml -f deploy/compose.build.yaml build control
+#   sudo -E agentgate up --compose-file compose.yaml --admin-user ada --target local
+#
+# The build runs the Dockerfile's tests (go test -race, the web checks) and
+# needs network access for its pinned base images.
+services:
+  control:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    pull_policy: never

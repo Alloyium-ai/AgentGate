@@ -499,6 +499,61 @@ targets that host enrolled and the secrets scoped to them; rotate those secrets 
 
 
 
+## Deploy
+
+Build the release set on a machine with Go (static binaries, `-trimpath`):
+
+```sh
+make agentgate        # build/agentgate, agentgate-hostd, agentgate-broker, community,
+                      # agentgate-broker@.service and build/SHA256SUMS
+```
+
+`make all` builds the control service as `build/community` (it was `build/agentgate`; that name is now the CLI).
+
+Install it on each machine that runs the CLI or a host agent (`deploy/install.sh`, as root):
+
+```sh
+sudo deploy/install.sh --from build [--sha256sums <SHA-256 of SHA256SUMS from the release page>]
+```
+
+It checks the prerequisites (Linux, coreutils, `useradd`; it warns when Docker, Python 3, systemd, `setpriv` or a
+BPF LSM kernel are missing, because a host that runs launches needs them), copies the release into a private
+directory, verifies every file against `SHA256SUMS` there (and `SHA256SUMS` itself against `--sha256sums`), and
+only then installs `/usr/local/bin/agentgate`, `/usr/local/sbin/agentgate-hostd`,
+`/usr/local/libexec/agentgate/{agentgate-broker,community}` and the sample `agentgate-broker@.service`, creates the
+system user `agentgate-broker` (uid and gid 10002 by default, the host agent's `--broker-uid`/`--broker-gid`), and
+the root-owned directories `/etc/agentgate` (0755), `/etc/agentgate/broker` (0700), `/var/lib/agentgate` (0755),
+`/var/lib/agentgate/secrets` (0700) and `/var/lib/agentgate/broker` (0711). It refuses, before changing anything, a
+checksum mismatch, an unlisted or missing file, a symlink, a destination below a group- or world-writable or
+non-root-owned directory, a user or id that already belongs to someone else, and a non-root run. A second run
+reports every file unchanged. It does not enroll the host: `agentgate up` (or `agentgate-hostd install`) does that
+and writes the `agentgate-hostd` unit. `--root DIR` stages the same tree below `DIR` without users or systemctl, for
+packaging; the tests use it.
+
+Run the control service with Docker Compose (`compose.yaml`: the service read-only, without capabilities, as user
+10001, on an internal network; Caddy terminates TLS on `127.0.0.1:9443` with its local CA):
+
+```sh
+export AGENTGATE_IMAGE=registry.example/agentgate@sha256:<digest>     # the CI-built image
+sudo -E agentgate up --compose-file compose.yaml --admin-user ada --target local
+```
+
+- To build the image from this checkout instead: `AGENTGATE_IMAGE=agentgate-local:dev docker compose -f
+  compose.yaml -f deploy/compose.build.yaml build control`, then the same `agentgate up`.
+- Hosts on other machines need the TLS front published: `AGENTGATE_PUBLIC_HOST=agentgate.example.internal docker
+  compose -f compose.yaml -f deploy/compose.public.yaml up -d` (Compose 2.24.4 or later) with `public_url` set to
+  `https://agentgate.example.internal:9443` in `settings.json`. It publishes only HTTPS on 9443
+  (`deploy/Caddyfile.public`, still `tls internal`; give hosts the CA with `--ca-file`, or use your own
+  certificate).
+
+Then check everything from any machine with the CLI: `agentgate doctor --target NAME` reports the service, clock
+skew, token, target state, host key approval and local pin, heartbeat age, `bpf-lsm` and `brokered-secrets`, each
+with the exact fix.
+
+Not exercised here: `install.sh` as root on a real system (user creation, `systemctl daemon-reload`), both compose
+overrides (`docker compose config` included) and the image build, because the build sandbox has no Docker, no
+systemd and no BPF LSM kernel. `shellcheck` was not available.
+
 ## API cookbook
 
 The examples use an API token in `$T` and the service origin in `$U`. Browser sessions send the same bodies with the

@@ -247,6 +247,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `login URL [--token-stdin] [--username U] [--role R] [--expires 30d] [--save-as NAME]` | `/auth/local/*`, `POST /api-tokens` | password sign-in mints a token; `--token-stdin` saves an existing one |
 | `logout [--revoke]` | `DELETE /api-tokens/{id}` with `--revoke` | removes the saved token; `--revoke` signs in and revokes it |
 | `whoami` | `GET /launch-spec-schema` | shows what the context recorded and checks the token is accepted |
+| `doctor [--target NAME] [--max-heartbeat-age D]` | `GET /healthz`, `GET /launch-spec-schema`, `GET /targets/{id}` | read-only checks, each `ok`, `warn` or `FAIL` with the exact fix: the service answers; the clock skew against the service's `Date` (fails beyond the 60 s the service allows hosts); the token; the target exists and is active; its host key is approved and pinned here; its last heartbeat is younger than three heartbeats; it reports `bpf-lsm` (the runtime's `kernel-bpf-lsm` preflight) and `brokered-secrets` with a published seal key. Exit 1 when anything failed |
 | `context ls \| use NAME \| rm NAME` | none | local contexts |
 | `target ls` | `GET /targets` | with the local pin state |
 | `target add NAME [--token-file F]` | `POST /targets` | prints the one-time enrollment token once, or writes it to a new 0600 file |

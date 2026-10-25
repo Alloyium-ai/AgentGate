@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Build outputs (make agentgate, make all); never committed.
+/build/

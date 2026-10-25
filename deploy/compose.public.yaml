@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Dan Metcalf
+#
+# Publish the TLS front to other machines (hosts that run agentgate-hostd,
+# and browsers) instead of only this machine's loopback interface. An
+# explicit opt-in: compose.yaml alone binds 127.0.0.1:9443. Nothing else
+# changes: the control service stays on the internal network, read-only and
+# without capabilities, and plain HTTP is never published.
+#
+#   export AGENTGATE_PUBLIC_HOST=agentgate.example.internal   # the name hosts and browsers use
+#   export AGENTGATE_BIND=192.0.2.10                           # optional: one interface (default all)
+#   # settings.json: "public_url": "https://agentgate.example.internal:9443"
+#   docker compose -f compose.yaml -f deploy/compose.public.yaml up -d
+#
+# Needs Docker Compose 2.24.4 or later (!override). deploy/Caddyfile.public
+# keeps `tls internal`: hosts and browsers must trust Caddy's local CA, which
+# `agentgate up` copies for the CLI (agentgate login URL --ca-file FILE
+# elsewhere). Replace it with your own certificate where you have one.
+services:
+  tls:
+    environment:
+      AGENTGATE_PUBLIC_HOST: ${AGENTGATE_PUBLIC_HOST:?Set AGENTGATE_PUBLIC_HOST to the host name hosts and browsers use}
+    ports: !override
+      - '${AGENTGATE_BIND:-0.0.0.0}:9443:9443'
+    volumes: !override
+      - ./deploy/Caddyfile.public:/etc/caddy/Caddyfile:ro
+      - tls-data:/data
+      - tls-config:/config

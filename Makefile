@@ -1,8 +1,24 @@
-.PHONY: all test
-all: build/agentgate build/agentgate-node build/enforce.bpf.o
-build/agentgate:
+.PHONY: all test agentgate FORCE
+all: build/community build/agentgate-node build/enforce.bpf.o
+build/community: FORCE
 	mkdir -p build
 	CGO_ENABLED=0 go build -trimpath -o $@ ./cmd/community
+
+# The AgentGate release set: the CLI, the host agent, the credential broker
+# and the control service, with SHA256SUMS for deploy/install.sh. Static
+# binaries; go build decides whether anything is stale.
+AGENTGATE_BINARIES := build/agentgate build/agentgate-hostd build/agentgate-broker build/community
+AGENTGATE_RELEASE := $(AGENTGATE_BINARIES) build/agentgate-broker@.service
+agentgate: $(AGENTGATE_RELEASE) build/SHA256SUMS
+build/agentgate build/agentgate-hostd build/agentgate-broker: FORCE
+	mkdir -p build
+	CGO_ENABLED=0 go build -trimpath -o $@ ./cmd/$(notdir $@)
+build/agentgate-broker@.service: cmd/agentgate-broker/agentgate-broker@.service
+	mkdir -p build
+	cp $< $@
+build/SHA256SUMS: $(AGENTGATE_RELEASE)
+	cd build && sha256sum $(notdir $(AGENTGATE_RELEASE)) > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS
+FORCE:
 build/agentgate-node:
 	mkdir -p build
 	CGO_ENABLED=0 go build -trimpath -o $@ ./cmd/poc
