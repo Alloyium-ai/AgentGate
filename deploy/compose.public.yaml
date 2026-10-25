@@ -4,8 +4,10 @@
 # Publish the TLS front to other machines (hosts that run agentgate-hostd,
 # and browsers) instead of only this machine's loopback interface. An
 # explicit opt-in: compose.yaml alone binds 127.0.0.1:9443. Nothing else
-# changes: the control service stays on the internal network, read-only and
-# without capabilities, and plain HTTP is never published.
+# changes: the control service stays on the compose control network (not
+# published, read-only and without capabilities), the TLS front keeps its
+# fixed address 10.231.207.2 there (the one trusted proxy), and plain HTTP is
+# never published.
 #
 #   export AGENTGATE_PUBLIC_HOST=agentgate.example.internal   # the name hosts and browsers use
 #   export AGENTGATE_BIND=192.0.2.10                           # optional: one interface (default all)

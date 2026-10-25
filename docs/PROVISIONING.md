@@ -667,7 +667,8 @@ and writes the `agentgate-hostd` unit. `--root DIR` stages the same tree below `
 packaging; the tests use it.
 
 Run the control service with Docker Compose (`compose.yaml`: the service read-only, without capabilities, as user
-10001, on an internal network; Caddy terminates TLS on `127.0.0.1:9443` with its local CA):
+10001, unpublished on the compose `control` bridge network, which is an ordinary bridge that local processes can
+reach; Caddy terminates TLS on `127.0.0.1:9443` with its local CA):
 
 ```sh
 export AGENTGATE_IMAGE=registry.example/agentgate@sha256:<digest>     # the CI-built image
@@ -697,13 +698,20 @@ root-owned in that user's home ([CLI.md](CLI.md#1-first-time-setup-bring-this-ma
   most 16 buckets in a table (its further `/56`s share one bucket), so one tunnel allocation cannot fill a table.
   Behind a reverse proxy every request has the proxy's address, so the service must be told which peers are proxies:
   `trusted_proxies` in `settings.json` lists their CIDR networks (default empty: no proxy is trusted and every
-  request is keyed by its TCP peer). The shipped `compose.yaml` pins the internal network to `10.231.207.0/28` and the
-  shipped `settings.json` trusts exactly that network; `Caddyfile` and `deploy/Caddyfile.public` replace any
-  client-sent `X-Forwarded-For` with the real client address (`header_up X-Forwarded-For {remote_host}`). A request
-  from a trusted proxy is keyed by the rightmost `X-Forwarded-For` entry that is not itself a trusted proxy (the
-  entries to its left are whatever the client sent); one without a well-formed `X-Forwarded-For` (at most 16 IP
-  addresses) is refused with `400 invalid_forwarded_for`. Change the subnet in
-  `compose.yaml` and `settings.json` together if `10.231.207.0/28` is taken on the machine; with another proxy, list
+  request is keyed by its TCP peer). The shipped `compose.yaml` gives the TLS front the fixed address `10.231.207.2` on
+  the `control` network (subnet `10.231.207.0/28`, other containers from `10.231.207.8/29` only), and the shipped
+  `settings.json` trusts exactly `10.231.207.2/32`. That network is an ordinary Docker bridge, not an internal one:
+  any process on the machine can connect to the service on it directly, arriving from the bridge gateway
+  `10.231.207.1`, so trusting the whole subnet would let it choose its own client address (a fresh password bucket
+  per guess, a forged audit source). Such a direct connection is keyed by the gateway instead. The service refuses to
+  start when a trusted network wider than one address contains a gateway of its own networks (the gateways in
+  `/proc/net/route` and the first address of each interface's network), and warns when it trusts exactly a gateway
+  address. `Caddyfile` and `deploy/Caddyfile.public` replace any client-sent `X-Forwarded-For` with the real client
+  address (`header_up X-Forwarded-For {remote_host}`). A request from a trusted proxy is keyed by the rightmost
+  `X-Forwarded-For` entry that is not itself a trusted proxy (the entries to its left are whatever the client sent);
+  one without a well-formed `X-Forwarded-For` (at most 16 IP addresses) is refused with `400
+  invalid_forwarded_for`. If `10.231.207.0/28` is taken on the machine, change the subnet, the range, the TLS front's
+  address in `compose.yaml` and the trusted address in `settings.json` together; with another proxy, list exactly
   its addresses. Do not list a network that untrusted clients can reach the service from directly.
 - **Host requests are not limited by client address.** `POST /api/v1/hostd/{poll,resync,jobs/{id}/events}` first
   verifies the request's signature against its target's enrolled key (one row read and one Ed25519 verification on a

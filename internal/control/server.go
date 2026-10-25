@@ -245,7 +245,7 @@ func ParseTrustedProxies(values []string) ([]netip.Prefix, error) {
 	for _, v := range values {
 		p, err := netip.ParsePrefix(v)
 		if err != nil || p.Masked() != p || p.String() != v {
-			return nil, errors.New("trusted_proxies entries are canonical CIDR networks such as 10.231.207.0/28")
+			return nil, errors.New("trusted_proxies entries are canonical CIDR networks such as 10.231.207.2/32")
 		}
 		out = append(out, p)
 	}

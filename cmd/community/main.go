@@ -274,6 +274,13 @@ func serve(store *control.Store, config *localconfig.Store, record localconfig.R
 	if app.TrustedProxies, err = control.ParseTrustedProxies(record.Settings.TrustedProxies); err != nil {
 		return err
 	}
+	warnings, err := control.CheckProxyTrust(app.TrustedProxies, control.LocalGateways())
+	if err != nil {
+		return err
+	}
+	for _, w := range warnings {
+		slog.Warn(w)
+	}
 	if err = control.CheckWeb(app.Web); err != nil {
 		return err
 	}

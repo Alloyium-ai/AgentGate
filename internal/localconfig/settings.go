@@ -23,8 +23,11 @@ type Settings struct {
 	// TrustedProxies are the CIDR networks of the reverse proxies in front
 	// of the service (at most 16). A request from one of them is limited by
 	// the client address it forwarded in X-Forwarded-For. Empty (the
-	// default) trusts no proxy; behind the shipped TLS front set it to the
-	// compose network (compose.yaml pins 10.231.207.0/28).
+	// default) trusts no proxy; behind the shipped TLS front it is exactly
+	// that container's fixed address, 10.231.207.2/32 (compose.yaml). Never
+	// list a range other clients reach the service from, such as a Docker
+	// bridge with its gateway: the service refuses to start with a network
+	// that contains a gateway of its own networks (control.CheckProxyTrust).
 	TrustedProxies []string `json:"trusted_proxies,omitempty"`
 }
 

@@ -7,8 +7,9 @@
 }
 https://localhost:9443 {
   tls internal
-  # The control service limits and audits by this exact client address
-  # (settings trusted_proxies): replace anything a client sent.
+  # The control service trusts this container's fixed address
+  # (10.231.207.2, settings trusted_proxies) and limits and audits by the
+  # client address it forwards: replace anything a client sent.
   reverse_proxy control:8930 {
     header_up X-Forwarded-For {remote_host}
   }

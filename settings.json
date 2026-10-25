@@ -5,5 +5,5 @@
   "session_seconds": 1800,
   "auth_mode": "local",
   "group_roles": {},
-  "trusted_proxies": ["10.231.207.0/28"]
+  "trusted_proxies": ["10.231.207.2/32"]
 }
