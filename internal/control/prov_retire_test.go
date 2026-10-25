@@ -106,7 +106,7 @@ func TestRetiringATargetRemovesItsSecretsFromTheHostFirst(t *testing.T) {
 	h := keeping(t, base)
 	f.profile("dev", false)
 	model := h.storeSecret(f, "model-api")
-	if _, err := os.Stat(filepath.Join(h.dir, "model-api")); err != nil {
+	if _, ok, err := h.store.Stored("model-api"); err != nil || !ok {
 		t.Fatal("the host does not hold the value")
 	}
 	// A secret whose secret-put never reached the host has nothing to remove.
@@ -165,7 +165,7 @@ func TestRetiringATargetRemovesItsSecretsFromTheHostFirst(t *testing.T) {
 	if types := h.answerDeletes(f, true); len(types) != 1 || types[0] != hostproto.JobSecretDelete {
 		t.Fatalf("a retiring host received %v", types)
 	}
-	if _, err := os.Stat(filepath.Join(h.dir, "model-api")); !os.IsNotExist(err) {
+	if _, ok, err := h.store.Stored("model-api"); err != nil || ok {
 		t.Fatal("the value is still on the host")
 	}
 	if s := secretState(f, model.ID); s.State != "deleted" || s.Removal != "" {

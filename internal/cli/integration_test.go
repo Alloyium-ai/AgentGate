@@ -400,7 +400,7 @@ func TestEndToEndAgainstTheRealService(t *testing.T) {
 		t.Fatal("secret set --wait did not see the receipt")
 	}
 	must(stored, 0, "Stored secret model-api for target local", "sealed with", "rules", "POST /v1/messages (exact)", "The host's receipt verifies: it stored exactly this value under this policy (fingerprint sfp1_", "policy digest")
-	if raw, err := os.ReadFile(filepath.Join(secretDir, "model-api")); err != nil || string(raw) != value {
+	if held, ok, err := host.store.Load("model-api"); err != nil || !ok || string(held.Value) != value {
 		t.Fatal("the host store does not hold exactly the value")
 	}
 	must(run("", "secret", "ls"), 0, "model-api", "stored", "sfp1_", "POST /v1/messages (exact)")

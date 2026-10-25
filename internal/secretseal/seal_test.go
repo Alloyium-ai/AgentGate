@@ -109,17 +109,23 @@ func TestSealOpenStoreAndReceipt(t *testing.T) {
 	if fp != f.store.Fingerprint("local", "anthropic", []byte(fakeValue)) || !strings.HasPrefix(fp, "sfp1_") {
 		t.Fatal(fp)
 	}
-	path, _ := f.store.SecretPath("anthropic")
-	got, err := os.ReadFile(path)
-	if err != nil || string(got) != fakeValue {
+	held, ok, err := f.store.Load("anthropic")
+	if err != nil || !ok || string(held.Value) != fakeValue || held.Fingerprint != fp || held.PolicyDigest != testPolicy {
 		t.Fatal("stored value differs")
 	}
+	held.Wipe()
+	path := f.store.recordPath("anthropic")
 	fi, _ := os.Stat(path)
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatal(fi.Mode())
 	}
-	meta, _ := os.ReadFile(filepath.Join(f.dir, "anthropic.meta.json"))
-	noValue(t, "metadata", meta)
+	// The record's metadata line names no value; the value follows it.
+	rec, _ := os.ReadFile(path)
+	line, value, _ := bytes.Cut(rec, []byte("\n"))
+	noValue(t, "metadata", line)
+	if string(value) != fakeValue {
+		t.Fatal("the record does not end with exactly the value")
+	}
 	// The fingerprint is keyed: a different host store gives a different one.
 	other := newFixture(t, "local")
 	if other.store.Fingerprint("local", "anthropic", []byte(fakeValue)) == fp {
@@ -279,8 +285,7 @@ func TestReplayStaleAndWrongContext(t *testing.T) {
 	if _, err := f.store.Accept(f.key, &first.Envelope, now.Add(time.Minute)); !errors.Is(err, ErrReplay) {
 		t.Fatalf("rollback: %v", err)
 	}
-	path, _ := f.store.SecretPath("anthropic")
-	if got, _ := os.ReadFile(path); string(got) != fakeValue+"2" {
+	if got, ok, _ := f.store.Load("anthropic"); !ok || string(got.Value) != fakeValue+"2" {
 		t.Fatal("a refused envelope changed the stored value")
 	}
 	old, _ := SealAt(f.pub, "local", "other", testPolicy, []byte(fakeValue), now.Add(-25*time.Hour))
@@ -564,7 +569,7 @@ func TestStoreValidateRefusesUnusableValues(t *testing.T) {
 	if _, err := f.store.Accept(f.key, &sealed.Envelope, now); !errors.Is(err, ErrValue) {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(f.dir, "anthropic")); err == nil {
+	if _, err := os.Stat(f.store.recordPath("anthropic")); err == nil {
 		t.Fatal("refused value was stored")
 	}
 }

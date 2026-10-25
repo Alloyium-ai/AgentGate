@@ -3,6 +3,7 @@
 package secretseal
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,10 +26,10 @@ func TestDeleteZeroesTheValueAndRefusesAReplayAfterwards(t *testing.T) {
 	if err != nil || !ok || st.Version != sealed.Envelope.Version || st.Fingerprint == "" || st.PolicyDigest != testPolicy {
 		t.Fatalf("stored %+v %v %v", st, ok, err)
 	}
-	path, _ := f.store.SecretPath("anthropic")
+	path := f.store.recordPath("anthropic")
 	link := filepath.Join(t.TempDir(), "held")
-	// A process that still holds the file (a broker that already read it)
-	// sees zeros, not the value, once it is deleted.
+	// A process that still holds the record sees zeros, not the value, once
+	// it is deleted: the tombstone replaces it and the old inode is zeroed.
 	held, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -37,23 +38,27 @@ func TestDeleteZeroesTheValueAndRefusesAReplayAfterwards(t *testing.T) {
 	if err := f.store.Delete("anthropic", now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	buf := make([]byte, len(fakeValue))
-	if n, _ := held.ReadAt(buf, 0); n != len(fakeValue) || string(buf) == fakeValue {
+	info, _ := held.Stat()
+	buf := make([]byte, info.Size())
+	if n, _ := held.ReadAt(buf, 0); n != len(buf) || bytes.Contains(buf, []byte(fakeValue)) {
 		t.Fatal("the deleted value was not overwritten")
 	}
 	for _, b := range buf {
 		if b != 0 {
-			t.Fatal("the deleted value was not zeroed")
+			t.Fatal("the deleted record was not zeroed")
 		}
-	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("the value file remains")
 	}
 	if _, ok, err := f.store.Stored("anthropic"); ok || err != nil {
 		t.Fatalf("a deleted secret is still reported: %v", err)
 	}
-	meta, _ := os.ReadFile(filepath.Join(f.dir, "anthropic.meta.json"))
-	noValue(t, "tombstone", meta)
+	if v, ok, err := f.store.Load("anthropic"); ok || v != nil || err != nil {
+		t.Fatalf("a deleted secret still loads: %v", err)
+	}
+	tomb, _ := os.ReadFile(path)
+	noValue(t, "tombstone", tomb)
+	if !bytes.Contains(tomb, []byte(`"deleted":true`)) {
+		t.Fatalf("no tombstone: %s", tomb)
+	}
 	if _, err := f.store.Accept(f.key, &sealed.Envelope, now.Add(3*time.Second)); !errors.Is(err, ErrReplay) {
 		t.Fatalf("a replay after delete: %v", err)
 	}
@@ -81,11 +86,14 @@ func TestDeleteZeroesTheValueAndRefusesAReplayAfterwards(t *testing.T) {
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
-	// A symlinked value file is never followed.
-	if err := os.Symlink(link, filepath.Join(f.dir, "linked")); err != nil {
+	// A symlinked record is never followed.
+	if err := os.Symlink(link, f.store.recordPath("linked")); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.store.Delete("linked", now); err == nil {
-		t.Fatal("a symlinked secret file was followed")
+		t.Fatal("a symlinked secret record was followed")
+	}
+	if _, _, err := f.store.Load("linked"); err == nil {
+		t.Fatal("a symlinked secret record was loaded")
 	}
 }

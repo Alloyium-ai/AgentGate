@@ -385,7 +385,10 @@ docker network connect --ip 172.30.7.3 "$NET" <target container>
 
 `$D` is 0700 and root-owned, `broker.json` is created exclusively with mode 0600, and `$D/stats` (0700) is owned by
 the broker's uid and gid (`--broker-uid`, `--broker-gid`, default 10002). The broker container never mounts the Docker
-socket, the whole secret store or anything of the target; it mounts exactly the store files of the launch's secrets.
+socket, the whole secret store or anything of the target. For each of the launch's secrets the host writes the value
+it verified against the binding to `$D/secrets/REF` (root, 0600, created exclusively; `$D/secrets` is 0700), mounts
+exactly those files read-only, and zeroes and removes them as soon as the broker reports `running` (again at teardown,
+and for every broker directory when a restarted host agent recovers). The broker never reads the store's records.
 The target never mounts a secret file, the store, the configuration or the stats. Docker user-namespace remapping changes file ownership inside the container; the custody checks
 then refuse root-owned files, so a remapped host must own the config and secret files by the remapped root uid. For a host without Docker, see the systemd sample (not exercised here).
 
@@ -423,10 +426,19 @@ then refuse root-owned files, so a remapped host must own the config and secret 
    `Store.Accept(key, envelope, now)` (directory owned by the host agent, mode 0700, under a lock) refuses a
    different target or key id, a version not newer than the stored one (replay and rollback), an envelope sealed more
    than 24 hours ago or more than 5 minutes in the future, and a value that `Store.Validate` rejects (set it to
-   `broker.ValidSecret`). It writes the value to `DIR/NAME` (0600, temporary file, fsync, rename, directory fsync) and
-   `DIR/NAME.meta.json` (version, nonce, fingerprint, policy digest; no value). The host agent keeps the policy itself
-   with the secret's binding (`secret-bindings.json`) and, at launch, refuses a secret whose stored policy does not
-   reproduce the digest both the binding and the store record hold.
+   `broker.ValidSecret`). It commits one record, `DIR/NAME.secret` (0600): a line of JSON metadata (version, nonce,
+   policy digest, keyed fingerprint, value length) followed by the value bytes, written to a fresh temporary file,
+   fsynced, renamed over the old record once, and the directory fsynced. A reader therefore sees the whole previous
+   record or the whole new one, never a value next to another value's version or policy; a failure or crash before
+   the rename leaves the previous record exactly as it was, and the temporary file is zeroed and removed under the
+   store lock the next time the store is opened. The replaced record is then overwritten with zeros through a
+   descriptor opened before the commit. A record whose value does not reproduce its fingerprint is refused. A store
+   that still holds the earlier two-file layout (`DIR/NAME` and `DIR/NAME.meta.json`) is refused whole
+   (`ErrLegacyStore`; `secret-put` fails with `store_legacy_format`): remove it and seal each secret again. The host
+   agent keeps the policy itself with the secret's binding (`secret-bindings.json`) and, at launch, reads the value
+   from the record, recomputes its fingerprint and refuses the secret unless that fingerprint, the record's and the
+   binding's are equal, the versions are equal, and the stored policy reproduces the digest both the binding and the
+   record hold.
 6. **Receipt.** `{format, target_id, name, version, key_id, nonce, policy_digest, fingerprint, tag}`. The fingerprint is
    `sfp1_` + the first 128 bits of HMAC-SHA256 under a random 32-byte key kept only in the host store, over the target,
    name and value: without that key a fingerprint reveals nothing, so a short or guessable secret cannot be brute
@@ -494,7 +506,8 @@ version, fingerprint, policy digest and the policy itself (`STATE/secret-binding
 value the service relayed for that exact secret id and only under its sealed policy, and answers with
 `secret_receipt` in the job result. Refusals map to fixed codes (`policy_mismatch`, `replayed_or_rolled_back`,
 `envelope_stale`, `envelope_wrong_context`, `envelope_unauthenticated`, `value_refused`, `envelope_malformed`). `secret-delete` is refused while a running launch uses the secret; otherwise
-`Store.Delete` overwrites and removes the value and keeps a tombstone of its version (see the fix below).
+`Store.Delete` commits a tombstone record that keeps the version (the same temporary file, fsync, rename, directory
+fsync) and then overwrites the replaced record with zeros (see the fix below).
 
 **Receipt relay.** The service accepts a successful `secret-put` only with a receipt for exactly the relayed envelope
 (target, name, version, key id, nonce, policy digest), stores it, shows its keyed fingerprint as `value_fingerprint`, and serves it

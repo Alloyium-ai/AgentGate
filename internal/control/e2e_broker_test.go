@@ -866,10 +866,13 @@ func TestBrokeredSecretEndToEnd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.stateDir, "brokers", launchID, "broker.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the broker configuration outlived the launch")
 	}
-	// The value exists exactly once on the host: its 0600 store file.
-	stored, err := os.ReadFile(filepath.Join(e.secrets, e.targetID, "anthropic"))
-	if err != nil || string(stored) != e2eSecret {
+	// The value exists exactly once on the host: its 0600 store record (the
+	// broker's copy is removed once it runs).
+	if stored, ok := e.hostValue("anthropic"); !ok || stored != e2eSecret {
 		t.Fatal("the host store does not hold the value")
+	}
+	if _, err := os.Stat(filepath.Join(e.stateDir, "brokers", launchID, "secrets")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the broker's secret copy outlived the launch")
 	}
 	if e.secretState(sec["id"].(string)) != "stored" {
 		t.Fatal("the secret changed state")
@@ -922,13 +925,13 @@ func TestBrokeredSecretRefusesReplayAndRollbackOfSecretPut(t *testing.T) {
 	// The service relays the same envelope again after a delete: a replay.
 	e.call("DELETE", "/api/v1/secrets/"+sec["id"].(string), e.admin, map[string]any{"reason": "Rotate the key"}, 200)
 	e.until("the secret to be deleted", func() bool { return e.secretState(sec["id"].(string)) == "deleted" })
-	if _, err := os.Stat(filepath.Join(e.secrets, e.targetID, "anthropic")); !errors.Is(err, os.ErrNotExist) {
+	if e.hostHolds("anthropic") {
 		t.Fatal("the deleted value remains on the host")
 	}
 	// An older envelope (sealed before the stored one) is a rollback.
 	rolled := e.putSecret("anthropic", older, []string{"oidc:lin"}, messageRules())
 	e.until("the rollback to be refused", func() bool { return e.secretState(rolled["id"].(string)) == "failed" })
-	if _, err := os.Stat(filepath.Join(e.secrets, e.targetID, "anthropic")); !errors.Is(err, os.ErrNotExist) {
+	if e.hostHolds("anthropic") {
 		t.Fatal("a rolled-back envelope set the deleted secret again")
 	}
 	var reason string

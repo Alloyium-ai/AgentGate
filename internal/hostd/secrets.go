@@ -174,6 +174,11 @@ func (d *Daemon) secretPutJob(job hostproto.Job, p hostproto.SecretPutPayload) {
 		return
 	}
 	store, err := d.secretStore()
+	if errors.Is(err, secretseal.ErrLegacyStore) {
+		d.logf("secret store %s: %v", d.secretDir(), err)
+		d.finish(job.ID, hostproto.ResultFailed, "store_legacy_format", "the secret store on this host holds the earlier two-file format; the host operator must remove it and every secret must be sealed again; nothing was stored", nil, "")
+		return
+	}
 	if err != nil {
 		d.finish(job.ID, hostproto.ResultFailed, "store_unavailable", "the secret store is unavailable; nothing was stored", nil, "")
 		return
@@ -249,22 +254,31 @@ func (d *Daemon) secretInUse(name string) bool {
 }
 
 // boundSecret checks that the store holds exactly the value the service
-// relayed for secretID under name, and returns the store file and the policy
-// stored with it. The binding's policy must reproduce the digest both the
-// binding and the store's own record hold (the store recorded the digest the
-// envelope sealed), so a damaged or edited binding is refused too.
-func (d *Daemon) boundSecret(store *secretseal.Store, bindings map[string]secretBinding, name, secretID string) (string, *hostproto.SecretPolicy, error) {
+// relayed for secretID under name, and returns that value and the policy
+// stored with it. The value is read from the store's one committed record;
+// its fingerprint is recomputed here and must equal both the record's and
+// the binding's, as must the version, so a value that differs from what the
+// sealing client was given a receipt for is never used. The binding's policy
+// must reproduce the digest both the binding and the record hold (the store
+// recorded the digest the envelope sealed), so a damaged or edited binding is
+// refused too. The caller wipes the value.
+func (d *Daemon) boundSecret(store *secretseal.Store, bindings map[string]secretBinding, name, secretID string) ([]byte, *hostproto.SecretPolicy, error) {
 	b, ok := bindings[name]
 	if !ok || b.SecretID != secretID {
-		return "", nil, fmt.Errorf("secret %s is not stored on this host for secret id %s", name, secretID)
+		return nil, nil, fmt.Errorf("secret %s is not stored on this host for secret id %s", name, secretID)
 	}
-	stored, held, err := store.Stored(name)
-	if err != nil || !held || stored.Version != b.Version || stored.Fingerprint != b.Fingerprint {
-		return "", nil, fmt.Errorf("secret %s on this host differs from its binding", name)
+	held, ok, err := store.Load(name)
+	if err != nil || !ok {
+		return nil, nil, fmt.Errorf("secret %s on this host differs from its binding", name)
 	}
-	if b.Policy == nil || b.PolicyDigest == "" || b.Policy.Digest() != b.PolicyDigest || stored.PolicyDigest != b.PolicyDigest {
-		return "", nil, fmt.Errorf("secret %s on this host has no sealed broker policy that matches its value; store it again", name)
+	fp := store.Fingerprint(d.Identity.TargetID, name, held.Value)
+	if held.Version != b.Version || fp != held.Fingerprint || fp != b.Fingerprint {
+		held.Wipe()
+		return nil, nil, fmt.Errorf("secret %s on this host differs from its binding", name)
 	}
-	path, err := store.SecretPath(name)
-	return path, b.Policy, err
+	if b.Policy == nil || b.PolicyDigest == "" || b.Policy.Digest() != b.PolicyDigest || held.PolicyDigest != b.PolicyDigest {
+		held.Wipe()
+		return nil, nil, fmt.Errorf("secret %s on this host has no sealed broker policy that matches its value; store it again", name)
+	}
+	return held.Value, b.Policy, nil
 }

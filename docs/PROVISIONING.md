@@ -448,7 +448,8 @@ agentgate schema launch-spec | completion bash|zsh|fish | version
 ## Credentials
 
 A secret value is entered once, on the operator's client, and reaches the target host through a path the service
-relays but cannot read. The host keeps the value in a root-owned 0600 file outside every sandbox mount. A per-launch
+relays but cannot read. The host keeps the value in one root-owned 0600 record with its version and sealed policy
+digest, outside every sandbox mount. A per-launch
 broker on the host holds it, listens on one exact private endpoint, forwards only allowed requests to an exact HTTPS
 origin allowlist, adds the credential to the requests it forwards, and records counts. The sandbox sees only the
 broker address. Design, threat model, configuration and limits: [BROKER.md](BROKER.md).
@@ -479,7 +480,12 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
   whose job settings or digest differ from that stored policy, and builds the broker from the stored policy, so neither
   the service nor its database decides where a credential goes. It refuses a different target or key, a version not newer than the stored one (replay or
   rollback of a rotated secret), an envelope older than 24 hours or more than 5 minutes ahead, and (with `Store.Validate` set to
-  `broker.ValidSecret`) a value the broker cannot inject (it needs 8 to 8192 bytes of visible ASCII). It writes the value atomically to its 0600 file.
+  `broker.ValidSecret`) a value the broker cannot inject (it needs 8 to 8192 bytes of visible ASCII). It commits the
+  value, its version, the envelope nonce, the policy digest and the keyed fingerprint as one record file (temporary
+  file, fsync, a single rename, directory fsync), so a failure or crash at any step leaves either the previous record
+  or the new one whole. At launch it reads the value from that record, recomputes its fingerprint, and refuses the
+  launch unless the fingerprint, version and policy digest equal both the record's and the binding's; the broker
+  reads a per-launch copy of exactly that verified value.
 - **Receipt.** The job result carries `{target_id, name, version, key_id, nonce, policy_digest, fingerprint, tag}`; the
   service refuses a receipt whose policy digest is not the envelope's (`receipt_mismatch`). The fingerprint
   is a keyed hash (HMAC-SHA256 under a random key that never leaves the host, truncated to 128 bits), so a short or
@@ -541,7 +547,7 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
    allowed_launchers, reason}` to `/secrets`. The service checks the envelope's target, name and key id and the broker
    settings, stores metadata, the envelope's SHA-256 and public context (format, key id, version, nonce), and queues
    `secret-put`.
-3. **Store.** The host opens the envelope into `SECRET_ROOT/<target>/<name>` (default `/var/lib/agentgate/secrets`,
+3. **Store.** The host opens the envelope into `SECRET_ROOT/<target>/<name>.secret` (default `/var/lib/agentgate/secrets`,
    root, 0700 directories, 0600 files; refusing replay, rollback, stale envelopes and values the broker cannot
    inject), binds the name to the secret id, and returns its receipt. The service checks that the receipt answers the
    relayed envelope, records `value_fingerprint`, sets the secret `stored`, and serves the receipt at
@@ -549,16 +555,18 @@ broker address. Design, threat model, configuration and limits: [BROKER.md](BROK
 4. **Plan and approve.** A launch referencing the secret is planned with its rules, endpoint and base URLs, and waits
    for approval by a different human.
 5. **Launch.** The host checks the signed endpoint against its pool and the secret's binding, version and fingerprint,
-   writes the broker configuration (root-owned 0600 in `STATE/brokers/<launch>/`, no value in it), starts the broker
-   container with exactly that launch's store files mounted read-only, and waits for its stats to say `running` for
-   this exact configuration. Only then does the launch runtime start the target, attach the guard, join the target to
+   writes the broker configuration (root-owned 0600 in `STATE/brokers/<launch>/`, no value in it), copies each value
+   whose recomputed fingerprint matched into `STATE/brokers/<launch>/secrets/` (root-owned 0600), starts the broker
+   container with exactly those files mounted read-only, waits for its stats to say `running` for this exact
+   configuration, and then zeroes and removes the copies. Only then does the launch runtime start the target, attach the guard, join the target to
    the broker network and run the agent with the base URLs in its environment. Any broker failure ends the launch
    before the agent starts and removes what was created.
 6. **Stop.** After the agent ends, the host stops the broker (SIGTERM, 5 seconds), verifies its final stats, removes
    the container, the network and the configuration, proves they are gone, and returns the receipt with
    `broker_counts` and `broker_evidence`. A restarted host agent does the same for a broker a crash left behind.
-7. **Delete.** `DELETE /secrets/{id}` (refused while a launch uses it) queues `secret-delete`; the host overwrites and
-   removes the value and keeps a tombstone of its version, so the old envelope cannot set it again. Retiring or
+7. **Delete.** `DELETE /secrets/{id}` (refused while a launch uses it) queues `secret-delete`; the host commits a
+   tombstone record of its version in place of the value's record and overwrites the replaced record with zeros, so
+   the old envelope cannot set it again. Retiring or
    re-enrolling a target queues the same removal for each of its secrets (audited `secret.deletion.requested`); a
    retiring target polls only for those jobs, a refused removal is queued again up to 5 times, and the host's last
    confirmation (`secret.deleted`) retires the target and revokes its key.
@@ -592,8 +600,11 @@ which launches are approved and queued, and the audit log. They are **not** trus
 and how a stored credential is used. A compromised service, or anyone who can write its database or sign jobs with
 its job key, cannot read a stored credential (it relays only sealed envelopes) and cannot redirect it: the injection
 policy (upstreams, header, scheme, extra and forwarded headers, rules) is sealed with the value by the operator's
-client, and the host stores and uses the value only under that policy (see [BROKER.md](BROKER.md#sealed-relay-for-secret-put-internalsecretseal)).
-Such a party can still:
+client, and the host stores and uses the value only under that policy: the value and the digest it was sealed with
+are committed as one record, and a launch uses the value only when its recomputed fingerprint, its version and that
+digest match the record and the host's binding, with the broker built from the bound policy (see
+[BROKER.md](BROKER.md#sealed-relay-for-secret-put-internalsecretseal)). Root on the host can rewrite the store and the
+binding together and is outside this guarantee. Such a party can still:
 
 - choose which launches to queue within the approval rules it enforces (it decides who is a launcher or approver,
   and it can queue a launch nobody approved), and so have the host run any profile with a credential under its sealed

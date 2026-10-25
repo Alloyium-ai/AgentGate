@@ -12,8 +12,9 @@
 // name, a version, a fresh nonce and the digest of the secret's injection
 // policy (hostproto.SecretPolicy: where and how the host's broker may use the
 // value), which the client computes from what the operator intended. The host
-// opens the envelope only with the policy whose digest it seals, stores both
-// in root-owned 0600 files and returns a receipt: the policy digest, a keyed
+// opens the envelope only with the policy whose digest it seals, commits the
+// value and that digest together as one root-owned 0600 record and returns a
+// receipt: the policy digest, a keyed
 // fingerprint of the value and a tag derived from the HPKE exporter secret,
 // which only the sealing client can verify. A service that substitutes the
 // host key fails the signature check; one that substitutes the ciphertext or

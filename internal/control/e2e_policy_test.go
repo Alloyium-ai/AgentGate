@@ -118,9 +118,33 @@ func (e *e2e) jobFinished(id string) func() bool {
 	}
 }
 
+// hostValue reads name's value from the host's store as the host agent does
+// (one verified record); ok is false when no value is held.
+func (e *e2e) hostValue(name string) (string, bool) {
+	e.t.Helper()
+	store, err := secretseal.OpenStore(filepath.Join(e.secrets, e.targetID))
+	if errors.Is(err, secretseal.ErrStore) {
+		if _, statErr := os.Stat(filepath.Join(e.secrets, e.targetID)); errors.Is(statErr, os.ErrNotExist) {
+			return "", false
+		}
+	}
+	if err != nil {
+		e.t.Fatalf("the host store: %v", err)
+	}
+	held, ok, err := store.Load(name)
+	if err != nil {
+		e.t.Fatalf("the host store: %v", err)
+	}
+	if !ok {
+		return "", false
+	}
+	defer held.Wipe()
+	return string(held.Value), true
+}
+
 func (e *e2e) hostHolds(name string) bool {
-	_, err := os.Stat(filepath.Join(e.secrets, e.targetID, name))
-	return !errors.Is(err, os.ErrNotExist)
+	_, ok := e.hostValue(name)
+	return ok
 }
 
 func mustPolicy(t *testing.T, upstreams []string, rules []hostproto.BrokerRule, extra map[string]string) hostproto.SecretPolicy {

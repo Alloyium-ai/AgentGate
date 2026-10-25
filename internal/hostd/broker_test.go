@@ -45,6 +45,9 @@ type fakeBroker struct {
 	forwarded uint64
 	running   bool
 	launches  []*BrokerLaunch
+	// read is what each start read from its secret files, as the broker
+	// container reads them at start.
+	read [][]string
 }
 
 func (f *fakeBroker) record(call string) {
@@ -93,7 +96,16 @@ func writeFakeStats(b *BrokerLaunch, state string, forwarded uint64) error {
 
 func (f *fakeBroker) Start(_ context.Context, b *BrokerLaunch) error {
 	f.record("start " + b.LaunchID)
+	var read []string
+	for _, s := range b.Secrets {
+		raw, err := os.ReadFile(s.HostPath)
+		if err != nil {
+			raw = []byte("<unreadable>")
+		}
+		read = append(read, string(raw))
+	}
 	f.mu.Lock()
+	f.read = append(f.read, read)
 	f.launches = append(f.launches, b)
 	err, noStats := f.startErr, f.noStats
 	f.running = err == nil
@@ -289,10 +301,14 @@ func TestSecretPutStoresTheValueAndRefusesReplayRollbackAndBadValues(t *testing.
 	if err != nil {
 		t.Fatalf("receipt: %v", err)
 	}
-	path := filepath.Join(h.root, testTarget, "model-api")
-	got, err := os.ReadFile(path)
+	path := filepath.Join(h.root, testTarget, "model-api.secret")
+	store, err := h.daemon.secretStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, ok, err := store.Load("model-api")
 	info, _ := os.Stat(path)
-	if err != nil || string(got) != fakeValue || info.Mode().Perm() != 0o600 {
+	if err != nil || !ok || string(held.Value) != fakeValue || held.Fingerprint != fp || info.Mode().Perm() != 0o600 {
 		t.Fatalf("stored value: %v %v", err, info)
 	}
 	if dir, _ := os.Stat(filepath.Join(h.root, testTarget)); dir.Mode().Perm() != 0o700 {
@@ -314,7 +330,7 @@ func TestSecretPutStoresTheValueAndRefusesReplayRollbackAndBadValues(t *testing.
 	if r := h.service.results(old.ID); len(r) != 1 || r[0].Reason != "replayed_or_rolled_back" {
 		t.Fatalf("rollback %+v", r)
 	}
-	if got, _ := os.ReadFile(path); string(got) != fakeValue {
+	if got, ok, _ := store.Load("model-api"); !ok || string(got.Value) != fakeValue {
 		t.Fatal("a refused envelope changed the stored value")
 	}
 	// A value the broker cannot inject is refused at secret-put time.
@@ -349,8 +365,11 @@ func TestSecretPutStoresTheValueAndRefusesReplayRollbackAndBadValues(t *testing.
 	if r := h.service.results(delJob.ID); len(r) != 1 || r[0].Reason != "deleted" {
 		t.Fatalf("delete %+v", r)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+	if _, ok, err := store.Load("model-api"); ok || err != nil {
 		t.Fatal("the deleted value remains")
+	}
+	if raw, _ := os.ReadFile(path); bytes.Contains(raw, []byte(fakeValue)) {
+		t.Fatal("the tombstone holds the value")
 	}
 	again := put
 	again.ID = nextJobID()
@@ -413,9 +432,25 @@ func TestBrokerLaunchStartsTheBrokerFirstAndReportsItsEvidence(t *testing.T) {
 		t.Fatal("the launcher job names the secret or its file")
 	}
 	b := h.broker.launches[0]
-	if b.Secrets[0].HostPath != filepath.Join(h.root, testTarget, "model-api") || b.Secrets[0].ContainerPath != "/run/agentgate/secrets/model-api" {
+	if b.Secrets[0].HostPath != filepath.Join(b.Dir, "secrets", "model-api") || b.Secrets[0].ContainerPath != "/run/agentgate/secrets/model-api" {
 		t.Fatalf("secret mounts %+v", b.Secrets)
 	}
+	// The broker read the verified value from the launch's own copy, which
+	// is gone once the broker runs; nothing in the state directory holds it.
+	if len(h.broker.read) != 1 || len(h.broker.read[0]) != 1 || h.broker.read[0][0] != fakeValue {
+		t.Fatalf("the broker read %q", h.broker.read)
+	}
+	if _, err := os.Lstat(filepath.Join(b.Dir, "secrets")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the broker's secret copy outlived the start")
+	}
+	filepath.Walk(h.dir, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			if raw, _ := os.ReadFile(p); bytes.Contains(raw, []byte(fakeValue)) {
+				t.Errorf("%s holds the value", p)
+			}
+		}
+		return nil
+	})
 	if bytes.Contains(b.Config, []byte(fakeValue)) {
 		t.Fatal("the broker configuration holds the value")
 	}
@@ -532,7 +567,15 @@ func TestACrashMidLaunchStopsAndRemovesTheBrokerAtRestart(t *testing.T) {
 	if code, err := h.daemon.startBroker(context.Background(), b); err != nil {
 		t.Fatalf("%s: %v", code, err)
 	}
-	// The host agent dies here; the reconcile receipt for the launch exists.
+	// The host agent dies here, before it removed the broker's secret copy
+	// (put back to stand for one), and the reconcile receipt exists.
+	copyDir := filepath.Join(b.Dir, "secrets")
+	if err := os.Mkdir(copyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copyDir, "model-api"), []byte(fakeValue), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	effective := launcherJob{LaunchID: job.LaunchID, JobID: job.ID, SpecDigest: job.SpecDigest, ProfilePolicyDigest: job.PolicyDigest, PolicyDigest: strings.Repeat("c", 64), LifetimeSeconds: 29}
 	h.runtime.receipts[job.LaunchID] = launcherReceiptFor(effective, "failed", "host_restarted", true, nil)
 	h.reopen()
@@ -540,6 +583,9 @@ func TestACrashMidLaunchStopsAndRemovesTheBrokerAtRestart(t *testing.T) {
 	calls := h.broker.called()
 	if !containsString(calls, "stop "+testLaunch+" 5s") || !containsString(calls, "remove "+testLaunch) {
 		t.Fatalf("the broker a crash left was not stopped and removed: %v", calls)
+	}
+	if _, err := os.Lstat(copyDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a secret copy a crash left survived the restart")
 	}
 	_ = h.daemon.FlushOutbox(context.Background())
 	r := h.service.results(job.ID)

@@ -36,13 +36,17 @@ const (
 	brokerStateName       = "state.json"
 	brokerEvidenceName    = "evidence.json"
 	brokerConfigName      = "broker.json"
+	brokerSecretsDir      = "secrets"
 )
 
 // brokerStartWait bounds how long a launch waits for its broker to report
 // running before it fails closed (docs/BROKER.md: 10 seconds).
 var brokerStartWait = 10 * time.Second
 
-// BrokerSecretFile is one store file bound read-only into the broker.
+// BrokerSecretFile is one secret value bound read-only into the broker:
+// HostPath is the launch's own copy in its broker directory, written from
+// the verified store record when the broker starts and zeroed and removed
+// once the broker reports running (and again at teardown).
 type BrokerSecretFile struct {
 	Ref           string `json:"ref"`
 	HostPath      string `json:"host_path"`
@@ -51,8 +55,8 @@ type BrokerSecretFile struct {
 
 // BrokerLaunch is one launch's broker as this host sets it up: its own
 // internal /29 network (gateway .1, broker .2, target .3), its configuration
-// (root-owned 0600, no secret in it), the store files it reads at start, and
-// a stats directory owned by the broker's unprivileged identity.
+// (root-owned 0600, no secret in it), the secret copies it reads at start,
+// and a stats directory owned by the broker's unprivileged identity.
 type BrokerLaunch struct {
 	LaunchID      string
 	TargetID      string
@@ -73,6 +77,17 @@ type BrokerLaunch struct {
 	Image         string
 	RunAs         broker.Identity
 	Egress        string
+	// values holds each Secrets entry's verified value, in order, from
+	// newBrokerLaunch until startBroker writes the copies; never persisted.
+	values [][]byte
+}
+
+// wipeValues zeroes the values held for the secret copies.
+func (b *BrokerLaunch) wipeValues() {
+	for _, v := range b.values {
+		clear(v)
+	}
+	b.values = nil
 }
 
 // StatsPath is the stats file as the host reads it.
@@ -195,8 +210,9 @@ func (d *Daemon) brokersDir() string { return filepath.Join(d.StateDir, brokersD
 
 func (d *Daemon) brokerDir(launchID string) string { return filepath.Join(d.brokersDir(), launchID) }
 
-// newBrokerLaunch binds the planned broker to this host: the store files of
-// exactly the secrets the service relayed for these ids, and its directories.
+// newBrokerLaunch binds the planned broker to this host: the verified values
+// of exactly the secrets the service relayed for these ids, and its
+// directories.
 // It refuses, failing the launch closed, any secret whose settings in the job
 // do not produce exactly the policy digest stored with its value, and builds
 // the broker configuration from the stored policies (the job supplies only
@@ -220,11 +236,18 @@ func (d *Daemon) newBrokerLaunch(job hostproto.Job, p hostproto.LaunchPayload, p
 	b.Gateway = netip.AddrFrom4([4]byte{base[0], base[1], base[2], base[3] + 1})
 	b.ConfigPath, b.StatsDir = filepath.Join(b.Dir, brokerConfigName), filepath.Join(b.Dir, "stats")
 	secrets := make([]broker.LaunchSecret, 0, len(p.Secrets))
+	ok := false
+	defer func() {
+		if !ok {
+			b.wipeValues()
+		}
+	}()
 	for _, s := range p.Secrets {
-		path, stored, err := d.boundSecret(store, bindings, s.Ref, s.SecretID)
+		value, stored, err := d.boundSecret(store, bindings, s.Ref, s.SecretID)
 		if err != nil {
 			return nil, err
 		}
+		b.values = append(b.values, value)
 		requested, err := s.Policy()
 		if err != nil || s.PolicyDigest != stored.Digest() || requested.Digest() != stored.Digest() {
 			return nil, fmt.Errorf("secret %s: the launch's broker settings differ from the policy sealed with the stored value (policy %s); refusing the launch", s.Ref, stored.Digest())
@@ -235,7 +258,7 @@ func (d *Daemon) newBrokerLaunch(job hostproto.Job, p hostproto.LaunchPayload, p
 		}
 		secrets = append(secrets, broker.LaunchSecret{Ref: s.Ref, Env: s.Env, Upstreams: stored.UpstreamNames(), Header: stored.Header, Scheme: stored.Scheme,
 			Username: stored.Username, Rules: rules, SecretFile: brokerSecretMount + "/" + s.Ref, Extra: stored.ExtraHeaderMap(), Forward: stored.ForwardHeaders})
-		b.Secrets = append(b.Secrets, BrokerSecretFile{Ref: s.Ref, HostPath: path, ContainerPath: brokerSecretMount + "/" + s.Ref})
+		b.Secrets = append(b.Secrets, BrokerSecretFile{Ref: s.Ref, HostPath: filepath.Join(b.Dir, brokerSecretsDir, s.Ref), ContainerPath: brokerSecretMount + "/" + s.Ref})
 	}
 	raw, _, env, err := broker.BuildLaunchConfig(broker.LaunchInput{LaunchID: job.LaunchID, TargetID: d.Identity.TargetID, Deadline: time.UnixMilli(p.ExpiresAtMS),
 		Listen:    broker.Listen{Network: "tcp", Address: plan.Address, Port: plan.Port, Subnet: plan.Subnet},
@@ -253,7 +276,74 @@ func (d *Daemon) newBrokerLaunch(job hostproto.Job, p hostproto.LaunchPayload, p
 	}
 	_ = config // the job-derived configuration was a pre-check only
 	b.Config, b.ConfigSHA256 = raw, broker.ConfigDigest(raw)
+	ok = true
 	return b, nil
+}
+
+// writeSecretCopies writes each verified value to the launch's own secret
+// file (root-owned 0600, created exclusively) for the broker's read-only
+// bind, then wipes the values from memory.
+func (d *Daemon) writeSecretCopies(b *BrokerLaunch) error {
+	defer b.wipeValues()
+	if len(b.Secrets) == 0 {
+		return nil
+	}
+	if len(b.values) != len(b.Secrets) {
+		return errors.New("the launch holds no verified value for a broker secret")
+	}
+	dir := filepath.Join(b.Dir, brokerSecretsDir)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return err
+	}
+	for i, s := range b.Secrets {
+		if s.HostPath != filepath.Join(dir, s.Ref) {
+			return errors.New("a broker secret copy is outside the launch's secret directory")
+		}
+		if err := createFileExclusive(s.HostPath, b.values[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeSecretCopies zeroes and removes every secret copy in a broker
+// directory, so a value never outlives the broker start on this host's disk.
+func removeSecretCopies(brokerDir string) error {
+	dir := filepath.Join(brokerDir, brokerSecretsDir)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var failed []string
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		if file, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0); err == nil {
+			if info, err := file.Stat(); err == nil && info.Mode().IsRegular() && info.Size() > 0 && info.Size() <= 1<<20 {
+				_, werr := file.WriteAt(make([]byte, info.Size()), 0)
+				if werr == nil {
+					werr = file.Sync()
+				}
+				if werr != nil {
+					failed = append(failed, e.Name())
+				}
+			}
+			file.Close()
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			failed = append(failed, e.Name())
+		}
+	}
+	if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		failed = append(failed, brokerSecretsDir)
+	}
+	if len(failed) > 0 {
+		sort.Strings(failed)
+		return fmt.Errorf("broker secret copies not removed: %s", strings.Join(failed, ", "))
+	}
+	return syncDir(brokerDir)
 }
 
 func (b *BrokerLaunch) state(started time.Time, stopped bool) brokerState {
@@ -288,6 +378,7 @@ func (d *Daemon) saveBrokerState(b *BrokerLaunch, started time.Time, stopped boo
 // stats say it is serving this exact configuration. Any failure removes what
 // was created and fails the launch closed.
 func (d *Daemon) startBroker(ctx context.Context, b *BrokerLaunch) (string, error) {
+	defer b.wipeValues()
 	if d.Broker == nil || d.Config.Broker == nil {
 		return "broker_unavailable", errors.New("this host has no credential broker configured")
 	}
@@ -313,6 +404,8 @@ func (d *Daemon) startBroker(ctx context.Context, b *BrokerLaunch) (string, erro
 		return "broker_state_unavailable", err
 	}
 	started := d.Now()
+	// The state is saved before any secret copy exists, so a restart after a
+	// crash from here on tears the broker down and removes the copies.
 	if err := d.saveBrokerState(b, started, false); err != nil {
 		return "broker_state_unavailable", err
 	}
@@ -323,11 +416,19 @@ func (d *Daemon) startBroker(ctx context.Context, b *BrokerLaunch) (string, erro
 		}
 		return code, err
 	}
+	if err := d.writeSecretCopies(b); err != nil {
+		return fail("broker_state_unavailable", fmt.Errorf("the broker's secret files: %w", err))
+	}
 	if err := d.Broker.Start(ctx, b); err != nil {
 		return fail("broker_start_failed", err)
 	}
 	if err := d.waitBroker(ctx, b); err != nil {
 		return fail("broker_not_running", err)
+	}
+	// A running broker has read every secret; its copies go now. Teardown
+	// tries again and records a failure.
+	if err := removeSecretCopies(b.Dir); err != nil {
+		d.logf("launch %s: %v", b.LaunchID, err)
 	}
 	return "", nil
 }
@@ -410,6 +511,9 @@ func (d *Daemon) teardownBroker(b *BrokerLaunch, started time.Time) brokerOutcom
 	if err := d.Broker.Remove(ctx, b); err != nil {
 		outcome.CleanupErrors = append(outcome.CleanupErrors, "remove: "+boundedMessage(err.Error()))
 	}
+	if err := removeSecretCopies(b.Dir); err != nil {
+		outcome.CleanupErrors = append(outcome.CleanupErrors, "secrets: "+boundedMessage(err.Error()))
+	}
 	// The configuration holds no secret; remove it with the stats directory.
 	_ = os.Remove(b.ConfigPath)
 	_ = os.RemoveAll(b.StatsDir)
@@ -489,6 +593,11 @@ func (d *Daemon) recoverBrokers() {
 		dir := filepath.Join(d.brokersDir(), entry.Name())
 		if !entry.IsDir() || !jobIDPattern.MatchString(entry.Name()) {
 			continue
+		}
+		// No broker survives a restart, so no secret copy may either,
+		// whatever the state record says.
+		if err := removeSecretCopies(dir); err != nil {
+			d.logf("broker recovery %s: %v", entry.Name(), err)
 		}
 		raw, err := readPrivateFile(filepath.Join(dir, brokerStateName), 64<<10)
 		if err != nil {
