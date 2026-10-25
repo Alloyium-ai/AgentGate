@@ -317,7 +317,10 @@ their own launch. A policy edit never changes a running launch.
 API tokens (`agt_` and 43 base64url characters) are for the CLI: `Authorization: Bearer <token>`. A token belongs to
 one human, carries a subset of their roles (an administrator may grant any role), expires in 1 hour to 90 days, is
 stored only as its SHA-256, is shown once, and is revocable. Each use takes the intersection of the token's roles and
-the holder's current roles, and a restore from backup revokes every token. Tokens reach only the provisioning
+the holder's current roles, and a restore from backup revokes every token. Resetting a local account's password or
+disabling it revokes every API token of that account along with its sessions (each audited as `apitoken.revoked`
+with cause `password_reset` or `account_disabled`), so a token minted from a stolen session dies with the reset and
+enabling the account again does not bring an old token back. Tokens reach only the provisioning
 endpoints and read-only overview and audit endpoints; they cannot manage users or mint tokens. Machine service
 identities keep the existing `Alloyium-Proof` scheme.
 

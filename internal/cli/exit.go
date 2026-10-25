@@ -118,7 +118,7 @@ func exitForStatus(status int) int {
 // codeHints is the next step for service error codes the CLI knows.
 var codeHints = map[string]string{
 	"authentication_required":   "Run agentgate login URL to store an API token for this service.",
-	"invalid_token":             "The token is unknown, expired or revoked: run agentgate login URL again.",
+	"invalid_token":             "The token is unknown, expired or revoked (a password reset or a disabled account revokes every token): run agentgate login URL again.",
 	"token_roles_revoked":       "Your roles changed: create a new token with agentgate token create.",
 	"token_scope":               "API tokens cannot call this endpoint; it needs a password sign-in (agentgate token ...) or the UI.",
 	"session_required":          "This needs a password sign-in: agentgate token create signs in for you.",

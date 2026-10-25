@@ -192,8 +192,12 @@ func (s *Store) putUser(op Operation, in UserInput, first bool) (any, error) {
 		if _, err = tx.Exec("INSERT INTO local_users VALUES(?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET name=excluded.name,roles=excluded.roles,enabled=excluded.enabled,password_hash=excluded.password_hash,salt=excluded.salt,revision=excluded.revision", u.Username, u.Name, jsonText(u.Roles), u.Enabled, hash, salt, u.Revision); err != nil {
 			return nil, err
 		}
-		// A password or status change invalidates every browser credential for this user.
-		// Self changes retain this transaction's session until authorization completes; it expires immediately on commit.
+		// A password or status change invalidates every credential of this
+		// user: browser sessions and every API token minted from them. A
+		// password reset is the answer to a stolen session, and a token minted
+		// before a disable must not return when the account is enabled again.
+		// Self changes retain this transaction's session until authorization
+		// completes; it expires immediately on commit.
 		if in.Password != "" || !in.Enabled {
 			_, err = tx.Exec("UPDATE sessions SET expires=0 WHERE json_extract(actor,'$.subject')=? AND id_hash<>?", "local:"+u.Username, op.SessionHash)
 			if err != nil {
@@ -201,6 +205,13 @@ func (s *Store) putUser(op Operation, in UserInput, first bool) (any, error) {
 			}
 			if op.Actor.Subject == "local:"+u.Username {
 				return nil, fail(409, "self_credential_change", "A second administrator must change your password or status.")
+			}
+			cause := "password_reset"
+			if !in.Enabled {
+				cause = "account_disabled"
+			}
+			if err = revokeSubjectTokens(tx, *operation, "local:"+u.Username, cause); err != nil {
+				return nil, err
 			}
 		}
 		return u, nil
@@ -221,4 +232,33 @@ func authenticateLocal(q queryer, username, password string) (Actor, error) {
 		return Actor{}, fail(401, "invalid_credentials", "The username or password is invalid.")
 	}
 	return localActor(q, "local:"+username)
+}
+
+// revokeSubjectTokens revokes every live API token of subject and audits each
+// revocation (apitoken.revoked) with cause, in the caller's transaction.
+func revokeSubjectTokens(tx *sql.Tx, op Operation, subject, cause string) error {
+	rows, err := tx.Query("SELECT id FROM api_tokens WHERE subject=? AND revoked=''", subject)
+	if err != nil {
+		return err
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err = tx.Exec("UPDATE api_tokens SET revoked=? WHERE id=? AND revoked=''", stamp(), id); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: op.Actor, Action: "apitoken.revoked", Resource: "apitoken:" + id, Reason: "The holder's password was reset or the account disabled",
+			RequestID: op.RequestID, CorrelationID: op.CorrelationID, After: map[string]string{"subject": subject, "cause": cause}}, "committed"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
