@@ -40,6 +40,13 @@ export type Target = {
   host_clock_skew_ms?: number;
   host_clock_measured_at?: string;
 };
+// IdentityLink is one person: subjects that never decide each other's launches.
+export type IdentityLink = {
+  person: string;
+  subjects: string[];
+  linked_by: string;
+  linked_at: string;
+};
 export type Enrollment = {
   token: string;
   expires_at: string;

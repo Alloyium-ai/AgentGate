@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "linked_at": "2026-10-25T04:05:43.940900302Z",
+      "linked_by": "oidc:ada",
+      "person": "453e3c41793ec615a0eff6b32bcc3bc9",
+      "subjects": [
+        "local:lin",
+        "oidc:lin"
+      ]
+    }
+  ]
+}

@@ -5,7 +5,7 @@ package control
 import "database/sql"
 
 // SchemaVersion is the database user_version this build writes.
-const SchemaVersion = 10
+const SchemaVersion = 11
 
 // provisioningSchema adds targets, profiles, launches, jobs, secrets metadata
 // and API tokens. Every statement is idempotent. Bindings that the contract
@@ -158,4 +158,10 @@ DROP TRIGGER IF EXISTS broker_allocation_binding;
 CREATE TRIGGER broker_allocation_binding BEFORE UPDATE OF launch_id,target_id,block,allocated ON broker_allocations BEGIN SELECT RAISE(ABORT,'immutable broker allocation'); END;
 DROP TRIGGER IF EXISTS broker_allocation_release_once;
 CREATE TRIGGER broker_allocation_release_once BEFORE UPDATE OF released ON broker_allocations WHEN OLD.released<>'' BEGIN SELECT RAISE(ABORT,'a broker allocation is released once'); END;`, after: backfillBrokerAllocations},
+	// Version 11: subjects an administrator linked as one person
+	// (prov_identity.go). A person never decides a launch any of its
+	// subjects requested; the links grant nothing.
+	{version: 11, statements: `
+CREATE TABLE IF NOT EXISTS identity_links(subject TEXT PRIMARY KEY,person TEXT NOT NULL,linked_by TEXT NOT NULL,reason TEXT NOT NULL,created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS identity_links_person ON identity_links(person);`},
 }

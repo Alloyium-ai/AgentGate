@@ -84,6 +84,7 @@ func TestAPITypesCover(t *testing.T) {
 		{"Secret", &control.Secret{}, &Secret{}},
 		{"APIToken", &control.APIToken{}, &APIToken{}},
 		{"AuditEntry", &control.AuditEntry{}, &AuditEntry{}},
+		{"IdentityLink", &control.IdentityLink{}, &IdentityLink{}},
 	}
 	for _, p := range pairs {
 		fill(reflect.ValueOf(p.service), 0)

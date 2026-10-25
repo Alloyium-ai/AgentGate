@@ -145,9 +145,18 @@ agentgate reject <launch id> --reason "Too broad"
 ```
 
 Nobody can decide a launch they requested, with any credential; the CLI reports the service's `self_approval` refusal
-with exit code 4. "A different human" is a different account: the service compares subjects (`local:alice`,
-`oidc:...`; a token acts as its creator), so one person with two accounts that hold the launcher and approver roles
-could approve their own launch. Give each person one such account ([PROVISIONING.md](PROVISIONING.md)).
+with exit code 4. "A different human" is a different person as the service knows it: it compares subjects
+(`local:alice`, `oidc:...`; a token acts as its creator) and the subjects an administrator linked as one person. Link a
+person's accounts so none of them approves a launch another requested:
+
+```sh
+agentgate identity link local:lin oidc:lin-sso --reason "Lin signs in locally and with SSO"
+agentgate identity ls
+agentgate identity unlink oidc:lin-sso --reason "Lin closed the SSO account"
+```
+
+Unlinked accounts count as different people, so give each person one account with the launcher or approver role, or
+link them ([PROVISIONING.md](PROVISIONING.md)). Another administrator must unlink a group that holds your own account.
 
 ### 7. Watch
 
@@ -292,6 +301,7 @@ Global flags work before or after the command: `--context NAME`, `--server URL`,
 | `secret ls [--target T] [--profile P] [--for-launch]` | `GET /secrets` (administrators), `GET /targets/{id}/secrets` (launchers) | administrators see all metadata; everyone else (or `--for-launch`, `--profile`) sees the names a launch may use and why not; `-q` prints the usable names |
 | `secret rm NAME\|ID [--target T] [--yes]` | `DELETE /secrets/{id}` | administrators |
 | `token create [--role R] [--expires D] [--name N] [--save]`, `token ls`, `token revoke ID` | `/api-tokens` | password sign-in each time: a token cannot mint, list or revoke tokens |
+| `identity ls`, `identity link SUBJECT SUBJECT... [--reason R]`, `identity unlink SUBJECT [--reason R]` | `GET`, `POST`, `DELETE /identity-links` | administrators; subjects linked as one person never decide each other's launches; a link grants nothing |
 | `schema launch-spec` | `GET /launch-spec-schema` | |
 | `completion bash\|zsh\|fish` | none | `source <(agentgate completion bash)` |
 | `version` | none | |

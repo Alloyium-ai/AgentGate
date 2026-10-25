@@ -63,4 +63,6 @@ var AuditCatalog = []AuditAction{
 	{"job.expired", "job:<id>", "A job passed its deadline before delivery."},
 	{"job.cancelled", "job:<id>", "A queued or delivered job was cancelled without reaching its host (its job key was retired, or it is signed with a key the host did not enroll with); a launch queued only for it fails."},
 	{"target.rekey.required", "target:<id>", "The job key a target's host enrolled with was retired; the target must enroll again with a new token."},
+	{"identity.linked", "identity:<person>", "An administrator linked subjects as one person; none of them may decide a launch another requested."},
+	{"identity.unlinked", "identity:<person>", "An administrator removed a subject from a person's linked subjects."},
 }

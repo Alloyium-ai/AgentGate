@@ -17,7 +17,7 @@ import (
 )
 
 // provisioningAreas are the API areas this file routes.
-var provisioningAreas = map[string]bool{"targets": true, "profiles": true, "launches": true, "launch-plans": true, "secrets": true, "launch-spec-schema": true, "access-presets": true, "api-tokens": true, "audit-catalog": true}
+var provisioningAreas = map[string]bool{"targets": true, "profiles": true, "launches": true, "launch-plans": true, "secrets": true, "launch-spec-schema": true, "access-presets": true, "api-tokens": true, "audit-catalog": true, "identity-links": true}
 
 func apiArea(path string) string {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -77,7 +77,7 @@ func listParam(r *http.Request, name string, fallback int) int {
 
 func (s *Server) provisioningRead(w http.ResponseWriter, r *http.Request, a Actor, tail []string) (any, error) {
 	area := tail[0]
-	scope := map[string]string{"targets": "target:read", "profiles": "policy:read", "launches": "launch:read", "secrets": "secrets:admin", "launch-spec-schema": "", "access-presets": "policy:read", "api-tokens": "auth:write", "audit-catalog": "audit:read", "launch-plans": "launch:write"}[area]
+	scope := map[string]string{"targets": "target:read", "profiles": "policy:read", "launches": "launch:read", "secrets": "secrets:admin", "launch-spec-schema": "", "access-presets": "policy:read", "api-tokens": "auth:write", "audit-catalog": "audit:read", "launch-plans": "launch:write", "identity-links": "identities:admin"}[area]
 	if scope != "" {
 		if err := require(a, scope, false); err != nil {
 			return nil, err
@@ -173,6 +173,9 @@ func (s *Server) provisioningRead(w http.ResponseWriter, r *http.Request, a Acto
 		return map[string]any{"items": v}, err
 	case area == "secrets" && n == 3 && tail[2] == "receipt":
 		return s.Store.SecretReceipt(tail[1])
+	case area == "identity-links" && n == 1:
+		v, err := s.Store.IdentityLinks()
+		return map[string]any{"items": v}, err
 	case area == "api-tokens" && n == 1:
 		if a.Kind != "human" {
 			return nil, fail(403, "forbidden", "API tokens belong to humans.")
@@ -282,6 +285,18 @@ func (s *Server) provisioningWrite(r *http.Request, c call, tail []string) (any,
 			return deny(err)
 		}
 		return s.Store.DeleteSecret(op, tail[1], in)
+	case area == "identity-links" && n == 1 && method == "POST":
+		var in IdentityLinkInput
+		if err := decode(&in); err != nil {
+			return deny(err)
+		}
+		return s.Store.LinkIdentities(op, in)
+	case area == "identity-links" && n == 1 && method == "DELETE":
+		var in IdentityUnlinkInput
+		if err := decode(&in); err != nil {
+			return deny(err)
+		}
+		return s.Store.UnlinkIdentity(op, in)
 	case area == "api-tokens" && n == 1 && method == "POST":
 		var in APITokenInput
 		if err := decode(&in); err != nil {

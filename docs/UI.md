@@ -174,9 +174,11 @@ after a plan and sends exactly the planned document; editing the form afterwards
 
 ### Approve, follow and stop (approver, launcher)
 
-"A different person" in this section means a different account: the service compares the approver's subject
-(`local:alice`, `oidc:...`) with the requester's and cannot tell that two accounts belong to one person, so each person
-should hold only one account with the launcher or approver role ([PROVISIONING.md](PROVISIONING.md)).
+"A different person" in this section means a different person as the service knows it: the service compares the
+approver's subject (`local:alice`, `oidc:...`) with the requester's and with the subjects an administrator linked as the
+same person. **Linked identities** (administrators) lists those groups; `agentgate identity link` and `unlink` change
+them. Accounts nobody linked count as different people, so each person should hold one account with the launcher or
+approver role, or have their accounts linked ([PROVISIONING.md](PROVISIONING.md)).
 
 **Launches** lists launches newest first with state, target, requester, lifetime and remaining time. The service applies
 every filter (state, or not ended / ended; target; name contains; only mine) and pages the result 25 at a time with its
@@ -237,12 +239,13 @@ rule again; hiding is never the control.
 | Create a profile, apply grants, add a version from a document | | | yes | | | yes |
 | Create a profile without launch approval; change a profile's approval setting | | | | | | yes |
 | Plan, launch and stop launches (any launch) | | | | yes | | yes |
-| Approve or reject a launch (never one you requested) | | | | | yes | yes |
+| Approve or reject a launch (never one you or a subject linked to you requested) | | | | | yes | yes |
+| See linked identities | | | | | | yes |
 | List, store and delete secrets | | | | | | yes |
 | Create, list and revoke your own API tokens | yes | yes | yes | yes | yes | yes (all tokens) |
 
-Navigation: *Launch* appears for launchers and administrators, *Secrets* for administrators, *API tokens* for any
-signed-in person with a role.
+Navigation: *Launch* appears for launchers and administrators, *Secrets* and *Linked identities* for administrators,
+*API tokens* for any signed-in person with a role.
 
 ## UI and CLI
 
@@ -253,6 +256,7 @@ signed-in person with a role.
 | Approve host key | `target approve-key NAME` | `POST /targets/{id}/approve-key` |
 | New enrollment token, Rename, Retire | `target enroll`, `target rename`, `target retire` | `POST …/enrollment`, `PATCH`, `DELETE /targets/{id}` |
 | Mount roots… | `target mount-roots NAME --root PATH` | `POST /targets/{id}/mount-roots` |
+| Linked identities (list) | `identity ls`, `identity link`, `identity unlink` | `GET`, `POST`, `DELETE /identity-links` |
 | Access profiles, versions, compare | `profile ls`, `profile show`, `profile versions` | `GET /profiles…` |
 | New profile | `profile new NAME --preset P` | `POST /profiles` |
 | Change access: preview / apply | `grant P ACTION … --dry-run` / `grant P ACTION …` | `POST /profiles/{id}/versions/{n}/grants` |

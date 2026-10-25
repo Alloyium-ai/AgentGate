@@ -752,8 +752,16 @@ func (s *Store) DecideLaunch(op Operation, id string, approve bool, in DecisionI
 		if err != nil {
 			return nil, err
 		}
-		if l.RequestedBy == operation.Actor.Subject {
-			return nil, fail(403, "self_approval", "A different human must decide this launch.")
+		// The requester never decides their own launch, and neither does a
+		// subject an administrator linked to the requester as the same person.
+		if same, err := samePerson(tx, l.RequestedBy, operation.Actor.Subject); err != nil {
+			return nil, err
+		} else if same {
+			message := "A different human must decide this launch."
+			if l.RequestedBy != operation.Actor.Subject {
+				message = "A different human must decide this launch: " + operation.Actor.Subject + " is linked to its requester " + l.RequestedBy + " as the same person."
+			}
+			return nil, fail(403, "self_approval", message)
 		}
 		if l.State != StateApprovalPending {
 			return nil, fail(409, "not_pending", "The launch is not waiting for approval.")
@@ -1063,10 +1071,13 @@ func (s *Store) LaunchSummary(a Actor) (map[string]any, error) {
 	awaiting := []Launch{}
 	var awaitingCount int
 	if a.Can("launch:approve") {
-		if err = s.DB.QueryRow("SELECT count(*) FROM launches WHERE state='approval_pending' AND requested_by<>?", a.Subject).Scan(&awaitingCount); err != nil {
+		// Launches this person may decide: not requested by this subject or a
+		// subject linked to it.
+		mine := "requested_by<>? AND requested_by NOT IN (SELECT y.subject FROM identity_links x JOIN identity_links y ON x.person=y.person WHERE x.subject=?)"
+		if err = s.DB.QueryRow("SELECT count(*) FROM launches WHERE state='approval_pending' AND "+mine, a.Subject, a.Subject).Scan(&awaitingCount); err != nil {
 			return nil, err
 		}
-		if awaiting, err = list("state='approval_pending' AND requested_by<>? ORDER BY created", a.Subject); err != nil {
+		if awaiting, err = list("state='approval_pending' AND "+mine+" ORDER BY created", a.Subject, a.Subject); err != nil {
 			return nil, err
 		}
 	}

@@ -22,6 +22,7 @@ import {
   ListChecks,
   KeyRound,
   TerminalSquare,
+  UserCheck,
 } from "lucide-react";
 import { ApiError, SESSION_ENDED, Session, api, useCSRF, setCustomerPolicy } from "./api";
 import { Loading, ErrorBox } from "./components";
@@ -44,6 +45,7 @@ import { LaunchPage } from "./launch-form";
 import { LaunchDetail, Launches } from "./launches";
 import { Secrets } from "./secrets";
 import { Tokens } from "./tokens";
+import { Identities } from "./identities";
 import { ProvisioningOverview } from "./prov-overview";
 import { permissions } from "./prov-api";
 import "./provisioning.css";
@@ -55,6 +57,7 @@ const nav = [
   { id: "launches", label: "Launches", icon: ListChecks },
   { id: "secrets", label: "Secrets", icon: KeyRound },
   { id: "tokens", label: "API tokens", icon: TerminalSquare },
+  { id: "identities", label: "Linked identities", icon: UserCheck },
   { id: "policies", label: "Policies", icon: Layers },
   { id: "policy-builder", label: "Policy builder", icon: ShieldCheck },
   { id: "requests", label: "Requests", icon: Inbox },
@@ -214,7 +217,7 @@ function App() {
     );
   const actor = session.actor;
   const perms = permissions(actor);
-  const visibleNav = nav.filter(item => (item.id !== 'users' || (session.local_identity && actor.roles.includes('admin'))) && (item.id !== 'policy-builder' || session.customer_policy) && (item.id !== 'launch' || perms.launch) && (item.id !== 'secrets' || perms.secretsAdmin) && (item.id !== 'tokens' || perms.tokens));
+  const visibleNav = nav.filter(item => (item.id !== 'users' || (session.local_identity && actor.roles.includes('admin'))) && (item.id !== 'policy-builder' || session.customer_policy) && (item.id !== 'launch' || perms.launch) && (item.id !== 'secrets' || perms.secretsAdmin) && (item.id !== 'tokens' || perms.tokens) && (item.id !== 'identities' || perms.admin));
   const section = path.split("/")[0];
   const parts = path.split("/");
   const expiresSoon = session.expires && session.expires * 1000 - clock < 5 * 60 * 1000;
@@ -237,6 +240,9 @@ function App() {
       break;
     case "tokens":
       content = <Tokens actor={actor} epoch={epoch} />;
+      break;
+    case "identities":
+      content = <Identities actor={actor} epoch={epoch} />;
       break;
     case "users":
       content = session.local_identity && actor.roles.includes('admin') ? <Users epoch={epoch} refresh={refresh} /> : <ErrorBox error={new Error('Local user administration requires an administrator.')} />;

@@ -68,6 +68,8 @@ const requests = [];
 const served = [];
 const opened = [];
 const targets = [];
+// Subjects an administrator linked as one person (internal/control prov_identity.go).
+const identityLinks = [{ person: "4".repeat(32), subjects: ["local:alice", "oidc:alice"], linked_by: "local:alice", linked_at: new Date().toISOString() }];
 const profiles = [];
 const versions = {};
 const launches = [];
@@ -593,6 +595,10 @@ function api(method, path, query, input, headers) {
       setTimeout(() => Object.assign(s, { state: "stored", value_fingerprint: "sfp1_" + "ab".repeat(16), receipt: hostReceipt(envelope, confirm, "sfp1_" + "ab".repeat(16)) }), 1500);
       return s;
     }
+  }
+  if (area === "identity-links") {
+    need("admin");
+    if (method === "GET") return { items: identityLinks };
   }
   if (area === "api-tokens") {
     if (method === "GET") return { items: tokens.filter((t) => actors[who].roles.includes("admin") || t.subject === actors[who].subject) };
@@ -1363,6 +1369,16 @@ try {
     await noHorizontalScroll("launches");
   });
 
+  await step("an administrator lists linked identities; nobody else has the page", async () => {
+    await go("identities", "alice");
+    await page.getByRole("cell", { name: "local:alice, oidc:alice" }).waitFor();
+    await text("agentgate identity link SUBJECT SUBJECT").waitFor();
+    await go("identities", "vic");
+    await text("Only an administrator sees linked identities. Your roles: viewer.").waitFor();
+    const nav = await page.getByRole("navigation", { name: "Main navigation" }).innerText();
+    assert.ok(!nav.includes("Linked identities"), "a viewer's navigation offers linked identities");
+  });
+
   await step("a viewer sees disabled controls with reasons and no launch or secret pages", async () => {
     await go("targets", "vic");
     assert.equal(await page.getByRole("button", { name: "Add target" }).isDisabled(), true);
@@ -1445,6 +1461,7 @@ try {
       ["POST launches", ok("POST", /^launches$/), [await real("launch-created.json"), await real("launch-created-plain.json")]],
       ["GET launches/{id}", ok("GET", /^launches\/[0-9a-f]+$/), await Promise.all(["launch-detail.json", "launch-detail-pending.json", "launch-detail-stopped.json"].map(real))],
       ["GET launches", ok("GET", /^launches$/), [await real("launches-page.json"), await real("launches-all.json")]],
+      ["GET identity-links", ok("GET", /^identity-links$/), [await real("identity-links.json")]],
       ["GET launches/summary", ok("GET", /^launches\/summary$/), [await real("launches-summary.json")]],
       ["GET launches/{id}/logs (stream: ready)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "ready", [(await real("launch-log-stream.json")).ready]],
       ["GET launches/{id}/logs (stream: log)", (r) => r.method === "SSE" && /\/logs$/.test(r.path) && r.event === "log", [(await real("launch-log-stream.json")).log, ...(await real("launch-logs.json")).items]],

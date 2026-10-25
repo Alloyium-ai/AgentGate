@@ -120,7 +120,7 @@ func (a *Auth) Token(r *http.Request) (Actor, string, error) {
 
 // tokenAllowed lists the API areas a token may call. Everything else, in
 // particular users and api-tokens, needs a browser session.
-var tokenAllowed = map[string]bool{"targets": true, "profiles": true, "launches": true, "launch-plans": true, "secrets": true, "launch-spec-schema": true, "access-presets": true, "audit": true, "audit-catalog": true, "openapi.json": true, "overview": true}
+var tokenAllowed = map[string]bool{"targets": true, "profiles": true, "launches": true, "launch-plans": true, "secrets": true, "launch-spec-schema": true, "access-presets": true, "audit": true, "audit-catalog": true, "openapi.json": true, "overview": true, "identity-links": true}
 
 func newAPIToken() string { return apiTokenPrefix + randomToken() }
 

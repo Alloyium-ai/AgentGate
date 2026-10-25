@@ -108,14 +108,18 @@ Rules every implementation enforces (`internal/control/prov_launchspec.go`; JSON
   Requiring approval again clears the approved version; a profile migrated from schema 7 without one launches
   nothing alone until an administrator approves a version. A launch that needs approval waits in `approval_pending` for a different human with the
   `approver` (or `admin`) role. The requester can never decide their own launch, with any credential.
-- **"A different human" means a different account (subject).** The service compares the approver's subject with the
-  requester's (`local:alice`, `oidc:<issuer subject>`); an API token acts as the subject that created it. It has no way
-  to know that two accounts belong to one person: `local:alice` and an OIDC identity of the same person are two
-  subjects, and either could approve a launch the other requested. Two-person control therefore holds only if each
-  person has one account with launch or approval rights. Administrators keep it that way: do not give one person both
-  a local account and an OIDC identity (or two OIDC identities) that carry the `launcher` and `approver` roles between
-  them, disable a local account once its owner signs in with OIDC, and compare the actor of each `launch.approved`
-  audit entry with the launch's `requested_by` when reviewing approvals.
+- **"A different human" means a different person, as far as the service knows it.** The service compares the
+  approver's subject with the requester's (`local:alice`, `oidc:<issuer subject>`; an API token acts as the subject
+  that created it) and with every subject an administrator **linked** to the requester as the same person
+  (`identity_links`, schema 11; `agentgate identity link local:alice oidc:<subject>`, `POST /identity-links`, audited
+  as `identity.linked`): no subject of a person decides a launch another requested (`403 self_approval`, naming the
+  link), and the overview's "awaiting your decision" leaves those launches out. A link grants nothing and changes no
+  role; it is used for nothing else. Linking a subject that already belongs to a person merges the two (at most 8
+  subjects). `DELETE /identity-links` removes one subject (`identity.unlinked`); a group of one is removed with it, and
+  an administrator whose own subject is in a group cannot unlink it (`403 self_unlink`: another administrator must).
+  The service still cannot discover by itself that two accounts are one person: link them when you create them, or
+  give each person one account with launch or approval rights, and compare the actor of each `launch.approved` audit
+  entry with the launch's `requested_by` when reviewing approvals.
 - Brokered secrets need a stored profile. Each secret is scoped to the profiles (`allowed_profiles`) and human
   subjects (`allowed_launchers`) that may reference it; the scope is checked when the launch is planned and again when
   it is queued. The plan names the exact secret refs and secret ids, and the approval covers that plan. A secret
@@ -356,6 +360,7 @@ the service's error envelope (`{"error":{"code","message"},"request_id"}`). Ever
 | `/secrets` | GET, POST | admin | metadata only; POST carries a `secretseal` envelope sealed to the target's published seal key, and the broker settings |
 | `/secrets/{id}` | DELETE | admin | queue removal from the host (refused while a live launch uses it) |
 | `/secrets/{id}/receipt` | GET | admin | the host's receipt for the relayed envelope, for the sealing client to verify |
+| `/identity-links` | GET, POST, DELETE | admin | the subjects linked as one person; link 2 to 8 subjects (`{subjects, reason}`; groups merge); unlink one (`{subject, reason}`; never a group holding your own subject) |
 | `/api-tokens` | GET, POST | any human (session) | list own tokens (admin: all); create one, shown once |
 | `/api-tokens/{id}` | DELETE | holder or admin | revoke |
 | `/hostd/enroll`, `/hostd/poll`, `/hostd/resync`, `/hostd/jobs/{id}/events` | POST | host key | enrollment, poll, resync, progress |
@@ -370,8 +375,8 @@ cached.
 Roles: `viewer` (read), `auditor` (read and audit export), `editor` (profiles), `launcher` (create, plan and stop
 launches), `approver` (decide launches of others), `admin` (everything, including targets, key approval, secrets and
 profile approval settings). Scopes on `Actor.Can`: `launch:write` (launcher), `launch:approve` (approver),
-`policy:write` (editor), and the admin-only `targets:admin`, `secrets:admin`, `profiles:admin`. No actor decides
-their own launch. A policy edit never changes a running launch.
+`policy:write` (editor), and the admin-only `targets:admin`, `secrets:admin`, `profiles:admin`, `identities:admin`. No
+actor decides their own launch or one requested by a subject linked to it. A policy edit never changes a running launch.
 
 API tokens (`agt_` and 43 base64url characters) are for the CLI: `Authorization: Bearer <token>`. A token belongs to
 one human, carries a subset of their roles (an administrator may grant any role), expires in 1 hour to 90 days, is
@@ -380,7 +385,8 @@ the holder's current roles, and a restore from backup revokes every token. Reset
 disabling it revokes every API token of that account along with its sessions (each audited as `apitoken.revoked`
 with cause `password_reset` or `account_disabled`), so a token minted from a stolen session dies with the reset and
 enabling the account again does not bring an old token back. Tokens reach only the provisioning
-endpoints and read-only overview and audit endpoints; they cannot manage users or mint tokens. Machine service
+endpoints (identity links included) and read-only overview and audit endpoints; they cannot manage users or mint
+tokens. Machine service
 identities keep the existing `Alloyium-Proof` scheme.
 
 ## CLI (`agentgate`)
@@ -407,6 +413,7 @@ agentgate events ID [-f] | stop ID [--wait] | approve ID | reject ID
 agentgate audit [--launch ID] [--since T] | audit catalog
 agentgate secret set NAME --upstream HOST --allow-profile P (--rule M:PATH[:prefix]... | --allow-any-path) [--scheme S] [--wait] | ls | rm NAME
 agentgate token create [--save] | ls | revoke ID      (password sign-in: a token cannot manage tokens)
+agentgate identity ls | link SUBJECT SUBJECT... | unlink SUBJECT                       (administrators)
 agentgate schema launch-spec | completion bash|zsh|fish | version
 ```
 

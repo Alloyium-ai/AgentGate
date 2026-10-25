@@ -264,6 +264,9 @@ func TestWebFixturesAreRealServiceAnswers(t *testing.T) {
 	w.record("launch-detail-pending.json", w.call("GET", "/api/v1/launches/"+pending["launch"].(map[string]any)["id"].(string), launcher, nil, 200))
 	w.record("launches-page.json", w.call("GET", "/api/v1/launches?limit=1", launcher, nil, 200))
 	w.record("launches-summary.json", w.call("GET", "/api/v1/launches/summary", launcher, nil, 200))
+	// Linked identities as an administrator lists them.
+	w.call("POST", "/api/v1/identity-links", admin, map[string]any{"subjects": []string{"oidc:lin", "local:lin"}, "reason": "Lin signs in two ways"}, 200)
+	w.record("identity-links.json", w.call("GET", "/api/v1/identity-links", admin, nil, 200))
 
 	// The log stream (SSE) of a launch that ends: ready, one log frame per
 	// line, end.
