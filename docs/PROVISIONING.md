@@ -231,9 +231,14 @@ unknown fields, duplicate keys and trailing data are rejected. An envelope is at
   generated at first start, pinned in the independent trust directory (`jobkey.json`), and verified at every start.
   `community job-key` (the `cmd/community` service command) prints it. **Rotation:** `community rotate-job-key REASON` refuses while any
   launch is not terminal, generates a new key, keeps the old file as `jobs.key.retired-<ns>`, retires the old key in
-  `job_keys`, cancels its queued jobs, moves every active target to `rekey_required` (polls fail with
-  `rekey_required` and no launch can target them), and re-pins the trust file. Each host then enrolls again with a new
-  token and an approved fingerprint. A key file that differs from the recorded active key at start is handled the
+  `job_keys`, cancels its queued jobs (each cancellation audited as `job.cancelled`), moves every target bound to the
+  old key, active or still waiting for its host key approval, to `rekey_required` (audited as
+  `target.rekey.required`; polls fail with `rekey_required` and no launch can target them), and re-pins the trust file.
+  Each host then enrolls again with a new token and an approved fingerprint. `POST /targets/{id}/approve-key` refuses
+  (`409 rekey_required`) a host that enrolled with a key other than the active one, so a rotation can never leave an
+  active target whose jobs its host would refuse. A poll never sends a job signed with a key the host did not enroll
+  with: the job is cancelled and audited (`job.cancelled`, reason `job_key_mismatch`) and a launch queued for it fails
+  (`evidence_missing: not_started`). A key file that differs from the recorded active key at start is handled the
   same way. Backups include the job key; a restore from a backup without one starts with a new key and requires
   re-enrollment.
 

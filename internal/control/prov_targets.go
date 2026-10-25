@@ -350,6 +350,12 @@ func (s *Store) ApproveTargetKey(op Operation, ref string, in KeyApprovalInput) 
 		if subtle.ConstantTimeCompare([]byte(in.HostKeyID), []byte(t.HostKeyID)) != 1 {
 			return nil, fail(409, "fingerprint_mismatch", "The fingerprint differs from the key the host presented. Do not approve; issue a new token.")
 		}
+		// The host trusts only the job key it enrolled with; approving it after
+		// that key was retired would leave an active target whose every job
+		// is refused.
+		if t.JobKeyID != s.JobKeyID() {
+			return nil, fail(409, "rekey_required", "The host enrolled with job key "+t.JobKeyID+", which is no longer the service's active key. Issue a new token (POST /targets/{id}/enrollment) and enroll the host again.")
+		}
 		operation.Before = map[string]string{"state": t.State, "host_key_id": t.HostKeyID}
 		if _, err = tx.Exec("UPDATE targets SET state='active',last_seen=?,updated=?,revision=revision+1 WHERE id=? AND state='awaiting_key_approval'", s.now().UnixMilli(), stamp(), t.ID); err != nil {
 			return nil, err

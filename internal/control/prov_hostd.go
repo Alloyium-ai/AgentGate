@@ -411,8 +411,9 @@ func (s *Store) pollWork(tx *sql.Tx, t Target, req hostproto.PollRequest) (hostp
 	for _, p := range list {
 		var env hostproto.Envelope
 		if err = json.Unmarshal([]byte(p.envelope), &env); err != nil || env.KeyID != t.JobKeyID {
-			// A job signed by a key this host was not enrolled with is never sent.
-			if _, err = tx.Exec("UPDATE jobs SET state='cancelled',envelope='',completed=?,revision=revision+1 WHERE id=?", stamp(), p.id); err != nil {
+			// A job signed by a key this host was not enrolled with is never
+			// sent; it is cancelled and audited, and a launch queued for it fails.
+			if err = s.cancelJobs(tx, "id=?", []any{p.id}, hostActor(t.ID), "job_key_mismatch", "The job is signed by job key "+env.KeyID+", but the host enrolled with "+t.JobKeyID+"; enroll the host again"); err != nil {
 				return resp, err
 			}
 			continue

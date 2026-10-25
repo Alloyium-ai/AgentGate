@@ -133,18 +133,89 @@ func (s *Store) loadJobKey(dir string) error {
 	return tx.Commit()
 }
 
+// retireJobKeyLocked retires keyID. Every target bound to it that is not
+// already retired or waiting for re-enrollment (active, retiring, or enrolled
+// and waiting for its host key approval) moves to rekey_required: its host
+// only accepts jobs signed by the key it enrolled with, so approving or using
+// it later would strand it with every job silently refused. Each move and
+// each cancelled job is audited.
 func (s *Store) retireJobKeyLocked(tx *sql.Tx, keyID, reason string) error {
 	if _, err := tx.Exec("UPDATE job_keys SET retired=? WHERE key_id=? AND retired=''", stamp(), keyID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("UPDATE targets SET state='rekey_required',updated=?,revision=revision+1 WHERE job_key_id=? AND state='active'", stamp(), keyID); err != nil {
+	system := Actor{Subject: "deployment", Kind: "system"}
+	rows, err := tx.Query("SELECT id,state FROM targets WHERE job_key_id=? AND state IN ('active','awaiting_key_approval')", keyID)
+	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec("UPDATE jobs SET state='cancelled',envelope='',completed=?,revision=revision+1 WHERE key_id=? AND state IN ('queued','delivered')", stamp(), keyID); err != nil {
+	type bound struct{ id, state string }
+	moved := []bound{}
+	for rows.Next() {
+		var b bound
+		if err = rows.Scan(&b.id, &b.state); err != nil {
+			rows.Close()
+			return err
+		}
+		moved = append(moved, b)
+	}
+	rows.Close()
+	for _, b := range moved {
+		if _, err = tx.Exec("UPDATE targets SET state='rekey_required',updated=?,revision=revision+1 WHERE id=?", stamp(), b.id); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: system, Action: "target.rekey.required", Resource: "target:" + b.id, Reason: "The job key the host enrolled with was retired; enroll the host again with a new token",
+			RequestID: "jobkey-" + newID(), Before: map[string]string{"state": b.state, "job_key_id": keyID}, After: map[string]string{"state": "rekey_required"}}, "committed"); err != nil {
+			return err
+		}
+	}
+	if err = s.cancelJobs(tx, "key_id=? AND state IN ('queued','delivered')", []any{keyID}, system, "job_key_retired", "The job key that signed it was retired"); err != nil {
 		return err
 	}
-	_, err := appendAudit(tx, Operation{Actor: Actor{Subject: "deployment", Kind: "system"}, Action: "jobkey.retired", Resource: "jobkey:" + keyID, Reason: reason, RequestID: "jobkey-" + newID()}, "committed")
+	_, err = appendAudit(tx, Operation{Actor: system, Action: "jobkey.retired", Resource: "jobkey:" + keyID, Reason: reason, RequestID: "jobkey-" + newID(), After: map[string]int{"targets_rekey_required": len(moved)}}, "committed")
 	return err
+}
+
+// cancelJobs cancels the jobs matching where, audits each one with code and
+// reason, and fails a launch that was queued only for one of them (its host
+// will never start it), so no launch waits silently for a job that is gone.
+func (s *Store) cancelJobs(tx *sql.Tx, where string, args []any, actor Actor, code, reason string) error {
+	rows, err := tx.Query("SELECT id,type,launch_id,state FROM jobs WHERE "+where, args...)
+	if err != nil {
+		return err
+	}
+	type job struct{ id, kind, launch, state string }
+	list := []job{}
+	for rows.Next() {
+		var j job
+		if err = rows.Scan(&j.id, &j.kind, &j.launch, &j.state); err != nil {
+			rows.Close()
+			return err
+		}
+		list = append(list, j)
+	}
+	rows.Close()
+	for _, j := range list {
+		if _, err = tx.Exec("UPDATE jobs SET state='cancelled',envelope='',completed=?,revision=revision+1 WHERE id=?", stamp(), j.id); err != nil {
+			return err
+		}
+		if _, err = appendAudit(tx, Operation{Actor: actor, Action: "job.cancelled", Resource: "job:" + j.id, Run: j.launch, Reason: reason, RequestID: "jobkey-" + newID(),
+			Before: map[string]string{"state": j.state, "type": j.kind}, After: map[string]string{"state": "cancelled", "reason": code}}, "committed"); err != nil {
+			return err
+		}
+		if j.kind != hostproto.JobLaunch || j.launch == "" {
+			continue
+		}
+		l, err := launchFrom(tx, j.launch)
+		if err != nil {
+			return err
+		}
+		if l.State == StateQueued {
+			if err = s.transitionLaunch(tx, &l, transition{To: StateFailed, Reason: "Its launch job was cancelled: " + reason, EvidenceMissing: MissingNotStarted, Actor: actor}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // JobKeyID names the active job key.

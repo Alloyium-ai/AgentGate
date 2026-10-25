@@ -59,4 +59,6 @@ var AuditCatalog = []AuditAction{
 	{"job.delivered", "job:<id>", "A job was delivered to its host for the first time."},
 	{"job.completed", "job:<id>", "A host reported a job result."},
 	{"job.expired", "job:<id>", "A job passed its deadline before delivery."},
+	{"job.cancelled", "job:<id>", "A queued or delivered job was cancelled without reaching its host (its job key was retired, or it is signed with a key the host did not enroll with); a launch queued only for it fails."},
+	{"target.rekey.required", "target:<id>", "The job key a target's host enrolled with was retired; the target must enroll again with a new token."},
 }
